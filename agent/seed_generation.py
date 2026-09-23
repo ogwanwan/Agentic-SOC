@@ -33,8 +33,14 @@ class SeedGenerator:
         # [12] agent/seed_prompts.py 의 build_seed_user_prompt() 실행
         user_prompt = build_seed_user_prompt(raw_logs, host)
         decision = self.llm_client.complete_json(SEED_SYSTEM_PROMPT, user_prompt)
-        
         candidates = decision.get("candidates") or []
+        # [2026-09-23 추가, 역할 D] LLM이 만든 seed 후보의 evidence_refs가
+        # 실제로 [7]~[9]에서 읽어온 raw_logs 안에 있는 raw_ref인지 검증.
+        # agent/provenance.py의 references()로 raw_logs 쪽 raw_ref 전체 집합(known)을
+        # 먼저 뽑고, candidate가 인용한 raw_ref가 거기 없으면 즉시 ValueError —
+        # LLM이 실제로 관측되지 않은 로그를 근거로 seed를 지어내는 것을 seed 생성
+        # 단계에서부터 막는다. (loop.py의 validate_citations()가 조사 단계에서
+        # 하는 것과 같은 역할을 seed 생성 단계에서 미리 함)
         known = {ref for record in raw_logs for ref in references(record)}
         for candidate in candidates:
             refs = references(candidate, seed=True)

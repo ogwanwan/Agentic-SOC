@@ -29,6 +29,8 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from ..provenance import strip_trace_fields
+
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
 
@@ -129,7 +131,9 @@ def build_user_prompt(
             for t in state.tool_calls
         ],
         "investigated_layers": sorted(state.investigated_layers),
-        "raw_observations_since_last_turn": state.pending_observations,
+        # 추적용 필드(raw_ref_locations 등)는 LLM에게 안 보여준다 — loop.py는 도구 결과
+        # 원본에서 그 값을 직접 읽으므로 인용 검증에는 영향 없음.
+        "raw_observations_since_last_turn": strip_trace_fields(state.pending_observations),
         "known_raw_refs": state.raw_refs,
         "provenance_issues": state.provenance_issues,
         "tool_calls_used": len(state.tool_calls),

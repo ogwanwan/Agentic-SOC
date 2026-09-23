@@ -4,10 +4,23 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any, Dict
 
-from ..log_source import event_time, fetch_layer_logs, pagination, query_window
+from ..log_source import event_time, pagination, query_window
 from ..time_utils import parse_iso
+from .fetch_audit_log import fetch_audit_log
+from .fetch_auth_log import fetch_auth_log
+from .fetch_network_log import fetch_network_log
+from .fetch_web_log import fetch_web_log
 
 LAYERS = {"web": "web", "auth": "auth", "audit": "audit", "system": "audit", "network": "network"}
+# Each layer is queried through its own agent tool; filters are that tool's optional args.
+LAYER_TOOLS = {"web": fetch_web_log, "auth": fetch_auth_log,
+               "audit": fetch_audit_log, "network": fetch_network_log}
+LAYER_FILTERS = {
+    "web": {"src_ip", "method", "path", "status_code", "exclude_self"},
+    "auth": {"src_ip", "user", "event_type", "result"},
+    "audit": {"event_type", "pid", "ppid", "user", "serial", "exclude_interactive", "include_user_cmd"},
+    "network": {"src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only"},
+}
 
 
 def resolve_window(args: Dict[str, Any]) -> tuple[str, str]:
@@ -51,15 +64,12 @@ def fetch_event_logs(args: Dict[str, Any]) -> Dict[str, Any]:
     records, errors, totals = [], {}, {}
     for layer in selected:
         layer_filters = filters.get(layer, {})
-        allowed = {"src_ip", "user", "pid", "ppid", "serial", "result", "dst_ip", "src_port",
-                   "dst_port", "event_type", "method", "protocol", "path", "status_code",
-                   "alert_only", "exclude_interactive", "include_user_cmd", "exclude_self"}
-        if not isinstance(layer_filters, dict) or set(layer_filters) - allowed:
+        if not isinstance(layer_filters, dict) or set(layer_filters) - LAYER_FILTERS[layer]:
             raise ValueError(f"invalid filters for {layer}")
         # Fetch at most offset+limit per layer: sufficient for a globally sorted page.
-        result = fetch_layer_logs(layer, {**layer_filters, "host": args["host"],
-                                  "start_time": start, "end_time": end,
-                                  "limit": offset + limit, "offset": 0})
+        result = LAYER_TOOLS[layer]({**layer_filters, "host": args["host"],
+                                     "start_time": start, "end_time": end,
+                                     "limit": offset + limit, "offset": 0})
         totals[layer] = result["total_matched"]
         if result.get("error"):
             errors[layer] = result["error"]

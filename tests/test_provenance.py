@@ -117,9 +117,8 @@ def test_audit_all_lines_survive_a_single_representative_citation(tmp_path, monk
     assert result["evidence_chain"][0]["raw_refs"] == [f"{path}:1", f"{path}:2"]
 
 
-@pytest.mark.parametrize("citation", [{}, {"raw_refs": ["invented:1"]}, {"raw_refs": "not-a-list"},
-                                      {"raw_refs": ["source:1", "invented:1"]}])
-def test_missing_or_fabricated_refs_fail_validation_and_do_not_increase_confidence(citation):
+@pytest.mark.parametrize("citation", [{"raw_refs": ["invented:1"]}, {"raw_refs": ["source:1", "invented:1"]}])
+def test_fabricated_refs_fail_validation_and_do_not_increase_confidence(citation):
     seed = {"incident_id": "BAD", "raw_ref": "source:1", "confidence_initial": 0.3}
     llm = ScriptedInvestigator([terminate([evidence(**citation)])])
     result = InvestigationAgent(llm, ToolRegistry()).run(seed)
@@ -127,6 +126,18 @@ def test_missing_or_fabricated_refs_fail_validation_and_do_not_increase_confiden
     assert result["statistics"]["confidence_increase"] == 0
     assert "invented:1" not in result["raw_refs"]
     assert "invented:1" not in result["evidence_chain"][0]["raw_refs"]
+
+
+@pytest.mark.parametrize("citation", [{}, {"raw_refs": "not-a-list"}])
+def test_missing_or_malformed_refs_keep_confidence_but_mark_provenance_incomplete(citation):
+    # 2026-09-24: LLM이 raw_ref 복사를 빠뜨린 것만으로 기여를 0으로 만들면 판정 재현성이
+    # 무너져서, 기여는 반영하고 provenance에만 미완료로 남긴다(지어낸 참조는 위 테스트대로 0).
+    seed = {"incident_id": "MISSING", "raw_ref": "source:1", "confidence_initial": 0.3}
+    llm = ScriptedInvestigator([terminate([evidence(**citation)])])
+    result = InvestigationAgent(llm, ToolRegistry()).run(seed)
+    assert result["provenance"]["status"] == "incomplete"
+    assert result["statistics"]["confidence_increase"] == pytest.approx(0.2)
+    assert result["evidence_chain"][0]["raw_refs"] == []
 
 
 def test_legacy_uncited_results_are_not_marked_validated():

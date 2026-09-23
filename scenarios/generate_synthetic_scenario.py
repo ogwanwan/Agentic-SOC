@@ -14,9 +14,8 @@
 실행 후 test_consistency.py의 SEED를 이 스크립트가 출력하는 값으로 바꿔서 사용한다.
 """
 
-import os
+from _log_paths import log_path
 
-LOG_DIR = "sample_logs"
 ATTACKER_IP = "45.76.13.201"
 VICTIM_USER = "ubuntu"
 HOST = "web-01"
@@ -115,13 +114,13 @@ network_lines = [
 # ----------------------------------------------------------------------
 # 파일에 append
 # ----------------------------------------------------------------------
-with open(os.path.join(LOG_DIR, "sample_auth.log"), "a", encoding="utf-8") as f:
+with open(log_path("auth"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(auth_lines) + "\n")
 
-with open(os.path.join(LOG_DIR, "sample_audit.log"), "a", encoding="utf-8") as f:
+with open(log_path("audit"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(audit_lines) + "\n")
 
-with open(os.path.join(LOG_DIR, "sample_network.log"), "a", encoding="utf-8") as f:
+with open(log_path("network"), "a", encoding="utf-8") as f:
     f.write("\n".join(network_lines) + "\n")
 
 print("합성 로그 추가 완료.")

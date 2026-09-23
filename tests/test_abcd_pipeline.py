@@ -5,6 +5,7 @@ import socket
 import pytest
 
 from agent.pipeline import run_investigation_pipeline
+from agent.provenance import strip_trace_fields
 from agent.report import format_text_report
 from agent.tools import build_default_registry
 from scripts.demo_abcd import LAYERS, ROOT, WINDOW, ScriptedDemoClient, run_demo, sample_environment
@@ -72,7 +73,8 @@ def test_real_pipeline_preserves_input_query_evidence_and_report(layers):
         if observation["tool_name"] == "get_process_tree":
             continue
         for record in observation["result"]["records"]:
-            assert record == original[record["raw_ref"]]
+            # seed 프롬프트는 추적용 필드(raw_ref_locations 등)를 뺀 사본이라 같은 기준으로 비교
+            assert strip_trace_fields(record) == original[record["raw_ref"]]
 
     # Follow every final report reference back to an actual physical sample line.
     for ref, locations in result["raw_ref_locations"].items():

@@ -14,7 +14,7 @@ get_process_tree 함수만 있으면 agent/tools/registry.py의 build_default_re
 그 함수를 쓰는 곳이 여기 하나뿐이라 별도 폴더(parsers/)로 분리해둘 이유가 없어져서
 (parsers/에 남은 게 이 파일 하나였음 — agent/tools/parsers/README.md 참고) 그대로
 이 파일 안으로 옮겼다. build_ancestry_chain()이 기대하는 필드(pid/ppid/timestamp/
-exe/comm/user/syscall/session_type/raw_ref)는 1차 탐지팀 공통스키마를 _flatten()한
+exe/comm/user/syscall/session_type/raw_ref)는 1차 탐지팀 공통스키마를 펼친(log_source.normalize_documents)
 결과에도 전부 그대로 있어서(exe/comm/user/syscall/session_type은 layer_data 안에
 있다가 top-level로 펼쳐짐), 로직 자체는 옮기면서도 손댈 필요가 없었다.
 
@@ -39,7 +39,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from ..log_source import read_documents, normalize_documents, query_window, event_time
+from ..log_source import load_window_events
 from ..time_utils import parse_iso
 
 DEFAULT_LOOKBACK_HOURS = 24  # 조상을 찾을 때 얼마나 과거까지 audit 로그를 훑을지
@@ -137,17 +137,6 @@ def build_ancestry_chain(
     }
 
 
-def _flatten(event: Dict[str, Any]) -> Dict[str, Any]:
-    """공통스키마 {timestamp, layer, raw_ref, src_ip, pid, ppid, layer_data:{...}} 를
-    LLM이 읽기 편하도록 layer_data를 top-level에 펼친 평평한 dict 하나로 만든다.
-    (agent/tools/real/fetch_audit_log.py의 _flatten()과 동일한 규칙 — build_ancestry_chain()이
-    기대하는 exe/comm/user/syscall/session_type 필드가 여기서 top-level로 올라온다.)
-    """
-    flat = {k: v for k, v in event.items() if k != "layer_data"}
-    flat.update(event.get("layer_data") or {})
-    return flat
-
-
 def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
     host = args["host"]
     pid = int(args["pid"])
@@ -168,18 +157,21 @@ def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
         start_time = start.isoformat().replace("+00:00", "Z")
         end_time = end.isoformat().replace("+00:00", "Z")
 
-    start, end = query_window(start_time, end_time)
-    documents = read_documents("audit", host, start, end)
-    flat_events = [event for event in normalize_documents("audit", documents, start, end)
-                   if (ts := event_time(event)) is not None and start <= ts <= end]
-    flat_events.sort(key=lambda event: (event_time(event), event["raw_ref"]))
+    # fetch_audit_log와 같은 경로(log_source → primary_detection 공통 정규화)로 읽는다.
+    # 정규화 결과는 이미 layer_data가 top-level로 펼쳐져 있어 build_ancestry_chain()에 바로 넘긴다.
+    loaded = load_window_events("audit", host, start_time, end_time)
+    flat_events = loaded["events"]
 
+    if loaded["error"] == "permission_denied":
+        summary = f"{host}의 audit 로그 파일 읽기 권한이 없습니다. AUDIT_LOG_LOCAL_PATH 권한을 확인하세요."
+        return {"count": 0, "summary": summary, "records": [], "error": loaded["error"]}
     if not flat_events:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 audit 데이터를 찾지 못했습니다. "
             "host 이름, 기간, 또는 AUDIT_LOG_LOCAL_PATH/AUDIT_LOG_BUCKET 설정을 확인하세요."
         )
-        return {"count": 0, "summary": summary, "records": []}
+        return {"count": 0, "summary": summary, "records": [],
+                **({"error": loaded["error"]} if loaded["error"] else {})}
 
     chain = build_ancestry_chain(flat_events, target_pid=pid)
 

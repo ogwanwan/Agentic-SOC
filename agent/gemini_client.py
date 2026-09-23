@@ -95,23 +95,48 @@ class GeminiClient:
         """
         from google.genai import types
 
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",  # Gemini가 JSON만 반환하도록 강제
-                max_output_tokens=self.max_output_tokens,
-                temperature=self.temperature,
-            ),
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",  # Gemini가 JSON만 반환하도록 강제
+            max_output_tokens=self.max_output_tokens,
+            temperature=self.temperature,
         )
+        response = self._generate_with_retry(user_prompt, config)
         text = response.text
         if not text:
             raise GeminiDecisionError(
                 f"Gemini가 빈 응답을 반환했습니다. (finish_reason 등을 확인하십시오)\n원본 응답: {response}"
             )
         return self._parse_json(text)
-    
+
+    # [2026-09-24] 503(서버 과부하)/429(분당 한도)는 일시적인 오류인데, 예전엔 한 번만 나도
+    # main.py 전체가 예외로 끝났다(seed 생성 단계에서 연속 발생 확인). 이 두 코드만
+    # 기다렸다가 다시 시도하고, 그 외 오류는 바로 올려 보낸다.
+    _RETRYABLE_STATUS = {429, 503}
+    _RETRY_DELAY_RE = re.compile(r"retryDelay['\"]?:\s*['\"]?(\d+(?:\.\d+)?)s")
+    MAX_ATTEMPTS = 4
+    BASE_DELAY_SECONDS = 15.0
+
+    def _generate_with_retry(self, user_prompt: str, config: Any) -> Any:
+        import time
+
+        from google.genai import errors
+
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                return self._client.models.generate_content(
+                    model=self.model, contents=user_prompt, config=config
+                )
+            except errors.APIError as exc:
+                if exc.code not in self._RETRYABLE_STATUS or attempt == self.MAX_ATTEMPTS:
+                    raise
+                # 429는 서버가 알려준 retryDelay를 따르고, 없으면 지수 백오프(15s, 30s, 60s)
+                match = self._RETRY_DELAY_RE.search(str(exc))
+                delay = float(match.group(1)) + 2.0 if match else self.BASE_DELAY_SECONDS * 2 ** (attempt - 1)
+                print(f"[Gemini {exc.code}] {delay:.0f}초 후 재시도 ({attempt}/{self.MAX_ATTEMPTS - 1})")
+                time.sleep(delay)
+        raise AssertionError("unreachable")
+
     # [2026-09-18 추가] LLM이 가끔 JSON 응답 중간에 markdown 리스트 문법
     # (`- key: value`처럼 키 앞에 하이픈이 붙고 따옴표가 빠진 형태)을 섞어 넣어
     # json.loads()가 실패하는 사례가 발견됐다. 기존 trailing comma 보정으로는

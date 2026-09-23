@@ -284,11 +284,14 @@ class InvestigationAgent:
             contradicting = bool(ev.get("contradicting", False))
             contribution = float(ev.get("confidence_contribution", 0.0))
             sequence = len(state.evidence) + len(state.contradicting_evidence) + 1
+            # [2026-09-24] raw_ref를 빠뜨리거나 형식이 틀린 것은 LLM의 복사 실수라서,
+            # 기여를 0으로 만들면 같은 증거라도 실행마다 confidence가 달라져 재현성이
+            # 무너졌다. 그 경우엔 기여를 그대로 반영하고 provenance에만 기록한다.
+            # 관측되지 않은 참조를 지어낸 경우(unknown)와 위치가 모호한 경우만 0으로 막는다.
             try:
                 raw_refs, unknown_refs = validate_citations(ev, state.raw_refs)
             except ValueError as exc:
                 raw_refs, unknown_refs = [], []
-                contribution = 0.0
                 state.provenance_issues.append({"sequence": sequence, "error": str(exc)})
             if unknown_refs:
                 contribution = 0.0
@@ -297,10 +300,8 @@ class InvestigationAgent:
                                           for source in state.raw_ref_groups.get(ref, [ref])))
             if any(len(state.raw_ref_locations.get(ref, [])) > 1 for ref in raw_refs):
                 contribution = 0.0
-            if not raw_refs and state.raw_refs:
-                # An uncited claim cannot change confidence in a tracked run.
-                contribution = 0.0
-                state.notes.append(f"증거 {sequence}: 유효한 raw_ref가 없어 신뢰도 기여를 제외했습니다.")
+            if not raw_refs and not unknown_refs and state.raw_refs:
+                state.notes.append(f"증거 {sequence}: raw_ref 인용이 없습니다(신뢰도 기여는 반영, provenance 미완료).")
             evidence = Evidence.new(
                 sequence=sequence,
                 time=ev.get("time"),

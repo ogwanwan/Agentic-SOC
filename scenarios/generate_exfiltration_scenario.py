@@ -10,10 +10,9 @@ fetch_network_log 호출 시 필터는 공격자 IP를 src_ip로 걸었더니 �
 seed의 src_ip(공격자 IP)가 어느 필드로 오더라도 걸리게 했다.
 """
 
-import os
+from _log_paths import log_path
 from datetime import datetime, timezone
 
-LOG_DIR = "sample_logs"
 ATTACKER_IP = "91.203.6.44"
 VICTIM_USER = "ubuntu"
 HOST = "web-01"
@@ -110,13 +109,13 @@ network_lines = [
 # ----------------------------------------------------------------------
 # append
 # ----------------------------------------------------------------------
-with open(os.path.join(LOG_DIR, "sample_auth.log"), "a", encoding="utf-8") as f:
+with open(log_path("auth"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(auth_lines) + "\n")
 
-with open(os.path.join(LOG_DIR, "sample_audit.log"), "a", encoding="utf-8") as f:
+with open(log_path("audit"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(audit_lines) + "\n")
 
-with open(os.path.join(LOG_DIR, "sample_network.log"), "a", encoding="utf-8") as f:
+with open(log_path("network"), "a", encoding="utf-8") as f:
     f.write("\n".join(network_lines) + "\n")
 
 print("데이터 유출 시나리오 로그 추가 완료 (시간/방향성 수정판).")

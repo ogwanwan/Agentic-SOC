@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
+from .provenance import strip_trace_fields
+
 SEED_SYSTEM_PROMPT = """\
 당신은 SOC(보안관제센터)의 1차 스캐너 역할을 하는 경량 LLM입니다.
 정규화된 raw 로그 더미를 훑어보고, 심층 조사가 필요해 보이는 "후보 사건(seed)"을
@@ -61,17 +63,25 @@ SEED_SYSTEM_PROMPT = """\
 }
 """
 
-# [13] agent/seed_generation.py에서 build_seed_user_prompt 실행
-#      4계층 X 30줄 로그를 통째로 Gemini에게 넘겨서 "여기서 조사할 가치가 있는 후보가 있나?" 물어봄
-#      Gemini가 로그를 읽고 직접 이해하고, 조사 후보를 반환함
+# [13] agent/seed_generation.py [12]에서 build_seed_user_prompt 실행
+#      raw_log_ingestion.py [7]~[9]가 4계층별로 최근 N건(RAW_LOG_LOCAL_MAX_LINES,
+#      기본 30건)씩 정규화해서 넘긴 이벤트를 통째로 Gemini에게 보여주고
+#      "여기서 조사할 가치가 있는 후보가 있나?" 물어봄
+#      → 위 SEED_SYSTEM_PROMPT의 원칙 6("evidence_refs는 입력 로그의 raw_ref를
+#      원문 그대로, 새 참조를 만들지 말 것")을 LLM에게 지시하고, 그 지시를 실제로
+#      지켰는지는 seed_generation.py [2026-09-23 추가] 검증 블록이 코드로 재확인함
+#      (agent/provenance.py: references() — known 집합과 대조)
+#      [2026-09-24] 추적용 필드(raw_ref_locations 등)는 LLM에게 보여주는 사본에서 빼고,
+#      이벤트는 한 줄 JSON으로 넣는다 — 원본 raw_logs는 그대로라 seed_generation.py의
+#      raw_ref 검증은 영향 없음.
 def build_seed_user_prompt(raw_logs: List[Dict[str, Any]], host: str) -> str:
     payload = {
         "host": host,
         "raw_log_count": len(raw_logs),
-        "raw_logs": raw_logs,
+        "raw_logs": strip_trace_fields(raw_logs),
     }
     return (
         "다음은 최근 수집된 정규화 로그 더미입니다. 이 안에서 심층 조사가 필요한 "
         "후보를 찾아 시스템 프롬프트의 JSON 스키마로 응답하십시오.\n\n"
-        + json.dumps(payload, ensure_ascii=False, indent=2)
+        + json.dumps(payload, ensure_ascii=False)
     )

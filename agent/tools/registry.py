@@ -127,28 +127,34 @@ def build_default_registry(
         ),
         ToolSpec(
             "fetch_web_log",
-            "어떤 웹 요청이 있었는지 조회한다",
+            "어떤 웹 요청이 있었는지 조회한다 (apache access 로그, method/path(쿼리 포함)/status/user_agent까지 구조화, "
+            "결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
             ["path", "src_ip", "method", "status_code", "exclude_self", "limit", "offset"],
         ),
         ToolSpec(
             "fetch_auth_log",
-            "로그인·권한상승 흔적이 있었는지 조회한다 (event_type은 ssh_accepted/ssh_failed/sudo_command 등이며 "
-            "구조화, 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
+            "로그인·권한상승 흔적이 있었는지 조회한다 (결과의 event 필드: ssh_accepted/ssh_failed/"
+            "ssh_invalid_user/sudo_command 등, 인증 방식은 method(password/publickey). event_type 인자는 "
+            "event 값으로 거른다. 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
             ["user", "src_ip", "event_type", "result", "limit", "offset"],
         ),
         ToolSpec(
             "fetch_audit_log",
             "파일 생성·변조·명령 실행이 있었는지 조회한다 "
-            "(uid/euid/session_type/exec_args/target_file까지 구조화해서 반환)",
+            "(uid/euid/session_type/exe/exec_args/path(대상 파일)까지 구조화해서 반환, event_type 인자는 "
+            "auditd 룰 key로 거른다. 로그인 세션(auth 레코드의 sshd pid)에서 실행된 명령은 그 pid의 자식이므로 "
+            "pid가 아니라 ppid=<세션 pid>로 조회. 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
             ["event_type", "pid", "ppid", "user", "serial", "exclude_interactive", "include_user_cmd", "limit", "offset"],
         ),
         ToolSpec(
             "fetch_network_log",
-            "네트워크 후속 행위(외부 통신 등)가 있었는지 조회한다 (http/alert 이벤트의 signature/"
-            "protocol까지 구조화, 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
+            "네트워크 후속 행위(외부 통신 등)가 있었는지 조회한다 (Suricata http/alert 이벤트만 반환, "
+            "alert는 signature/category/severity, http는 url/method/status까지 구조화. flow 이벤트와 "
+            "전송 바이트 수는 없음. src_ip는 패킷 출발지, dst_ip는 목적지와 비교하므로 서버에서 외부로 나간 "
+            "통신은 dst_ip=<외부 IP>로 조회. 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
             ["src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only", "limit", "offset"],
         ),

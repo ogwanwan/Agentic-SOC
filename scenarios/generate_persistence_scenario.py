@@ -8,10 +8,9 @@
 못 다루게 막는 과도한 제약인지 확인한다.
 """
 
-import os
+from _log_paths import log_path
 from datetime import datetime, timezone
 
-LOG_DIR = "sample_logs"
 HOST = "web-01"
 
 EVENT_TIME = datetime(2026, 9, 14, 22, 30, 0, tzinfo=timezone.utc)
@@ -69,7 +68,7 @@ audit_lines += make_execve_pair(
     argv=["useradd", "-m", "-G", "sudo", "-s", "/bin/bash", "sysupdate"],
 )
 
-with open(os.path.join(LOG_DIR, "sample_audit.log"), "a", encoding="utf-8") as f:
+with open(log_path("audit"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(audit_lines) + "\n")
 
 print("지속성 확보 시나리오 로그 추가 완료 (audit 계층만).")

@@ -8,10 +8,9 @@ SUID 비트가 설정된 find 바이너리를 악용해 낮은 권한(uid=1001)�
 *** 시간 계산은 datetime으로 직접 명시 (지난 exfiltration 스크립트의 실수 반복 방지) ***
 """
 
-import os
+from _log_paths import log_path
 from datetime import datetime, timezone
 
-LOG_DIR = "sample_logs"
 VICTIM_USER = "developer"
 HOST = "web-01"
 
@@ -78,10 +77,10 @@ audit_lines += make_execve_pair(
 # network.log는 의도적으로 추가하지 않음 (순수 로컬 권한 상승, src_ip 없는 seed)
 # ----------------------------------------------------------------------
 
-with open(os.path.join(LOG_DIR, "sample_auth.log"), "a", encoding="utf-8") as f:
+with open(log_path("auth"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(auth_lines) + "\n")
 
-with open(os.path.join(LOG_DIR, "sample_audit.log"), "a", encoding="utf-8") as f:
+with open(log_path("audit"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(audit_lines) + "\n")
 
 print("권한 상승 시나리오 로그 추가 완료.")

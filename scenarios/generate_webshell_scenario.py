@@ -12,41 +12,31 @@
      하지 않는 행위(php-fpm이 셸을 스폰하는 것 자체가 강한 침해 신호)
   4. network: 웹서버 -> 공격자 IP 아웃바운드 통신 + Suricata "Possible Webshell" alert
 
-기존 sample_logs/*.log에 append한다.
+.env의 *_LOG_LOCAL_PATH가 가리키는 로그 파일(에이전트 도구가 실제로 읽는 파일)에 append한다.
 """
 
 import json
-import os
 
-LOG_DIR = "sample_logs"
+from _log_paths import log_path
+
 ATTACKER_IP = "198.51.100.77"
 SERVER_IP = "10.0.7.236"
 HOST = "web-01"
 
 # ----------------------------------------------------------------------
-# 1. web.log — 업로드 + 명령 실행 요청 (nginx JSON 포맷)
+# 1. web — 업로드 + 명령 실행 요청
+# [2026-09-24] nginx JSON → apache access 포맷으로 변경. web 계층 정규화는 1차 탐지팀
+# fetch_apache_log.py가 하며, 그 파서는 실 EC2 apache LogFormat만 읽는다:
+#   %t(ISO8601 UTC) %{req_id} %a %{c}a %{scheme} %{Host}i "%r" %>s %O %D %P
+#   "%{Referer}i" "%{User-Agent}i" xff="%{X-Forwarded-For}i"
 # ----------------------------------------------------------------------
-web_events = [
-    {
-        "ts": "2026-09-14T18:05:00+00:00", "msec": "1789423500.000",
-        "req_id": "wsh0001", "src_ip": ATTACKER_IP, "src_port": "55001",
-        "dst_ip": SERVER_IP, "dst_port": "443", "scheme": "https", "host": "ogwanwan.shop",
-        "method": "POST", "uri": "/wp-content/uploads/2026/09/shell.php",
-        "proto": "HTTP/1.1", "status": "200", "bytes": "42", "rt": "0.031",
-        "xff_orig": "", "ref": "", "ua": "python-requests/2.31.0",
-        "upstream": "127.0.0.1:8080", "ustatus": "200",
-    },
-    {
-        "ts": "2026-09-14T18:05:05+00:00", "msec": "1789423505.000",
-        "req_id": "wsh0002", "src_ip": ATTACKER_IP, "src_port": "55002",
-        "dst_ip": SERVER_IP, "dst_port": "443", "scheme": "https", "host": "ogwanwan.shop",
-        "method": "GET", "uri": "/wp-content/uploads/2026/09/shell.php?cmd=id;whoami;uname+-a",
-        "proto": "HTTP/1.1", "status": "200", "bytes": "128", "rt": "0.045",
-        "xff_orig": "", "ref": "", "ua": "python-requests/2.31.0",
-        "upstream": "127.0.0.1:8080", "ustatus": "200",
-    },
+web_lines = [
+    f'2026-09-14T18:05:00.000000Z wsh0001 {ATTACKER_IP} 127.0.0.1 https ogwanwan.shop '
+    f'"POST /wp-content/uploads/2026/09/shell.php HTTP/1.1" 200 42 31000 1200 "-" "python-requests/2.31.0" xff="-"',
+    f'2026-09-14T18:05:05.000000Z wsh0002 {ATTACKER_IP} 127.0.0.1 https ogwanwan.shop '
+    f'"GET /wp-content/uploads/2026/09/shell.php?cmd=id;whoami;uname+-a HTTP/1.1" 200 128 45000 1200 '
+    f'"-" "python-requests/2.31.0" xff="-"',
 ]
-web_lines = [json.dumps(e) for e in web_events]
 
 # ----------------------------------------------------------------------
 # 2. audit.log — php-fpm이 셸을 스폰하는 execve 체인 (ENRICHED 포맷)
@@ -114,13 +104,13 @@ network_lines = [
 # ----------------------------------------------------------------------
 # append
 # ----------------------------------------------------------------------
-with open(os.path.join(LOG_DIR, "sample_web.log"), "a", encoding="utf-8") as f:
+with open(log_path("web"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(web_lines) + "\n")
 
-with open(os.path.join(LOG_DIR, "sample_audit.log"), "a", encoding="utf-8") as f:
+with open(log_path("audit"), "a", encoding="utf-8") as f:
     f.write("\n" + "\n".join(audit_lines) + "\n")
 
-with open(os.path.join(LOG_DIR, "sample_network.log"), "a", encoding="utf-8") as f:
+with open(log_path("network"), "a", encoding="utf-8") as f:
     f.write("\n".join(network_lines) + "\n")
 
 print("웹셸 시나리오 로그 추가 완료.")

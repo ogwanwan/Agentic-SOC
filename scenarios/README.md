@@ -4,6 +4,13 @@
 모음입니다. 실제 EC2 서버를 건드리지 않고, `sample_logs/*.log`에 특정 공격 시나리오에
 해당하는 줄을 append하는 방식으로 동작합니다.
 
+[2026-09-24] append 대상은 `.env`의 `*_LOG_LOCAL_PATH`가 가리키는 파일입니다
+(`_log_paths.py`, 에이전트 도구가 실제로 읽는 파일과 같음). 예전처럼 `sample_web.log`/
+`sample_network.log`에 고정으로 쓰면, `.env`가 `sample_apache_web.log`/`sample_network_recent.log`를
+가리킬 때 도구가 시나리오 로그를 전혀 보지 못했습니다. 시나리오 seed의 host는 `web-01`이며,
+`.env`에 `LOG_LOCAL_HOST`를 다른 값으로 두면 로컬 파일 조회가 거부되니 비워 두세요
+(`HOST`는 검사에 쓰지 않습니다).
+
 ## 사용 흐름
 
 1. `sample_logs`가 깨끗한 원본 상태인지 확인 (`git status`에 아무것도 안 잡혀야 함)
@@ -40,11 +47,14 @@
    초기 버전에서 7시간 어긋난 사고가 있었습니다).
 2. `auth.log`는 syslog 형식(`Sep 14 20:30:00 ...`) 그대로 작성합니다.
 3. `audit.log`는 ENRICHED 포맷(`type=SYSCALL ... key="exec"` + `\x1d` + `ARCH=... AUID="..."` 등)을
-   그대로 재현해야 `agent/tools/parsers/audit_parser.py`가 정상 파싱합니다.
-4. `network.log`는 nginx/Suricata의 실제 JSON 필드명을 그대로 씁니다. **`src_ip`/`dest_ip`
-   방향을 실제 트래픽 방향과 일치시키세요** — `fetch_network_log`의 `src_ip` 필터는
-   이벤트의 `src_ip` 필드(또는 `xff`)와만 매칭됩니다.
-5. 로그를 만든 뒤에는 **API를 호출하기 전에 반드시 파서를 직접 호출해 `count`를 확인**하세요:
+   그대로 재현해야 1차 탐지팀 공통 정규화(`primary_detection/normalizer/tools/fetch_audit_log.py`)가
+   정상 파싱합니다.
+4. web 로그는 **apache access 포맷**으로 씁니다(nginx JSON은 공통 정규화가 읽지 못해 0건이 됨):
+   `<ISO8601 UTC> <req_id> <client_ip> 127.0.0.1 https <Host> "<METHOD> <path> HTTP/1.1" <status> <bytes> <dur_us> <pid> "<referer>" "<ua>" xff="-"`
+5. network 로그는 Suricata eve.json 필드명을 그대로 씁니다. 공통 정규화는 **http/alert 이벤트만**
+   읽고 flow 이벤트(`bytes_toserver` 등)는 버리므로, 판정에 필요한 신호는 alert(`alert.signature`)로
+   넣으세요. **`src_ip`/`dest_ip` 방향을 실제 트래픽 방향과 일치시키세요.**
+6. 로그를 만든 뒤에는 **API를 호출하기 전에 반드시 도구를 직접 호출해 `count`를 확인**하세요:
    ```powershell
    python -c "from agent.tools.real.fetch_audit_log import fetch_audit_log; import os; os.environ['AUDIT_LOG_LOCAL_PATH']='sample_logs/sample_audit.log'; r = fetch_audit_log({'host':'web-01','start_time':'...','end_time':'...'}); print(r['count'])"
    ```
