@@ -1,5 +1,28 @@
 # Agentic-SOC
 
+## 2026-09-23: A·B 공통 정규화와 C·D 기능 통합
+
+현재 조사 브랜치의 공통 정규화 코드를 유지하면서 사건 시간 구간 조회(`fetch_event_logs`)와
+원본 참조 추적·검증을 연결했습니다. 웹 로그는 Apache 형식을 사용하며,
+1차 탐지가 만든 로컬 `raw_ref`는 그대로 유지하고 `raw_ref_locations`에 실제 경로를 기록합니다.
+
+- [A·B·C·D 통합 테스트와 쉬운 설명](docs/ABCD_TEST_GUIDE.md) — 팀원용 실행 순서, 예상 결과, 파일별 역할
+- [C·D 사용법과 병합 내용](docs/C_D_IMPLEMENTATION.md)
+- 오프라인 검증: `pip install -r requirements-dev.txt` → `python -m pytest -q`
+- 전체 파이프라인 데모: `python -m scripts.demo_abcd` → `results/abcd_demo.json`
+- 사건 조회 데모: `python -m scripts.demo_event_window` → `results/cd_demo.json`
+
+| 역할 | 쉽게 말하면 |
+| --- | --- |
+| A: 공통 정규화 | 서로 다른 로그를 같은 형식으로 번역 |
+| B: 조사 도구 | A의 번역기를 사용하는 계층별 검색 도구 |
+| C: 사건 구간 조회 | 사건이 일어난 시간대의 로그를 모아 시간순으로 조회 |
+| D: 원본 추적 | 원본 파일·줄 번호를 증거와 최종 보고서까지 유지·검증 |
+
+오프라인 검증에는 `.env`, AWS 계정, LLM API 키가 필요 없습니다. 로그 처리·조회·검증은
+실제 코드를 사용하고, LLM 판단 응답과 S3 서비스 응답만 테스트용으로 대체합니다.
+
+
 "에이전트개발-9/9" 문서의 조사 에이전트 설계를 파이썬으로 구현한 것입니다.
 Triage/감지 에이전트가 파이프라인에서 빠지면서, raw log를 직접 받아 LLM이
 스스로 seed를 생성하고 우선순위를 매긴 뒤 심층 조사까지 하는 구조로 확장했습니다.
@@ -7,10 +30,9 @@ Triage/감지 에이전트가 파이프라인에서 빠지면서, raw log를 직
 > **2026-09-22~23 업데이트**: 조사 도구(auth/audit/web/network/get_process_tree)와
 > seed 생성 단계(raw_log_ingestion.py)가 전부 각자 자체 파서 대신 **1차 탐지팀의
 > 공통 정규화 함수**를 쓰도록 교체됐고, 그 결과 자체 파서 폴더(`agent/tools/parsers/`)는
-> 삭제됐습니다. A/B 역할이 이걸 어떻게 완료했는지는
-> [`docs/0923-completion.md`](docs/0923-completion.md), 기술적인 배경/파일별
-> 변경 내역은 [`docs/normalizer-migration.md`](docs/normalizer-migration.md),
-> 작업 진행 과정(시간순 기록)은 [`docs/0923-work-log.md`](docs/0923-work-log.md) 참고.
+> 삭제됐습니다. 현재 A/B/C/D의 연결 방식과 검증 결과는
+> [`docs/ABCD_TEST_GUIDE.md`](docs/ABCD_TEST_GUIDE.md), C/D의 상세 계약과 통합 내역은
+> [`docs/C_D_IMPLEMENTATION.md`](docs/C_D_IMPLEMENTATION.md)를 참고하세요.
 
 ## 전체 흐름 (한눈에)
 
@@ -42,6 +64,7 @@ Agentic-SOC/
 │   ├── seed_generation.py     # SeedGenerator — raw log에서 seed 후보 + 우선순위 추출
 │   ├── raw_log_ingestion.py   # 최근 N분 raw log를 4계층(web/auth/audit/network) 수집
 │   │                          #   4계층 전부 normalizer_adapter/primary_detection.normalizer 경유
+│   ├── provenance.py        # raw_ref 전달·인용 검증(D)
 │   ├── pipeline.py            # raw log → seed → 우선순위 → 심층조사 전체 연결
 │   ├── claude_client.py       # Claude API 클라이언트
 │   ├── gemini_client.py       # Gemini API 클라이언트 (기본값, 무료 티어 가능)
@@ -51,15 +74,17 @@ Agentic-SOC/
 │       ├── registry.py            # Tool 연결·실행 계층 (ToolRegistry, build_default_registry)
 │       ├── mock_tools.py          # 실제 구현 전 로컬 테스트용 목업 핸들러
 │       ├── normalizer_adapter.py  # 1차 탐지팀 정규화 함수용 S3/로컬 소스 선택 어댑터 (우리 코드)
+│       ├── log_source.py          # 수집·조회 공용 읽기/필터/페이지 처리
 │       ├── time_utils.py          # parse_iso() 등 시간 파싱 공용 유틸
 │       ├── real/                  # 조사 도구 본체 (파일명 = 도구명이면 자동 연결)
 │       │   ├── README.md
 │       │   ├── _s3_common.py          # S3 읽기 공용 헬퍼 (list_and_read_text 등)
-│       │   ├── fetch_web_log.py       # apache access.log, normalizer_adapter.normalize_web() 사용
-│       │   ├── fetch_auth_log.py      # auth.log(syslog), normalizer_adapter.normalize_auth() 사용
-│       │   ├── fetch_audit_log.py     # auditd raw 텍스트, normalizer_adapter.normalize_audit() 사용
-│       │   ├── fetch_network_log.py   # Suricata eve.json, normalizer_adapter.normalize_network() 사용
-│       │   ├── get_process_tree.py    # audit pid/ppid로 조상 체인 추적, normalize_audit() 사용
+│       │   ├── fetch_web_log.py       # apache access.log, 공용 log_source 경유
+│       │   ├── fetch_auth_log.py      # auth.log(syslog), 공용 log_source 경유
+│       │   ├── fetch_audit_log.py     # auditd raw 텍스트, 공용 log_source 경유
+│       │   ├── fetch_network_log.py   # Suricata eve.json, 공용 log_source 경유
+│       │   ├── fetch_event_logs.py    # 사건 window로 여러 계층 조회(C)
+│       │   ├── get_process_tree.py    # audit pid/ppid로 조상 체인 추적, 같은 공통 정규화 함수 사용
 │       │   │                          #   + build_ancestry_chain() 헬퍼도 이 파일 안에 있음
 │       │   └── resolve_ip_geo.py      # IP 지리정보 실제 구현 (외부 API, 현재 기본 제외)
 ├── primary_detection/                   ← 1차 탐지팀 산출물 (우리 코드 아님, 절대 직접 수정 금지)
@@ -74,15 +99,19 @@ Agentic-SOC/
 │   ├── sample_apache_web.log      # web 계층 기본 샘플 (apache 포맷)
 │   ├── sample_auth.log / sample_audit.log / sample_network.log
 ├── scripts/                 # 개발용 보조 스크립트 (프로덕션 코드 아님)
+│   ├── demo_abcd.py             # raw 입력 → seed → 실제 조사 도구 → 최종 보고서
+│   ├── demo_event_window.py     # C/D 사건 조회 데모
 │   ├── fetch_sample_from_ec2.py  # SSH로 EC2에서 4계층 샘플 로그를 한 번에 받아오는 스크립트
 │   ├── verify_all_tools.py       # 5개 조사 도구 + raw_log_ingestion을 로컬 샘플로 한 번에 점검
 │   └── local_e2e_test.py         # (구버전) 초기 검증용 스크립트, 지금은 real/ tool로 대체됨
 ├── docs/
-│   ├── README.md
-│   ├── 0923-completion.md         # A/B 역할이 완료 기준을 어떻게 만족시켰는지 요약
-│   ├── normalizer-migration.md    # 정규화 함수 이전 작업 기술적 상세(폴더 구조, import 경로 등)
-│   └── 0923-work-log.md           # 작업 진행 기록(시간순) — 문제/원인/해결 과정 전체
+│   ├── ABCD_TEST_GUIDE.md        # 팀원용 테스트와 A/B/C/D 쉬운 설명
+│   └── C_D_IMPLEMENTATION.md    # C/D 인터페이스·제약·통합 내용
 ├── tests/
+│   ├── test_abcd_pipeline.py    # 단일/4계층·S3 모사·잘못된 참조를 전체 흐름에서 검증
+│   ├── test_cd_normalizer_integration.py # 수집·B 도구·C 조회와 벤더 결과 비교
+│   ├── test_event_window.py     # 사건 시간 범위·필터·페이지
+│   ├── test_provenance.py       # 원본 참조 유지·검증
 │   ├── test_normalizer_parity.py # adapter 결과 == 1차 탐지팀 벤더 코드 직접 호출 결과 (완료 기준 검증)
 │   ├── test_fetch_auth_log.py    # fetch_auth_log 파싱/필터링 검증 (가짜 S3)
 │   ├── test_fetch_audit_log.py   # fetch_audit_log 파싱/필터링 검증 (가짜 S3)
@@ -109,8 +138,10 @@ Agentic-SOC/
 | 보고서 출력 | `agent/report.py` (`build_investigation_result`, `format_text_report`) |
 | (추가) raw log 수집 · seed 생성 | `agent/raw_log_ingestion.py`, `agent/seed_generation.py`, `agent/seed_prompts.py` |
 | (추가) 전체 파이프라인 연결 | `agent/pipeline.py` (`run_investigation_pipeline`) |
-| (추가) 공통 정규화 함수(A) | `agent/tools/normalizer_adapter.py` + `primary_detection/normalizer/` (상세: [docs/normalizer-migration.md](docs/normalizer-migration.md)) |
+| (추가) 공통 정규화 함수(A) | `agent/tools/normalizer_adapter.py` + `primary_detection/normalizer/` (상세: [통합 안내](docs/ABCD_TEST_GUIDE.md)) |
 | (추가) 조사 도구(B) | `agent/tools/real/fetch_*.py`, `get_process_tree.py` — 전부 normalizer_adapter 경유 |
+| (추가) 사건 구간 조회(C) | `agent/tools/real/fetch_event_logs.py` + `agent/tools/log_source.py` |
+| (추가) 원본 참조 검증(D) | `agent/provenance.py` + `seed_generation.py`, `loop.py`, `report.py` |
 
 ## 설치 및 실행
 
@@ -134,7 +165,10 @@ RAW_LOG_WINDOW_MINUTES=10
 그리고 아래처럼 실행:
 
 ```bash
-# 단위 테스트 (API 키/AWS 불필요, 가짜 LLM·가짜 S3 사용)
+# 단위/통합 테스트 (API 키/AWS 불필요)
+python -m pip install -r requirements-dev.txt
+python -m pytest -q                 # 전체 오프라인 테스트
+python -m scripts.demo_abcd         # 실제 도구를 연결한 A/B/C/D 데모
 python -m tests.test_normalizer_parity   # 완료 기준(1차 탐지와 동일한 정규화 결과) 직접 검증
 python -m tests.test_loop
 python -m tests.test_fetch_auth_log
@@ -168,7 +202,9 @@ WEB_LOG_LOCAL_PATH=sample_logs/sample_apache_web.log   # ← apache 포맷! ngin
 AUTH_LOG_LOCAL_PATH=sample_logs/sample_auth.log
 AUDIT_LOG_LOCAL_PATH=sample_logs/sample_audit.log
 NETWORK_LOG_LOCAL_PATH=sample_logs/sample_network.log
-RAW_LOG_LOCAL_MAX_LINES=10   # 무료 티어 분당 토큰 한도 보호용, 429 에러 나면 더 낮추기
+AUTH_LOG_YEAR=2026               # 연도 없는 auth 샘플의 실제 연도
+LOG_LOCAL_HOST=web-01            # 로컬 파일이 속한 수집 서버
+RAW_LOG_LOCAL_MAX_LINES=10       # 계층별 마지막 완성 이벤트 수(audit 여러 줄 = 한 이벤트)
 ```
 
 이 상태로 `python main.py`를 실행하면, `agent/raw_log_ingestion.py`와
@@ -176,12 +212,11 @@ RAW_LOG_LOCAL_MAX_LINES=10   # 무료 티어 분당 토큰 한도 보호용, 429
 Gemini API + 진짜 EC2 로그로 seed 생성부터 보고서 생성까지 끝까지 검증할 수
 있습니다.
 
-**주의**: `WEB_LOG_LOCAL_PATH`는 2026-09-22부터 **apache access.log 포맷**을
-가리켜야 합니다(예전엔 nginx JSON이었음). `agent/tools/real/fetch_web_log.py`는
-이미 apache 기준으로 바뀌었지만, `agent/raw_log_ingestion.py`(seed 생성용 web
-수집)는 아직 nginx 포맷을 기대하는 자체 파서를 씁니다 — 그래서 지금 이 변수를
-apache 샘플로 맞추면 seed 생성 단계의 web 수집은 조용히 0건이 됩니다(에러 아님).
-자세한 내용은 [docs/normalizer-migration.md](docs/normalizer-migration.md) 참고.
+`WEB_LOG_LOCAL_PATH`는 공통 정규화 함수가 지원하는 **Apache access.log 형식**을
+가리켜야 합니다. 현재는 seed 수집과 조사 도구 모두 같은 파일·정규화 함수를 사용합니다.
+로컬 수집은 오래된 샘플도 재생하도록 현재 시각 필터를 생략하지만, 조사 도구는 요청한
+사건 구간을 항상 적용합니다. `AUTH_LOG_YEAR`는 auth 로그의 실제 연도로 설정하세요.
+형식·시간·경로 점검 방법은 [통합 안내](docs/ABCD_TEST_GUIDE.md)에 있습니다.
 
 빠르게 5개 조사 도구 + raw_log_ingestion 전체를 한 번에 점검하려면:
 
@@ -208,8 +243,10 @@ UNAVAILABLE)일 때도 있습니다 — 이건 우리 코드 문제가 아니라
 ## 동작 방식 (설계 메모)
 
 ### raw log → seed 생성
-`agent/seed_generation.py`의 `SeedGenerator`가 4계층 raw log를 정규화 없이
-그대로 LLM에게 넘기고, "조사할 가치가 있는 후보"를 우선순위와 함께 뽑아옵니다.
+`agent/raw_log_ingestion.py`가 4계층 raw log를 공통 함수로 정규화합니다.
+`agent/seed_generation.py`의 `SeedGenerator`는 원본 참조가 붙은 정규화 로그를
+LLM에게 넘기고, "조사할 가치가 있는 후보"를 우선순위와 함께 뽑아옵니다.
+입력에 참조가 있으면 후보의 `evidence_refs`도 실제 입력의 참조를 인용해야 합니다.
 후보가 0개일 수도, 여러 개일 수도 있습니다. `agent/pipeline.py`가 우선순위
 순서대로 각 seed를 `InvestigationAgent.run()`에 넘깁니다.
 
@@ -338,7 +375,7 @@ Investigation Confidence 0.95
   audit/auth와 동일한 패턴으로 정규화 함수로 교체 완료. 자체 파서(`parsers/` 폴더
   전체)는 더 이상 존재하지 않음(마지막 남은 `process_tree.py`도
   `get_process_tree.py` 안으로 합침). 자세한 내용은
-  [docs/normalizer-migration.md](docs/normalizer-migration.md) 참고.
+  [통합 안내](docs/ABCD_TEST_GUIDE.md) 참고.
 - **Confidence 산정 방식 4가지 결정사항** — 현재는 "LLM이 매 사이클
   `confidence_contribution`을 직접 산정 → 시스템이 누적 합산" 방식.
   종료 임계값은 `InvestigationAgent(confidence_threshold=...)`로 조절

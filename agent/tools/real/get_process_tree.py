@@ -39,7 +39,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from ..normalizer_adapter import normalize_audit
+from ..log_source import read_documents, normalize_documents, query_window, event_time
 from ..time_utils import parse_iso
 
 DEFAULT_LOOKBACK_HOURS = 24  # 조상을 찾을 때 얼마나 과거까지 audit 로그를 훑을지
@@ -126,6 +126,8 @@ def build_ancestry_chain(
                 "syscall": n.get("syscall"),
                 "session_type": n.get("session_type"),
                 "raw_ref": n.get("raw_ref"),
+                "raw_refs": n.get("raw_refs", []),
+                "raw_ref_locations": n.get("raw_ref_locations", {}),
             }
             for n in chain
         ],
@@ -166,8 +168,11 @@ def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
         start_time = start.isoformat().replace("+00:00", "Z")
         end_time = end.isoformat().replace("+00:00", "Z")
 
-    events = normalize_audit(host, start_time, end_time)  # 필터 없이 전부 — pid/ppid 관계를 다 확보
-    flat_events = [_flatten(e) for e in events]
+    start, end = query_window(start_time, end_time)
+    documents = read_documents("audit", host, start, end)
+    flat_events = [event for event in normalize_documents("audit", documents, start, end)
+                   if (ts := event_time(event)) is not None and start <= ts <= end]
+    flat_events.sort(key=lambda event: (event_time(event), event["raw_ref"]))
 
     if not flat_events:
         summary = (

@@ -1,88 +1,60 @@
-﻿# tests/
+# 테스트 실행 안내
 
-조사 에이전트의 각 구성요소를 검증하는 테스트 모음입니다. 크게 두 종류로 나뉩니다:
-**단위/통합 테스트**(API 호출 없이, 코드 로직 자체를 검증)와 **재현성 검증**
-(`test_consistency.py`, 실제 Gemini API를 호출해 판정의 일관성을 측정).
+처음 받는 팀원은 [A·B·C·D 통합 안내](../docs/ABCD_TEST_GUIDE.md)의 설치 순서대로 실행하세요.
+모든 명령은 **프로젝트 루트**에서 실행합니다. Python 3.10 이상이 필요합니다.
 
-## 실행 방법
+## 가장 짧은 실행 방법
 
-모든 테스트는 프로젝트 루트에서 `python -m tests.<파일명>` 형태로 실행합니다
-(`tests/`가 패키지라 상대 import를 쓰므로, `python tests/test_loop.py`처럼
-직접 실행하면 import 에러가 날 수 있습니다).
+가상환경을 활성화한 뒤:
 
 ```bash
-# 단위/통합 테스트 (API 키 불필요, 몇 초 내 완료)
-python -m tests.test_loop
-python -m tests.test_fetch_audit_log
-python -m tests.test_seed_generation
-python -m tests.test_raw_log_ingestion
-python -m tests.test_pipeline
-
-# 재현성 검증 (실제 Gemini API 호출, 시간이 걸리고 일일/분당 한도 소모)
-python -m tests.test_consistency --runs 8
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m scripts.demo_abcd
 ```
 
-## 파일 목록
+전체 테스트는 AWS/LLM API를 호출하지 않습니다. `.env`도 필요하지 않습니다.
+설치 시에는 패키지 다운로드 연결이 필요합니다. `pytest.ini`가 실제 Gemini를 호출하는
+`test_consistency.py`를 자동 실행 대상에서 제외합니다.
 
-| 파일 | 검증 대상 | API 호출 |
-|---|---|---|
-| `test_loop.py` | `InvestigationAgent` 전체 흐름 — 종료 관문, 중복 호출 방지, max_call 강제 종료, 도구 실패 처리, `real/` 자동 탐색 등 9개 테스트. `FakeLLMClient`로 LLM 응답을 스크립트화해서 검증 | ❌ 안 함 |
-| `test_fetch_audit_log.py` | `fetch_audit_log`의 파싱/필터링 로직 | ❌ 안 함 |
-| `test_seed_generation.py` | `SeedGenerator`의 우선순위 정렬 | ❌ 안 함 |
-| `test_raw_log_ingestion.py` | `fetch_recent_raw_logs`의 4계층 수집 | ❌ 안 함 |
-| `test_pipeline.py` | raw log → seed → 조사까지 전체 파이프라인 통합 | ❌ 안 함 |
-| `test_consistency.py` | 동일 seed를 N회 반복 실행해 verdict 일관성 + confidence 표준편차 측정 | ✅ 실제 호출 |
+ABCD 연결만 집중해서 확인하려면:
 
-## `test_loop.py` — `FakeLLMClient`로 로직만 검증
+```bash
+python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integration.py tests/test_event_window.py tests/test_provenance.py
+```
 
-이 테스트는 실제 LLM을 부르지 않고, 미리 정해둔 `decision` 딕셔너리를 순서대로
-반환하는 `FakeLLMClient`를 씁니다. `loop.py`의 제어 로직(게이트, 재시도, 안전장치)이
-의도대로 동작하는지만 확인하는 것이 목적이라, 프롬프트 문구를 바꿔도 이 테스트
-자체는 영향받지 않습니다 — 대신 프롬프트를 바꾼 뒤에는 `test_consistency.py`로
-실제 판정 품질을 확인해야 합니다.
+## 무엇을 확인하는가
 
-9개 테스트가 각각 확인하는 것:
+| 파일 | 확인 내용 |
+| --- | --- |
+| `test_abcd_pipeline.py` | 실제 수집 → seed 생성·검증 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 모사 S3, 가짜 참조 거부, 환경변수 복원 |
+| `test_cd_normalizer_integration.py` | A의 벤더 직접 호출과 입력 수집/B 개별 도구/C 사건 조회 결과 비교. audit 분할 객체, gzip, 원본 위치·모호성 |
+| `test_normalizer_parity.py` | 기존 A 어댑터 API와 벤더 결과 비교. `_run()`을 위 통합 테스트에서 호출하므로 전체 pytest에도 포함 |
+| `test_event_window.py` | C의 시간 양끝·시간대·연도 경계·필터·전역 페이지·입력 오류·파일 누락/권한 |
+| `test_provenance.py` | D의 seed/지지·반박 증거/JSON·텍스트 참조 유지, audit 여러 줄, 미등록 참조, 도구 실패 이후 참조 유지 |
+| `test_fetch_*_log.py`, `test_get_process_tree.py` | B의 계층별 필터와 프로세스 연결 |
+| `test_raw_log_ingestion.py`, `test_seed_generation.py` | 로그 수집과 사건 후보 우선순위 |
+| `test_pipeline.py` | 여러 seed가 우선순위대로 조사에 전달되는지 검사 |
+| `test_loop.py` | 종료 조건·중복 호출 방지·최대 호출 수·도구 오류 처리 |
 
-- `test_happy_path_terminates_with_threat_confirmed` — 정상 흐름(4계층 조사 후
-  THREAT_CONFIRMED 종료)
-- `test_format_text_report_renders_expected_sections` — 텍스트 리포트 포맷
-- `test_duplicate_tool_call_is_skipped` — 동일 `(tool, args)` 재호출 차단
-- `test_max_call_forces_termination` — `max_calls` 도달 시 강제 종료
-- `test_tool_failure_does_not_stop_investigation` — 도구 실패해도 조사 계속
-- `test_confidence_sufficient_blocked_when_single_tool_type` — 도구 1종류만
-  쓴 채로는 confidence_sufficient 종료 불가 (게이트)
-- `test_confidence_sufficient_allows_remaining_unknowns` — unknowns가 남아있어도
-  confidence_sufficient 종료는 허용 (unknowns 자체는 차단 사유 아님)
-- `test_src_ip_seed_requires_network_log` — `src_ip` 있는 seed는 network 계층
-  확인 강제
-- `test_real_tool_auto_discovery` — `agent/tools/real/`에 파일명=함수명이
-  일치하는 파일을 추가하면 자동으로 연결되는지
+`test_abcd_pipeline.py`는 네트워크 연결을 차단한 상태에서 실행합니다. LLM 응답만
+고정해 같은 순서로 조사하도록 하고, 로그 처리 함수나 조사 도구의 결과를 성공값으로
+대체하지 않습니다. S3 테스트는 서비스 응답만 모사하고 객체 읽기 이후 처리는 그대로 실행합니다.
 
-새 게이트 조건이나 종료 로직을 추가할 때는, 여기에 해당 조건을 검증하는 테스트를
-같이 추가하는 것을 권장합니다.
+## 실제 LLM 평가와의 차이
 
-## `test_consistency.py` — 실제 판정 재현성 검증
+오프라인 테스트 통과는 데이터 흐름과 코드 동작을 확인한 결과입니다. 실제 공격 탐지율,
+오탐/미탐, 모델 응답 안정성을 측정한 결과는 아닙니다.
 
-`tests/` 안에 있지만 성격이 다릅니다. 단위 테스트처럼 "코드가 맞게 짜였는지"가
-아니라 **"LLM이 실제로 안정적으로 판단하는지"**를 검증합니다. `agent/prompts/`의
-원칙을 수정한 뒤에는 반드시 이 스크립트로 재검증하는 것을 권장합니다.
+실제 모델을 사용하려면 `requirements.txt` 설치 및 `.env` 설정 후 `python main.py`를 실행합니다.
+판정 일관성을 반복 측정하는 기존 수동 스크립트는 다음과 같습니다.
 
 ```bash
 python -m tests.test_consistency --runs 8
 ```
 
-`SEED` 딕셔너리를 원하는 사건 시나리오로 바꿔서 씁니다. 실제 검증에 쓸 로그는
-`scenarios/`의 생성 스크립트로 만듭니다 — 자세한 사용법과 지금까지 검증한
-시나리오 목록은 `scenarios/README.md`를 참고하세요.
+이 명령은 실제 API 사용량이 발생합니다. 해당 스크립트의 seed와 로그 설정을 사용할
+시나리오에 맞추세요. 이번 ABCD 오프라인 검증에서는 실행하지 않았습니다.
 
-**주의**: 이 스크립트는 실제 Gemini API를 호출합니다. 무료 티어는 분당 15회,
-일일 500회 한도가 있으니, 급하게 여러 시나리오를 연달아 검증하려 하면 하루
-안에 한도를 다 쓸 수 있습니다.
-
-## 새 테스트를 추가할 때
-
-- 코드 로직(게이트, 파싱, 페이지네이션 등) 검증이면 `FakeLLMClient`나 가짜
-  데이터를 써서 API 호출 없이 실행되게 만드세요 — 이래야 CI에서도 안전하게
-  돌릴 수 있습니다.
-- 프롬프트/판단 기준 자체가 잘 작동하는지 보고 싶다면 `test_consistency.py`를
-  쓰거나, 그 패턴을 참고해 새 스크립트를 만드세요.
+새 코드 테스트는 `test_`로 시작하는 함수로 작성해 `python -m pytest -q`에 포함시키세요.
+API 호출이 필요한 수동 평가와 오프라인 회귀 테스트를 구분해 유지합니다.

@@ -1,5 +1,10 @@
 """agent/tools/normalizer_adapter.py — 공통 정규화 함수 어댑터 (A: 공통 모듈 담당)
 
+2026-09-23 C/D 통합: normalize_log_documents()를 추가했다. 기존 normalize_* 공개
+함수와 벤더 코드는 유지한다. 사건 조회·수집·조사 도구는 새 진입점에서 동일한 벤더
+함수를 호출하고, raw_ref를 보존하면서 raw_refs/raw_ref_locations를 부가 정보로 붙인다.
+S3 임시 파일에는 고유한 디렉터리를 쓰고, 객체별 실제 줄 위치를 따로 매핑한다.
+
 1차 탐지팀(https://github.com/ogwanwan/Agentic-SOC, feature/primary_detection) 저장소의
 정규화 코드는 primary_detection/normalizer/{common,tools}/ 아래에 "있는 그대로"(바이트
 단위 동일, primary_detection/normalizer/vendor_sync_check.py로 검증) 들여와 있다. 이
@@ -40,8 +45,10 @@ signature만 필터로 지원해서(우리 tool 스키마의 dst_ip/src_port/dst
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # sys.path에 추가해준다 — 그래서 여기선 그 밑의 normalizer 패키지를 최상위
@@ -55,6 +62,58 @@ from .real._s3_common import daterange, list_and_read_text
 from .time_utils import parse_iso
 
 DEFAULT_BUCKET = "ogwanwan-shop-bucket"
+
+
+def normalize_log_documents(layer, documents, start, end):
+    """C/D source adapter: call the vendored normalizers without changing them.
+
+    Preserve local vendor raw_ref values; map S3 staging line numbers back to
+    the actual object. raw_ref_locations adds absolute locations without
+    replacing local basename references used by primary detection.
+    """
+    documents = list(documents)
+    if not documents:
+        return []
+    lines, locations = [], []
+    for source, text in documents:
+        physical_lines = text.split("\n")
+        if physical_lines and physical_lines[-1] == "":
+            physical_lines.pop()
+        lines.extend(physical_lines)
+        locations.extend(f"{source}:{number}" for number in range(1, len(physical_lines) + 1))
+
+    local = len(documents) == 1 and not documents[0][0].startswith("s3://")
+    name = Path(documents[0][0]).name.removesuffix(".gz") if local else "source.log"
+    functions = {"web": _normalize_web_events, "auth": _normalize_auth_events,
+                 "audit": _normalize_audit_events, "network": _normalize_network_events}
+    kwargs = {}
+    with tempfile.TemporaryDirectory(prefix="soc-normalize-") as staging:
+        directory = Path(staging)
+        if layer == "auth":
+            # Let the vendor interpret yearless syslog using its existing dt/year
+            # contract. Narrow incident windows must not depend on today's year.
+            partition = re.search(r"(?:^|/)dt=(\d{4}-\d{2}-\d{2})(?:/|$)", documents[0][0])
+            if partition:
+                directory /= "dt=" + partition.group(1)
+            elif not os.environ.get("AUTH_LOG_YEAR"):
+                if start.year == end.year:
+                    kwargs["year"] = start.year
+                elif (end - start).days < 180:
+                    directory /= "dt=" + end.date().isoformat()
+            directory.mkdir(exist_ok=True)
+        path = directory / name
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        events = functions[layer](str(path), **kwargs)
+
+    for event in events:
+        prefix, first_line = event["raw_ref"].rsplit(":", 1)
+        numbers = event.get("layer_data", {}).get("raw_lines") or [int(first_line)]
+        sources = [locations[number - 1] for number in numbers]
+        refs = [f"{prefix}:{number}" for number in numbers] if local else sources
+        event["raw_ref"] = refs[0]
+        event["raw_refs"] = list(dict.fromkeys(refs))
+        event["raw_ref_locations"] = {ref: [source] for ref, source in zip(refs, sources)}
+    return events
 
 
 def _read_source_text(

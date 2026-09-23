@@ -118,14 +118,22 @@ def build_default_registry(
 
     tool_defs = [
         ToolSpec(
+            "fetch_event_logs",
+            "사건 event/window로 원본 로그를 직접 조회한다. window=[시작,끝] 또는 "
+            "event의 timestamp/window 필요. layers로 여러 계층 조회 가능. "
+            "filters는 계층별 조건이며 raw_ref/raw_refs를 그대로 증거에 인용한다.",
+            ["host"],
+            ["event", "window", "layers", "filters", "before_seconds", "after_seconds", "limit", "offset"],
+        ),
+        ToolSpec(
             "fetch_web_log",
             "어떤 웹 요청이 있었는지 조회한다",
             ["host", "start_time", "end_time"],
-            ["path", "src_ip", "method"],
+            ["path", "src_ip", "method", "status_code", "exclude_self", "limit", "offset"],
         ),
         ToolSpec(
             "fetch_auth_log",
-            "로그인·권한상승 흔적이 있었는지 조회한다 (ssh_login/sudo/pam 이벤트로 "
+            "로그인·권한상승 흔적이 있었는지 조회한다 (event_type은 ssh_accepted/ssh_failed/sudo_command 등이며 "
             "구조화, 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
             ["user", "src_ip", "event_type", "result", "limit", "offset"],
@@ -135,11 +143,11 @@ def build_default_registry(
             "파일 생성·변조·명령 실행이 있었는지 조회한다 "
             "(uid/euid/session_type/exec_args/target_file까지 구조화해서 반환)",
             ["host", "start_time", "end_time"],
-            ["event_type", "pid", "ppid", "user", "serial", "exclude_interactive"],
+            ["event_type", "pid", "ppid", "user", "serial", "exclude_interactive", "include_user_cmd", "limit", "offset"],
         ),
         ToolSpec(
             "fetch_network_log",
-            "네트워크 후속 행위(외부 통신 등)가 있었는지 조회한다 (alert_signature/"
+            "네트워크 후속 행위(외부 통신 등)가 있었는지 조회한다 (http/alert 이벤트의 signature/"
             "protocol까지 구조화, 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
             ["src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only", "limit", "offset"],
