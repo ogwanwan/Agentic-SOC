@@ -110,6 +110,19 @@ def pagination(args: Dict[str, Any]) -> tuple[int, int]:
     return values[0], values[1]
 
 
+def filtered_out_hint(window_total: int, args: Dict[str, Any], filter_keys: Iterable[str]) -> str:
+    """필터 결과가 0건인데 구간 안에는 이벤트가 있을 때 summary에 붙일 안내.
+
+    LLM이 "필터에 안 맞음"을 "그 시간에 활동 없음"으로 읽고 조사를 끝내는 사례가 있었다
+    (2026-09-24 지속성 시나리오: audit event_type="EXECVE" 0건 → INCONCLUSIVE).
+    """
+    used = [key for key in filter_keys if args.get(key) is not None]
+    if window_total == 0 or not used:
+        return ""
+    return (f" 단, 같은 구간에 필터 없이 보면 이벤트가 {window_total}건 있습니다 — 사용한 필터({', '.join(used)})가 "
+            "맞지 않았을 수 있으니, 필터를 빼거나 바꿔서 다시 조회한 뒤 판단하십시오.")
+
+
 def load_window_events(layer: str, host: str, start_time: str, end_time: str) -> Dict[str, Any]:
     """Read one layer and normalize it with primary_detection, keeping only in-window events.
 

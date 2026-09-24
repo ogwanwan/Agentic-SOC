@@ -19,7 +19,7 @@ LAYER_FILTERS = {
     "web": {"src_ip", "method", "path", "status_code", "exclude_self"},
     "auth": {"src_ip", "user", "event_type", "result"},
     "audit": {"event_type", "pid", "ppid", "user", "serial", "exclude_interactive", "include_user_cmd"},
-    "network": {"src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only"},
+    "network": {"ip", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only"},
 }
 
 

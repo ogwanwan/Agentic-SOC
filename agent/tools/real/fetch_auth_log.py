@@ -28,23 +28,33 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, List
 
-from ..log_source import load_window_events, pagination
+from ..log_source import filtered_out_hint, load_window_events, pagination
 
 # 로그인 "시도" 1회로 세는 event. 실패 1회는 보통 PAM 인증 실패·Failed password·연결 종료
 # 3줄로 남는데, LLM이 이를 1회/3회로 제각각 세서 판정이 갈렸다(2026-09-24). 그래서
 # 세는 기준을 코드로 고정하고 summary에 숫자로 준다.
 FAILED_LOGIN_EVENTS = ("ssh_failed", "ssh_invalid_user")
 SUCCESS_LOGIN_EVENTS = ("ssh_accepted",)
+# 실패 대상 계정 이름은 이만큼만 나열한다. EC2 24시간 조회에서 325개 계정이 전부 summary에
+# 들어가 프롬프트가 불필요하게 커졌다(2026-09-24). 개수는 항상 전체 기준이다.
+MAX_LISTED_USERS = 20
+EMPTY_USER = "(빈 계정명)"
 
 
 def _login_stats(records: List[Dict[str, Any]]) -> str:
     counts = Counter(r.get("event") for r in records)
     failed = [r for r in records if r.get("event") in FAILED_LOGIN_EVENTS]
-    failed_users = sorted({r.get("user") for r in failed if r.get("user")})
+    # 스캐너는 "Invalid user  from ..."처럼 빈 계정명으로 시도하기도 한다. 공통 정규화는 이때
+    # user 필드를 아예 빼므로, 계정명 없는 실패도 계정 1개로 센다 (EC2 2026-09-24: 실패 1회인데
+    # "계정 0개"로 나와 앞뒤가 안 맞았다).
+    failed_users = sorted({r.get("user") or EMPTY_USER for r in failed})
+    listed = ", ".join(failed_users[:MAX_LISTED_USERS]) or "-"
+    if len(failed_users) > MAX_LISTED_USERS:
+        listed += f" 외 {len(failed_users) - MAX_LISTED_USERS}개"
     by_event = ", ".join(f"{event} {count}건" for event, count in counts.most_common() if event)
     return (
         f"로그인 실패 {len(failed)}회(ssh_failed+ssh_invalid_user 기준), "
-        f"실패 대상 계정 {len(failed_users)}개({', '.join(failed_users) or '-'}), "
+        f"실패 대상 계정 {len(failed_users)}개({listed}), "
         f"로그인 성공 {sum(counts[e] for e in SUCCESS_LOGIN_EVENTS)}회. event별: {by_event}"
     )
 
@@ -78,7 +88,7 @@ def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 인증 이벤트를 찾지 못했습니다. "
             "host 이름, 기간, 또는 AUTH_LOG_LOCAL_PATH/AUTH_LOG_BUCKET 설정을 확인하세요."
-        )
+        ) + filtered_out_hint(len(loaded["events"]), args, ("user", "src_ip", "result", "event_type"))
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"
         more_desc = f"더 있음 (next_offset={next_offset})" if has_more else "더 없음"

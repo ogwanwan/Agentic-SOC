@@ -23,13 +23,47 @@ fetch_apache_log.py가 기대하는 포맷과 컬럼 단위로 일치했다. apa
 
 필요 환경변수: WEB_LOG_LOCAL_PATH(apache access.log) 있으면 로컬 파일,
   없으면 WEB_LOG_BUCKET/S3의 raw/source_type=apache/... 파티션
+
+summary 끝의 [조회 구간 전체 집계]는 페이지와 무관하게 조건에 맞는 전체 요청 기준
+메서드·상태코드 계열·서로 다른 경로 수·상위 경로·User-Agent를 준다(원칙 9에 그대로 쓰도록).
+EC2 main.py(2026-09-24 INC-xmlrpc-flood)에서 LLM이 records를 직접 세고 해석하다 판정이
+흔들려, auth와 같은 방식으로 세는 기준을 코드로 고정했다.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Dict, List
 
-from ..log_source import load_window_events, pagination
+from ..log_source import filtered_out_hint, load_window_events, pagination
+
+TOP_N = 5
+MAX_UA_CHARS = 80
+
+
+def _status_class(status: Any) -> str:
+    return f"{status // 100}xx" if isinstance(status, int) else "unknown"
+
+
+def _top(counter: Counter) -> str:
+    return ", ".join(f"{key} {count}건" for key, count in counter.most_common(TOP_N)) or "-"
+
+
+def _request_stats(records: List[Dict[str, Any]]) -> str:
+    methods = Counter(r.get("method") or "-" for r in records)
+    statuses = Counter(_status_class(r.get("status")) for r in records)
+    paths = Counter(r.get("path") or "-" for r in records)
+    # 브라우저 User-Agent는 200자 가까이 돼 summary가 길어진다 — 앞부분만으로 구분에 충분
+    agents = Counter((r.get("user_agent") or "-")[:MAX_UA_CHARS] for r in records)
+    src_ips = {r.get("src_ip") for r in records if r.get("src_ip")}
+    times = sorted(r["timestamp"] for r in records if r.get("timestamp"))
+    span = f"{times[0]}~{times[-1]}" if times else "-"
+    return (
+        f"요청 {len(records)}건(실제 기록 시각 {span}), 출발지 IP {len(src_ips)}개, "
+        f"메서드별: {_top(methods)}, 상태코드 계열별: {_top(statuses)}, "
+        f"서로 다른 경로 {len(paths)}개, 상위 경로: {_top(paths)}, "
+        f"User-Agent 상위: {_top(agents)}"
+    )
 
 
 def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
@@ -69,14 +103,15 @@ def fetch_web_log(args: Dict[str, Any]) -> Dict[str, Any]:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 web 요청을 찾지 못했습니다. "
             "host 이름, 기간, 또는 WEB_LOG_LOCAL_PATH/WEB_LOG_BUCKET 설정을 확인하세요."
-        )
+        ) + filtered_out_hint(len(loaded["events"]), args, ("src_ip", "method", "path", "status_code", "exclude_self"))
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"
         more_desc = f"더 있음 (next_offset={next_offset})" if has_more else "더 없음"
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 web 요청 총 {total_matched}건 중 "
             f"{page_desc} {len(page)}건 반환. ({more_desc}, method/path/status/duration_us까지 구조화, "
-            "1차 탐지팀 공통 정규화 함수 사용)"
+            "1차 탐지팀 공통 정규화 함수 사용) "
+            f"[조회 구간 전체 집계] {_request_stats(matched)}"
         )
 
     return {

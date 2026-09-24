@@ -13,7 +13,7 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
     LLM에게 돌려줄 summary/반환 형식.
 
 필터 의미:
-  - event_type: auditd 룰 key와 비교
+  - event_type: auditd 룰 key와 비교(대소문자 무시). 레코드 종류(EXECVE 등)·syscall 이름도 허용
   - exclude_interactive: session_type == "non_interactive"인 이벤트만 남김
     (관리자 세션뿐 아니라 판정 불가(None)도 제외 — 공통 정규화 함수와 동일한 의미)
   - include_user_cmd=False: USER_CMD 레코드가 포함된 이벤트 제외
@@ -25,14 +25,26 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..log_source import load_window_events, pagination
+from ..log_source import filtered_out_hint, load_window_events, pagination
+
+FILTER_KEYS = ("pid", "ppid", "user", "serial", "event_type", "exclude_interactive", "include_user_cmd")
+
+
+def _event_type_matches(record: Dict[str, Any], wanted: Any) -> bool:
+    """event_type은 룰 key(exec 등)가 원래 의미지만, LLM이 레코드 종류(EXECVE/SYSCALL/PATH…)나
+    syscall 이름(execve)을 넣는 경우도 받아준다. 0918 지속성 시나리오 재검증(2026-09-24)에서
+    event_type="EXECVE"로 0건이 나오자 LLM이 "명령 실행 없음"으로 INCONCLUSIVE 판정한 사례가 있었다.
+    """
+    wanted = str(wanted).lower()
+    candidates = [record.get("key"), record.get("syscall"), *(record.get("record_types") or [])]
+    return any(str(c).lower() == wanted for c in candidates if c is not None)
 
 
 def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
     for key in ("pid", "ppid", "user", "serial"):
         if args.get(key) is not None and record.get(key) != args[key]:
             return False
-    if args.get("event_type") is not None and record.get("key") != args["event_type"]:
+    if args.get("event_type") is not None and not _event_type_matches(record, args["event_type"]):
         return False
     if args.get("exclude_interactive") and record.get("session_type") != "non_interactive":
         return False
@@ -61,7 +73,7 @@ def fetch_audit_log(args: Dict[str, Any]) -> Dict[str, Any]:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 audit 이벤트를 찾지 못했습니다. "
             "host 이름, 기간, 또는 AUDIT_LOG_LOCAL_PATH/AUDIT_LOG_BUCKET 설정을 확인하세요."
-        )
+        ) + filtered_out_hint(len(loaded["events"]), args, FILTER_KEYS)
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"
         more_desc = f"더 있음 (next_offset={next_offset})" if has_more else "더 없음"

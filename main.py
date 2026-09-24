@@ -88,6 +88,9 @@ def main() -> None:
         minutes=minutes,
         max_calls=8,
         confidence_threshold=0.85,
+        # [2026-09-24] 도구 1개만 보고 끝나는 조사 방지 (agent/loop.py 참고)
+        network_precheck=True,      # seed에 src_ip가 있으면 network를 코드가 먼저 조회
+        strict_termination=True,    # 도구 1종류로 no_more_evidence 종료, 로그인 성공 후 audit 미확인 종료 거부
     )
 
     if not results:

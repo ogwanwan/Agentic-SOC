@@ -145,7 +145,9 @@ def build_default_registry(
             "파일 생성·변조·명령 실행이 있었는지 조회한다 "
             "(uid/euid/session_type/exe/exec_args/path(대상 파일)까지 구조화해서 반환, event_type 인자는 "
             "auditd 룰 key로 거른다. 로그인 세션(auth 레코드의 sshd pid)에서 실행된 명령은 그 pid의 자식이므로 "
-            "pid가 아니라 ppid=<세션 pid>로 조회. 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
+            "pid가 아니라 ppid=<세션 pid>로 조회. user는 명령을 실행한 계정(sudo 뒤에는 root)이라 로그인 "
+            "계정 이름(예: ubuntu)으로 거르면 그 세션 명령이 빠질 수 있다. 결과가 많으면 "
+            "has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
             ["event_type", "pid", "ppid", "user", "serial", "exclude_interactive", "include_user_cmd", "limit", "offset"],
         ),
@@ -154,9 +156,10 @@ def build_default_registry(
             "네트워크 후속 행위(외부 통신 등)가 있었는지 조회한다 (Suricata http/alert 이벤트만 반환, "
             "alert는 signature/category/severity, http는 url/method/status까지 구조화. flow 이벤트와 "
             "전송 바이트 수는 없음. src_ip는 패킷 출발지, dst_ip는 목적지와 비교하므로 서버에서 외부로 나간 "
-            "통신은 dst_ip=<외부 IP>로 조회. 결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
+            "통신은 dst_ip=<외부 IP>로 조회. 방향을 모르면 ip=<IP>로 출발지·목적지 양쪽을 한 번에 조회. "
+            "결과가 많으면 has_more/next_offset으로 이어서 조회 가능)",
             ["host", "start_time", "end_time"],
-            ["src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only", "limit", "offset"],
+            ["ip", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only", "limit", "offset"],
         ),
         ToolSpec(
             "get_process_tree",

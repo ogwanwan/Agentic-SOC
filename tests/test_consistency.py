@@ -1,4 +1,4 @@
-﻿"""동일 seed에 대한 InvestigationAgent 판정 재현성 검증.
+"""동일 seed에 대한 InvestigationAgent 판정 재현성 검증.
 
 실제 Gemini API를 N번 호출해서(비용/시간 발생 주의) 재현성을 측정한다.
 
@@ -52,15 +52,19 @@ def _extract_retry_delay(error_message: str, default: float = 45.0) -> float:
     return default
 
 
-def run_once_with_retry(run_index: int, max_retries: int = 3) -> Dict[str, Any] | None:
+def run_once_with_retry(run_index: int, seed: Dict[str, Any], strict: bool = True,
+                        max_retries: int = 3) -> Dict[str, Any] | None:
     for attempt in range(1, max_retries + 1):
         try:
             llm = GeminiClient()
             # main.py와 같은 조건: resolve_ip_geo는 목업이라 LLM에게 가짜 IP 정보를 줄 수 있어 제외
             registry = build_default_registry(exclude=["resolve_ip_geo"])
-            agent = InvestigationAgent(llm, registry, max_calls=8, confidence_threshold=0.85)
+            # strict=True: main.py와 같은 조건. False(--legacy): 0918처럼 network 사전 조회와
+            # no_more_evidence 관문 없이 LLM이 고르는 도구만 사용 (0918 대비 비교용)
+            agent = InvestigationAgent(llm, registry, max_calls=8, confidence_threshold=0.85,
+                                       network_precheck=strict, strict_termination=strict)
 
-            result = agent.run(SEED)
+            result = agent.run(seed)
             verdict = result["final_verdict"]
 
             print(f"--- Run {run_index} ---")
@@ -104,11 +108,21 @@ def main() -> None:
     # [2026-09-17 추가] run 사이 기본 대기 시간(초). 15 RPM 한도를 안 넘기려면
     # 조사당 호출 수(보통 2~3회)를 고려해 여유 있게 잡는 게 안전하다.
     parser.add_argument("--interval", type=float, default=20.0)
+    # [2026-09-24 추가] 시나리오 스크립트가 출력한 SEED를 파일에 저장해 넘기면 SEED 상수를
+    # 손으로 고치지 않아도 된다. --legacy는 0918 동작(사전 조회·no_more_evidence 관문 없음).
+    parser.add_argument("--seed-json", type=str, default=None)
+    parser.add_argument("--legacy", action="store_true")
     args = parser.parse_args()
+
+    seed = SEED
+    if args.seed_json:
+        with open(args.seed_json, encoding="utf-8") as f:
+            seed = json.load(f)
+    print(f"seed={seed['incident_id']}  mode={'legacy(0918)' if args.legacy else 'strict(main.py)'}")
 
     runs: List[Dict[str, Any]] = []
     for i in range(1, args.runs + 1):
-        result = run_once_with_retry(i)
+        result = run_once_with_retry(i, seed, strict=not args.legacy)
         if result:
             runs.append(result)
         if i < args.runs:

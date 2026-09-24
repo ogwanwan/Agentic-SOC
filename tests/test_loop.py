@@ -237,7 +237,10 @@ def test_format_text_report_renders_expected_sections() -> None:
     assert "Supporting Evidence 3" in text  # 2 -> 3으로 수정
     assert "Contradicting Evidence 0" in text
     assert "Unresolved 실제 서버 침해 여부" in text
-    assert "Investigation Confidence 0.90" in text
+    # [2026-09-24] 판정 확신도(LLM)와 증거 누적 신뢰도(시스템)를 나눠 표시
+    assert "Verdict Confidence 0.90" in text
+    assert f"Investigation Confidence {result['statistics']['investigation_confidence']:.2f}" in text
+    assert "THREAT_CONFIRMED (severity" in text
     print("[PASS] test_format_text_report_renders_expected_sections")
 
 

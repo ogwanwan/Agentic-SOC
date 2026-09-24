@@ -1,4 +1,4 @@
-﻿"""raw log -> seed 생성 -> 우선순위 정렬 -> 심층 조사(InvestigationAgent) 전체 파이프라인.
+"""raw log -> seed 생성 -> 우선순위 정렬 -> 심층 조사(InvestigationAgent) 전체 파이프라인.
 
 main.py가 예전에는 seed 하나를 직접 만들어서 InvestigationAgent.run(seed)를
 한 번 불렀는데, 이제는 Triage/감지 에이전트가 파이프라인에서 빠졌기 때문에
@@ -23,6 +23,8 @@ def run_investigation_pipeline(
     max_calls: int = 8,
     confidence_threshold: float = 0.85,
     seed_generator: Optional[SeedGenerator] = None,
+    network_precheck: bool = False,
+    strict_termination: bool = False,
 ) -> List[Dict[str, Any]]:
     """전체 파이프라인을 한 번 돌린다.
 
@@ -54,6 +56,8 @@ def run_investigation_pipeline(
             tool_registry,
             max_calls=max_calls,
             confidence_threshold=confidence_threshold,
+            network_precheck=network_precheck,  # src_ip seed는 network를 코드가 먼저 조회 (loop.py 참고)
+            strict_termination=strict_termination,  # 조기 종료 관문 강화 (loop.py _termination_rejections)
         )
         results.append(agent.run(seed))
     # [43] loop.py의 반환값을 main.py에 반환

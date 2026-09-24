@@ -120,6 +120,13 @@ class AgentState:
     provenance_issues: List[Dict[str, Any]] = field(default_factory=list)
     raw_ref_groups: Dict[str, List[str]] = field(default_factory=dict)
     raw_ref_locations: Dict[str, List[str]] = field(default_factory=dict)
+    # [2026-09-24] 도구 결과에서 관측된 seed src_ip의 로그인 성공(ssh_accepted) 레코드
+    # ({raw_ref, pid, user, timestamp}). 있으면 종료 관문이 후속 행위(audit) 확인을 요구하고,
+    # 거부 사유에 ppid=<pid>를 그대로 적어준다 (loop.py strict_termination).
+    login_successes: List[Dict[str, Any]] = field(default_factory=list)
+    # [2026-09-24] 시스템이 LLM 대신 실행한 도구 호출(network 사전 조회)의 sequence.
+    # 종료 관문의 "서로 다른 도구 2종류" 계산에서는 빼서, LLM이 스스로 2개 계층을 고르게 한다.
+    system_call_sequences: List[int] = field(default_factory=list)
 
     # [0917 희진] _to_hashable 메소드 추가
     @staticmethod

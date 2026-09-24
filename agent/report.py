@@ -13,7 +13,7 @@ prompts.py가 LLM에게 final_verdict.reasoning(판단에 사용한 구체적 �
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .provenance import provenance_report
 
@@ -132,6 +132,9 @@ def build_investigation_result(
             "tool_calls_count": len(state.tool_calls),
             "tool_calls_max": None,  # InvestigationAgent.run()에서 채워 넣음
             "confidence_increase": round(state.current_confidence - initial_confidence, 3),
+            # [2026-09-24] 증거 누적 신뢰도(루프가 계산). final_verdict.confidence는 LLM이 적은
+            # "판정에 대한 확신도"라 둘이 다를 수 있다 — 리포트에서 따로 보여준다.
+            "investigation_confidence": round(state.current_confidence, 3),
             "evidence_count": len(state.evidence),
             "contradicting_evidence_count": len(state.contradicting_evidence),
             "termination_reason": termination_reason,
@@ -194,13 +197,15 @@ def format_text_report(result: Dict[str, Any]) -> str:
         result["evidence_chain"] + result["contradicting_evidence"],
         key=lambda e: e.get("sequence", 0),
     )
+    # [2026-09-24] 증거마다 원본 줄 번호 수십 개를 바로 아래 찍으니 읽기 힘들어, Findings에는
+    # 줄 수만 적고 원본 위치는 맨 아래 Raw References에 범위로 압축해 모았다(전체 목록은 JSON).
     if all_evidence:
         lines.append("Investigation Findings")
         for ev in all_evidence:
             label = _source_label(ev)
-            lines.append(f"E{ev.get('sequence', '?')} [{label}] {ev['description']}")
-            if ev.get("raw_refs"):
-                lines.append("  원본: " + ", ".join(ev["raw_refs"]))
+            tag = " (반박)" if ev in result["contradicting_evidence"] else ""
+            count = f" [원본 {len(ev['raw_refs'])}줄]" if ev.get("raw_refs") else ""
+            lines.append(f"E{ev.get('sequence', '?')} [{label}]{tag} {ev['description']}{count}")
         lines.append("")
 
     timeline = result.get("attack_timeline") or []
@@ -212,6 +217,8 @@ def format_text_report(result: Dict[str, Any]) -> str:
 
     verdict = result["final_verdict"]
     lines.append("Provisional Conclusion")
+    lines.append(f"{verdict.get('verdict', 'UNKNOWN')} (severity {verdict.get('severity', 'UNKNOWN')}) — "
+                 f"{verdict.get('attack_type', '')}")
     lines.append(verdict.get("summary", ""))
     lines.append("")
 
@@ -223,7 +230,57 @@ def format_text_report(result: Dict[str, Any]) -> str:
         lines.append("           " + extra)
     lines.append("")
 
-    lines.append(f"Investigation Confidence {verdict.get('confidence', 0):.2f}")
+    # [2026-09-24] 예전엔 LLM의 판정 확신도만 "Investigation Confidence"로 찍어, 증거 누적
+    # 신뢰도(0.45)와 판정 확신도(0.75)가 섞여 보였다. 둘을 이름을 나눠 함께 보여준다.
+    lines.append(f"Verdict Confidence {verdict.get('confidence', 0):.2f} (판정 확신도, LLM 산정)")
+    investigation_confidence = result.get("statistics", {}).get("investigation_confidence")
+    if investigation_confidence is not None:
+        lines.append(f"Investigation Confidence {investigation_confidence:.2f} (증거 누적 신뢰도, 시스템 계산)")
     lines.append("Raw reference validation: " + result.get("provenance", {}).get("status", "unavailable"))
 
+    cited = [ev for ev in all_evidence if ev.get("raw_refs")]
+    if cited:
+        lines.append("")
+        lines.append("Raw References (전체 목록은 JSON의 raw_refs)")
+        for ev in cited:
+            lines.append(f"E{ev.get('sequence', '?')} {compact_refs(ev['raw_refs'])}")
+
     return "\n".join(lines)
+
+
+def compact_refs(refs: List[str], max_items: int = 6, keep_full_upto: int = 10) -> str:
+    """참조가 keep_full_upto개 이하면 원문 그대로 나열하고(원본 추적 시 그대로 검색 가능),
+    그보다 많으면 ['access.log:343', 'access.log:344', 'access.log:345', 'access.log:348', ...] →
+    'access.log:343-345, 348, ...'처럼 파일별로 연속 줄을 범위로 묶는다. 묶음이 max_items를
+    넘으면 나머지는 '외 N줄'로 줄인다. 줄 번호 형식이 아닌 참조는 그대로 둔다.
+    """
+    if len(refs) <= keep_full_upto:
+        return ", ".join(refs)
+    by_file: Dict[str, List[int]] = {}
+    others: List[str] = []
+    for ref in refs:
+        name, _, line = ref.rpartition(":")
+        if name and line.isdigit():
+            by_file.setdefault(name, []).append(int(line))
+        else:
+            others.append(ref)
+
+    parts = []
+    for name, numbers in by_file.items():
+        numbers = sorted(set(numbers))
+        ranges = []
+        start = prev = numbers[0]
+        for n in numbers[1:] + [None]:
+            if n is not None and n == prev + 1:
+                prev = n
+                continue
+            ranges.append((start, prev))
+            if n is not None:
+                start = prev = n
+        shown = [f"{a}-{b}" if a != b else f"{a}" for a, b in ranges[:max_items]]
+        hidden = sum(b - a + 1 for a, b in ranges[max_items:])
+        text = f"{name}:" + ", ".join(shown)
+        if hidden:
+            text += f" 외 {hidden}줄"
+        parts.append(text)
+    return " / ".join(parts + others)

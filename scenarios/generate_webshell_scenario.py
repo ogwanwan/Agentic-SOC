@@ -16,6 +16,7 @@
 """
 
 import json
+from datetime import datetime, timezone
 
 from _log_paths import log_path
 
@@ -42,7 +43,9 @@ web_lines = [
 # 2. audit.log — php-fpm이 셸을 스폰하는 execve 체인 (ENRICHED 포맷)
 # ----------------------------------------------------------------------
 GS = "\x1d"
-EPOCH_BASE = 1789423505
+# [2026-09-24 수정] 웹셸 명령 요청(18:05:05 UTC) 시각. 예전 값 1789423505는 22:05:05 UTC로
+# 4시간 어긋나 web → audit 연결이 시간 구간 조회에서 끊겼다. 다른 시나리오처럼 datetime에서 계산.
+EPOCH_BASE = int(datetime(2026, 9, 14, 18, 5, 5, tzinfo=timezone.utc).timestamp())
 SERIAL_BASE = 9500
 
 audit_lines = []

@@ -359,3 +359,112 @@ EC2에서 `fetch_network_log`가 항상 0건을 반환했다(에러·시각 불�
 | `pytest` | 100개 통과 |
 
 EC2에서는 `git pull` 후 `fetch_network_log` 건수가 0이 아닌지 확인한다.
+
+**EC2 확인 (0924)**: Python 3.10.12에서 `test_normalizer_parity` OK(network 3건),
+`verify_all_tools`에서 `fetch_network_log` 391건. 수정 전에는 0건이었다.
+
+## 16. 조기 종료와 웹 판정 보강 (0924 저녁)
+
+### 증상
+EC2 `main.py`(seed `INC-xmlrpc-flood`: 129.222.213.124 → `/xmlrpc.php` POST 31회, 전부 503)에서 LLM이
+`fetch_web_log` **1회만** 호출하고 `no_more_evidence`로 끝냈다. 판정은 FALSE_POSITIVE였다.
+- network·auth·audit을 한 번도 보지 않았다. src_ip seed의 network 확인 규칙은 `confidence_sufficient`
+  종료에만 적용돼서, 결과에 "network 확인 없이 종료" 경고만 남았다.
+- 근거는 "User-Agent가 Jetpack/WordPress.com이다", "503으로 차단됐다"였다. User-Agent는 요청자가 마음대로
+  적는 값이고, 503은 차단이 아니라 서버가 처리하지 못했다는 뜻이다.
+- 리포트의 `Investigation Confidence 0.75`는 LLM이 적은 판정 확신도였다. 실제 증거 누적 신뢰도는 0.45였다.
+
+network 도구 자체는 정상이었다(`verify_all_tools` 391건). 문제는 LLM이 도구를 고르지 않은 것이었다.
+
+재실행에서도 같은 양상이었다. `INC-SSH-PROBE`(44.220.185.209, invalid user 1회)는 `fetch_auth_log` 1회 후
+`no_more_evidence`로 끝났다. 프롬프트로 "도구 하나로 끝내지 말라"고 해도, `no_more_evidence`에는 코드
+관문이 없어서 막을 수 없었다. 같은 실행에서 auth 집계가 "실패 1회, 실패 대상 계정 0개"로 나왔다. 빈 계정명
+(`Invalid user  from ...`)은 공통 정규화가 `user` 필드를 빼기 때문이다. 텍스트 리포트는 증거마다 원본 줄
+번호 수십 개를 바로 아래 찍어 읽기 어려웠다.
+
+### 수정
+| 파일 | 내용 |
+|---|---|
+| `agent/loop.py` | `network_precheck=True`면 seed에 src_ip가 있을 때 첫 LLM 턴 **전에** 코드가 `fetch_network_log(src_ip, seed 구간 ±30분)`를 실행하고, 결과를 첫 턴 관측으로 넣는다(`network_precheck_args()`). LLM 호출 수는 그대로이고, 도구 호출 1회로 센다. 종료 관문 (c)는 "network 조회를 **시도**했는가"로 완화했다. 데이터 소스 장애로 실패해도 종료할 수 있게 하기 위해서다 |
+| `agent/loop.py` (종료 관문) | 관문 조건을 `_termination_rejections()`로 정리. `strict_termination=True`면 **`no_more_evidence`에도 관문 적용**: 도구를 1종류만 시도했는데 등록된 로그 도구 중 안 본 것이 남아 있으면 거부한다(연속 2회 거부 시 기존처럼 강제 종료 턴). 등록된 도구를 다 써봤으면 승인한다. 로그인 성공 후 audit 확인 조건은 아래 비교 절 참고 |
+| `main.py`, `agent/pipeline.py` | `main.py`가 `network_precheck=True`, `strict_termination=True`로 실행한다. `pipeline`/`InvestigationAgent` 기본값은 False로 두어, 도구 1회 후 `no_more_evidence`로 끝나도록 짠 기존 단위 테스트와 C/D 데모(`demo_abcd`, `test_abcd_pipeline`)의 각본을 유지 |
+| `agent/tools/real/fetch_web_log.py` | summary 끝에 `[조회 구간 전체 집계]` 추가: 요청 수, 실제 기록 시각, 출발지 IP 수, 메서드별, 상태코드 계열(2xx/4xx/5xx)별, 서로 다른 경로 수, 상위 경로 5개, User-Agent 상위 5개(80자까지). auth와 같이 세는 기준을 코드로 고정 |
+| `agent/tools/real/fetch_auth_log.py` | 실패 대상 계정 이름은 20개까지만 나열(개수는 전체 기준). EC2 24시간 조회에서 325개가 전부 들어가 프롬프트가 커졌다. 계정명 없는 실패는 `(빈 계정명)` 계정 1개로 센다 |
+| `agent/prompts/investigation.yaml` | **원칙 9 신설 (웹 요청 반복·스캔)**. User-Agent는 정상 근거가 아니다. 5xx는 차단이 아니다. 인증·XML-RPC 엔드포인트에 같은 src_ip의 POST가 10회 이상이면 THREAT_CONFIRMED("웹 인증 무차별 대입/XML-RPC 남용 시도", LOW~MEDIUM, 0.75~0.85). 서로 다른 경로 20개 이상이고 4xx가 과반이면 "웹 경로·취약점 스캔". 그 미만이면 FALSE_POSITIVE. 성공 정황(관리자 경로 2xx, 업로드 후 실행, 웹 프로세스의 셸 실행)이 있으면 HIGH 이상으로 올리고 audit/auth를 확인한다. 원칙 4에는 사전 조회 결과를 반영하라는 지시와, 도구 1개로 no_more_evidence를 내기 전 원칙 6~9의 확인 항목을 점검하라는 지시를 추가 |
+| `agent/report.py` | 텍스트 리포트에 판정(verdict·severity·attack_type) 줄 추가. `Verdict Confidence`(LLM 판정 확신도)와 `Investigation Confidence`(`statistics.investigation_confidence`, 증거 누적 신뢰도)를 나눠 표시. Findings에는 `[원본 N줄]`만 적고, 원본 위치는 맨 아래 `Raw References`에 모은다. 10개 이하는 원문 그대로 적고, 그보다 많으면 `access.log:343-345, 348-359`처럼 범위로 묶는다(`compact_refs()`). 전체 목록은 JSON에 그대로 있다 |
+| `tests/test_consistency.py`, `scripts/local_e2e_test.py` | main.py와 같은 조건(`local_e2e_test`는 자체 로컬 도구에 `ip` 인자가 없어 사전 조회 제외) |
+| 테스트 | `tests/test_network_precheck.py` 8개 추가(사전 조회 구간, 첫 턴 전 실행, 기본값 꺼짐·src_ip 없으면 생략, 실패한 network 조회도 관문 통과, 도구 1종류 no_more_evidence 거부, 도구가 1개뿐이면 승인, 원본 참조 압축, web 집계). `test_auth_q1_inputs.py`에 빈 계정명 테스트 추가. `test_loop.py` 리포트 문구 갱신. 이후 비교 실행 중 추가한 관문 테스트(사전 조회는 도구 수에서 제외, 로그인 성공 후 audit 요구) 포함 총 113개 통과 |
+
+### 0918 시나리오 비교 (로컬, Gemini, 각 3회)
+"0918에는 도구를 4개씩 썼다"는 차이를 확인하려고 0918 합성 시나리오를 지금 코드로 다시 돌렸다.
+`--legacy`는 0918과 같은 조건(사전 조회·강화된 종료 관문 없음)이다. 조사 루프와 종료 관문은 0918과 거의
+같았고, 도구 수 차이의 주원인은 사건의 성격이었다. 0918 시나리오는 로그인 성공 → 명령 실행 → 외부 통신으로
+이어지는 다단계 공격이었고, EC2의 xmlrpc 요청 폭주·invalid user 1회는 다음 계층으로 이어질 단서가 없다.
+
+비교 중 사전 조회를 처음 구현한 방식의 문제 3가지를 발견해 고쳤다.
+
+| 발견 | 원인 | 수정 |
+|---|---|---|
+| 03(브루트포스 → 역방향 셸)에서 Metasploit alert 누락 | 사전 조회가 `src_ip=공격자`로만 거름. 역방향 셸은 서버 → 공격자 방향이라 0건이었고, LLM은 network를 "이미 봤다"고 여겨 다시 조회하지 않음 | `fetch_network_log`에 방향 무관 `ip` 필터 추가, 사전 조회에 사용. 원칙 4에 "새 외부 IP가 나오면 network 재조회" 추가 |
+| 03에서 audit(로그인 후 명령) 없이 종료 | network alert + auth로 신뢰도가 먼저 참 | 종료 관문 (e): seed src_ip의 로그인 성공(`ssh_accepted`)이 보이면 audit을 시도하기 전까지 종료 거부. 거부 사유에 `ppid=<세션 sshd pid>`를 적어줌. audit의 `user`는 실행 계정(sudo 뒤 root)이라 `user=ubuntu`로는 0건이 나오던 문제 대응. 도구 설명에도 명시 |
+| 04(웹셸)에서 audit 없이 2개로 종료 | 사전 조회가 "도구 2종류"에 포함돼 LLM은 web 1개만 고르고도 관문 통과 | "도구 2종류"는 LLM이 직접 고른 호출만 센다(`state.system_call_sequences`). network 확인 조건 (c)는 사전 조회도 인정 |
+
+최종 결과 (수정 후 strict = `main.py` 조건):
+
+| 시나리오 | strict 판정 | strict 도구 흐름 (3회 모두 동일) | legacy(0918 조건) |
+|---|---|---|---|
+| 03 브루트포스 → 역방향 셸 | THREAT_CONFIRMED 3/3, conf 1.00 | network(alert 1) → auth(7) → audit(ppid=9110, 3) | 3/3 TC, 도구 2~3개(1회는 network 미확인) |
+| 04 웹셸 업로드 → 명령 실행 | THREAT_CONFIRMED 3/3, conf 0.95~1.00 | network(alert 1) → web(2) → audit(www-data 셸 4) | 3/3 TC, 도구 2~3개(1회는 network 미확인) |
+| 05 민감 디렉터리 압축 → 외부 전송 | THREAT_CONFIRMED 3/3, conf 0.95 | network(1) → auth(1) → audit(3) | 3/3 TC, 도구 3개 |
+
+strict는 세 시나리오 모두 3회 동일하게 3개 계층을 연결했다. legacy는 판정은 같지만 network를 건너뛰는 실행이 있었다.
+
+#### 시나리오 데이터 버그 (0918부터 있던 것)
+- `generate_synthetic_scenario.py`(03): audit epoch `1789413007`이 19:10 UTC로 로그인(16:10)보다 3시간 늦었다 → `1789402207`.
+- `generate_webshell_scenario.py`(04): audit epoch `1789423505`가 22:05 UTC로 웹 요청(18:05)보다 4시간 늦었다 →
+  다른 시나리오처럼 `datetime`에서 계산.
+- 두 시나리오 모두 사건 시간 구간으로 조회하면 audit이 0건이라, 계층 연결이 끊긴 상태로 검증되고 있었다.
+
+#### `tests/test_consistency.py` 옵션 추가
+- `--seed-json <파일>`: 시나리오 SEED를 파일로 넘김(상수 수정 불필요).
+- `--legacy`: 0918 조건(`network_precheck=False`, `strict_termination=False`)으로 실행.
+- `InvestigationAgent`/`run_investigation_pipeline`의 `require_second_tool` 옵션 이름을 `strict_termination`으로 바꿨다
+  (관문 (d)(e)를 함께 켬).
+
+### 0918 검증 seed 전체 재검증 (8종)
+0918에 재현성을 검증한 seed 8종을 전부 다시 돌렸다. 합성 시나리오(03~07)는 `scenarios/`로 만든 로그를,
+수동 seed(01, 02, INC-001)는 `b72c1e4`의 `sample_logs`를 임시 폴더에 꺼내 `*_LOG_LOCAL_PATH`로 가리켜 썼다
+(지금 `sample_logs`는 0922에 교체돼 09-14 데이터가 없다). 0918 기록은 커밋 메시지·README·이력의
+`consistency_results.json`에서 가져왔다.
+
+| seed | 유형 | 0918 판정 | 0918 도구 | 지금 판정 (마지막 수정 후) | 지금 도구 흐름 |
+|---|---|---|---|---|---|
+| 01 | ubuntu sudo로 /etc/passwd 접근 (정상) | FP 8/8 | 2 | FP 4/4 | auth → audit (2) |
+| 02 | invalid user 1회 후 공개키 로그인 (애매) | FP 7/8 | 3 | FP 4/4 | network(0) → auth → audit(0) (3) |
+| 03 | 브루트포스 성공 → 역방향 셸 | TC 8/8 (수정 후) | - | TC 3/3 | network → auth → audit (3) |
+| 04 | 웹셸 업로드 → 명령 실행 | TC 8/8 | - | TC 3/3 | network → web → audit (3) |
+| 05 | 민감 디렉터리 압축 → 외부 전송 | TC 8/8, 4/4 | - | TC 3/3 | network → auth → audit (3) |
+| 06 | SUID find 권한 상승 (src_ip 없음) | TC 7/8 | - | TC 3/3 | auth → audit (2) |
+| 07 | authorized_keys·crontab·계정 생성 (audit만) | TC 8/8 | - | TC 3/3 | audit → auth 또는 network (2) |
+| INC-001 | 외부 공개키 로그인 후 sudo 점검 (정상) | FP 8/8 | 3 (auth→audit→network) | FP 3/3 | network → auth → audit (3) |
+
+판정은 8종 모두 0918과 같은 방향으로, 반복 실행에서 이탈이 없었다(0918은 02·06에서 1회씩 이탈).
+도구 호출 수도 0918과 같은 2~3회이며, 사건이 여러 계층에 걸치면 그 계층을 모두 연결한다.
+0918의 "도구 4개"는 특정 실행의 값이었고, 저장된 결과 파일 기준으로 0918도 2~3회였다.
+
+한계: 반복 횟수가 3~4회로 0918(8회)보다 적다. 0918 web 샘플은 nginx JSON이라 지금 apache 정규화로 읽히지
+않아 01/02/INC-001은 web 계층 없이 돌렸다(세 seed 모두 web 단서가 없는 사건이다).
+
+#### 이 재검증에서 추가로 고친 것
+| 발견 | 수정 |
+|---|---|
+| 07: LLM이 `fetch_audit_log`에 `event_type="EXECVE"`(레코드 종류)를 넣어 0건 → "명령 실행 없음"으로 INCONCLUSIVE | `event_type`을 룰 key뿐 아니라 레코드 종류(EXECVE/SYSCALL…)·syscall 이름과도 대소문자 무시로 비교 |
+| 필터 때문에 0건인데 LLM이 "활동 없음"으로 해석 | 4개 도구 공통: 필터 결과가 0건인데 구간 안에 이벤트가 있으면 summary에 "필터 없이 N건 있음, 필터를 바꿔 다시 조회" 안내 (`log_source.filtered_out_hint()`) |
+| 02: 공개키 로그인 + 단발 실패인데 audit 기록이 없어 FP/INCONCLUSIVE/TC로 갈림 (0918 audit 샘플은 15:20:49 1초 분량뿐이라 02 사건 시각에 기록이 없음) | 원칙 7: invalid user 1회 후 다른 계정 공개키 로그인은 Q1 정상. Q1 정상 + Q2 공개키이고 세션 audit이 0건이면 FALSE_POSITIVE(0.80~0.85), audit 부재는 unknowns에 기록 |
+| 01: 사유가 다른 거부 2회((d) → (b))를 "연속 2회"로 세어 강제 종료 → seed의 audit을 안 봄 | 강제 종료는 **같은 사유**(숫자 제외 비교)로 연속 2회 거부될 때만. 거부 안내에 "도구 수·audit 미확인 사유는 종료 사유를 바꿔도 다시 거부되니 도구부터 호출" 추가 |
+| Gemini 호출 중 SSL EOF, WinError 10053으로 조사 1건이 통째로 실패 | `gemini_client._generate_with_retry()`가 연결 오류(`OSError`, `httpx.TransportError`)도 5·10·15초 간격으로 재시도 |
+
+### 남은 확인
+- EC2에서 `python3 main.py`를 다시 실행해 xmlrpc 사건이 network 사전 조회 → 원칙 9 기준으로 판정되는지 확인한다.
+- 8종 각각 `--runs 8`로 0918과 같은 횟수의 재측정(무료 한도 고려해 하루에 나눠서).
+- 원칙 9의 기준값(POST 10회, 경로 20개)은 팀 판정 정책으로 정한 값이다. 실제 로그 분포를 보고 조정할 수 있다.

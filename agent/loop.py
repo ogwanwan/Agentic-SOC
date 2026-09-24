@@ -35,16 +35,62 @@ reasoning 필드를 추가했다.
 (seed에 src_ip가 있는데 도구 1개, network 미확인 상태로 no_more_evidence 종료된
 사례 확인). 완전히 차단하면 "정말 더 볼 게 없다"는 정당한 조기 종료까지 막을
 위험이 있어, 일단은 state.notes에 경고성 기록만 남기도록 했다 (완전 차단 아님).
+
+*** 2026-09-24 업데이트 (network 사전 조회) ***
+경고만으로는 부족했다 — EC2 main.py(INC-xmlrpc-flood)에서도 LLM이 web 1회만 보고
+no_more_evidence로 끝내 network를 한 번도 안 봤다. network_precheck=True면 seed에
+src_ip가 있을 때 첫 LLM 턴 전에 코드가 fetch_network_log(src_ip, 사건 구간 ±30분)를
+직접 한 번 실행해 결과를 첫 턴 관측으로 넣는다. LLM 호출 수는 그대로이고, 매번 같은
+조회를 하므로 재현성에도 유리하다. 게이트 조건 (c)는 "network 조회를 시도했는가"로
+완화했다 — 데이터 소스 장애로 실패한 경우까지 막으면 종료가 불가능해진다.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import re
+from datetime import timedelta, timezone
+from typing import Any, Dict, Optional
 
 from .models import AgentState, Evidence, Hypothesis, TerminationReason, ToolCallRecord, VerdictType
 from .report import build_investigation_result
 from .provenance import observed_references, observed_reference_groups, observed_locations, references, validate_citations
 from .tools import ToolRegistry, ToolValidationError
+from .tools.time_utils import parse_iso
+
+NETWORK_PRECHECK_PAD = timedelta(minutes=30)
+# no_more_evidence 관문에서 "아직 안 본 계층이 남았는가"를 따질 때 세는 로그 조회 도구
+LOG_TOOLS = frozenset({"fetch_web_log", "fetch_auth_log", "fetch_audit_log", "fetch_network_log",
+                       "fetch_event_logs", "get_process_tree"})
+# 로그인 성공 뒤 후속 행위를 볼 수 있는 도구 (종료 관문 (e))
+AUDIT_TOOLS = frozenset({"fetch_audit_log", "get_process_tree"})
+
+
+def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """seed에 host/src_ip/시각이 있으면 사전 network 조회 인자를 만든다 (없으면 None).
+
+    구간은 seed window(없으면 trigger_time/timestamp 한 점)의 앞뒤로 30분씩 넓힌다.
+    """
+    window = seed.get("window") or []
+    anchor = seed.get("trigger_time") or seed.get("timestamp")
+    start = window[0] if len(window) == 2 else anchor
+    end = window[1] if len(window) == 2 else anchor
+    if not seed.get("src_ip") or not seed.get("host") or not start or not end:
+        return None
+    try:
+        start_dt = parse_iso(start).astimezone(timezone.utc) - NETWORK_PRECHECK_PAD
+        end_dt = parse_iso(end).astimezone(timezone.utc) + NETWORK_PRECHECK_PAD
+    except (TypeError, ValueError):
+        return None
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    # ip = 방향 무관(출발지·목적지 양쪽). src_ip로만 조회하면 서버→공격자 outbound(역방향 셸,
+    # 유출)가 0건으로 나오고, LLM은 network를 "이미 확인함"으로 여겨 다시 보지 않았다
+    # (2026-09-24 CONSISTENCY-TEST-03 비교에서 Metasploit alert 누락).
+    return {
+        "host": seed["host"],
+        "start_time": start_dt.strftime(fmt),
+        "end_time": end_dt.strftime(fmt),
+        "ip": seed["src_ip"],
+    }
 
 # [17] seed 하나당 이 루프가 "충분하다" 판단이 나올 때까지 반복됨
 class InvestigationAgent:
@@ -54,11 +100,29 @@ class InvestigationAgent:
         tool_registry: ToolRegistry,
         max_calls: int = 8,
         confidence_threshold: float = 0.85,
+        network_precheck: bool = False,
+        strict_termination: bool = False,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
         self.max_calls = max_calls
         self.confidence_threshold = confidence_threshold
+        # 둘 다 main.py(pipeline) 경로에서 켠다. 기본값 False는 각본대로 흘러가는 기존
+        # 단위 테스트·C/D 데모(도구 1회 후 no_more_evidence)를 그대로 두기 위함.
+        self.network_precheck = network_precheck
+        self.strict_termination = strict_termination
+
+    def _run_network_precheck(self, state: AgentState) -> None:
+        args = network_precheck_args(state.seed)
+        if args is None or "fetch_network_log" not in {s.name for s in self.tool_registry.list_tools()}:
+            return
+        self._execute_tool_call(state, {"tool_name": "fetch_network_log", "args": args})
+        if state.tool_calls:
+            state.system_call_sequences.append(state.tool_calls[-1].sequence)
+        state.notes.append(
+            f"시스템 사전 조회: seed의 src_ip({args['ip']})가 출발지 또는 목적지인 network 이벤트를 "
+            f"{args['start_time']}~{args['end_time']} 구간에서 fetch_network_log로 자동 조회했습니다."
+        )
 
     def run(self, seed: Dict[str, Any]) -> Dict[str, Any]:
         # [18] agent/models.py 에서 AgentState 실행하여 state 객체 생성
@@ -67,6 +131,8 @@ class InvestigationAgent:
         state.raw_refs = references(seed, seed=True)
         state.current_confidence = float(seed.get("confidence_initial", 0.5))
         state.record_confidence("initial", seed.get("trigger_description", "Triage 판정"))
+        if self.network_precheck:
+            self._run_network_precheck(state)
 
         termination_reason = None
         final_verdict = None
@@ -79,6 +145,11 @@ class InvestigationAgent:
         # 조기에 강제 종료 턴으로 넘어가기 위한 카운터.
         consecutive_rejections = 0
         MAX_CONSECUTIVE_REJECTIONS = 2
+        # [2026-09-24] "같은 사유"로 연속 거부될 때만 센다(숫자는 빼고 비교 — 신뢰도 값만 바뀐 건 같은
+        # 사유). 예전엔 사유가 달라도 세서, 0918 시나리오 01에서 (d) 도구 1종류 no_more_evidence →
+        # (b) 도구 1종류 confidence_sufficient 두 번 만에 강제 종료돼 seed의 audit을 한 번도 안 봤다.
+        # 사유가 계속 바뀌며 끝나지 않는 경우는 max_cycles가 막는다.
+        last_rejection_kind = None
 
         # [20] 루프 시작! LLM한테 판단 맡김 agent/gemini_client.py 실행
         for _ in range(max_cycles):
@@ -103,66 +174,42 @@ class InvestigationAgent:
                     decision.get("termination_reason") or TerminationReason.NO_MORE_EVIDENCE.value
                 )
 
-                # [2026-09-17 추가] 종료 관문: "confidence_sufficient"로 종료하려는
-                # 경우에만 적용한다. no_more_evidence(더 볼 로그가 없다는 판단)는
-                # 계층 수와 무관하게 합리적일 수 있어 차단하지 않는다.
-                if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
-                    confidence_not_met = state.current_confidence < self.confidence_threshold
-                    successful_tool_names = {t.tool_name for t in state.tool_calls if t.success}
-                    queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
-                    distinct_tools_used = max(len(successful_tool_names), len(queried_layers))
-                    single_layer_only = distinct_tools_used <= 1
+                # 종료 관문 (_termination_rejections 참고). 2026-09-24부터 no_more_evidence에도
+                # "도구 1종류만 보고 끝내기"를 막는 조건을 적용한다.
+                reasons = self._termination_rejections(state, termination_reason)
+                if reasons:
+                    reason_text = ", ".join(reasons)
+                    state.notes.append(f"종료 관문 발동 — 종료 거부: {reason_text}")
 
-                    seed_has_src_ip = bool(state.seed.get("src_ip"))
-                    network_tool_used = "fetch_network_log" in successful_tool_names or "network" in queried_layers
-                    missing_network_check = seed_has_src_ip and not network_tool_used
+                    rejection_kind = re.sub(r"[\d.]+", "", reason_text)
+                    consecutive_rejections = consecutive_rejections + 1 if rejection_kind == last_rejection_kind else 1
+                    last_rejection_kind = rejection_kind
+                    if consecutive_rejections >= MAX_CONSECUTIVE_REJECTIONS:
+                        state.notes.append(
+                            f"연속 {consecutive_rejections}회 종료 거부 후에도 진전이 없어 "
+                            "강제 종료 턴으로 전환합니다."
+                        )
+                        termination_reason = TerminationReason.NO_MORE_EVIDENCE.value
+                        final_decision = self.llm_client.reason(
+                            state,
+                            self.tool_registry,
+                            confidence_threshold=self.confidence_threshold,
+                            force_terminate=True,
+                        )
+                        self._apply_decision(state, final_decision)
+                        final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
+                        break
 
-                    if confidence_not_met or single_layer_only or missing_network_check:
-                        reasons = []
-                        if confidence_not_met:
-                            reasons.append(
-                                f"실제 신뢰도({state.current_confidence:.2f})가 "
-                                f"임계값({self.confidence_threshold}) 미달"
-                            )
-                        if single_layer_only:
-                            reasons.append(f"서로 다른 도구 {distinct_tools_used}종류만 사용됨(1개 이하)")
-                        if missing_network_check:
-                            reasons.append(
-                                f"seed에 src_ip({state.seed.get('src_ip')})가 있는데 "
-                                "fetch_network_log로 네트워크 활동을 확인하지 않음"
-                            )
-                        reason_text = ", ".join(reasons)
-                        state.notes.append(f"종료 관문 발동 — 종료 거부: {reason_text}")
+                    gate_rejection_reason = reason_text  # 다음 턴 프롬프트에 실어 보냄
+                    continue  # 종료 거부 — 다음 사이클로 넘어가 계속 조사
 
-                        consecutive_rejections += 1
-                        if consecutive_rejections >= MAX_CONSECUTIVE_REJECTIONS:
-                            state.notes.append(
-                                f"연속 {consecutive_rejections}회 종료 거부 후에도 진전이 없어 "
-                                "강제 종료 턴으로 전환합니다."
-                            )
-                            termination_reason = TerminationReason.NO_MORE_EVIDENCE.value
-                            final_decision = self.llm_client.reason(
-                                state,
-                                self.tool_registry,
-                                confidence_threshold=self.confidence_threshold,
-                                force_terminate=True,
-                            )
-                            self._apply_decision(state, final_decision)
-                            final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
-                            break
-
-                        gate_rejection_reason = reason_text  # 다음 턴 프롬프트에 실어 보냄
-                        continue  # 종료 거부 — 다음 사이클로 넘어가 계속 조사
-
-                # [2026-09-17 추가] no_more_evidence 종료는 위 게이트를 안 거치므로,
-                # src_ip가 있는데 network 계층을 한 번도 안 쓴 채 종료되는 경우를
-                # 최소한 기록으로 남긴다 (완전 차단은 하지 않음 — 정당한 조기 종료를
-                # 막을 위험이 있어서). 실제 재현성 테스트에서 도구 1개(network 미확인)
-                # 상태로 no_more_evidence 종료되는 사례가 발견되어 추가했다.
+                # [2026-09-17 추가] no_more_evidence는 network 확인을 강제하지 않으므로
+                # (network_precheck=False일 때) src_ip가 있는데 network 계층을 한 번도 안 쓴
+                # 채 종료되는 경우를 기록으로 남긴다.
                 if (
                     termination_reason == TerminationReason.NO_MORE_EVIDENCE.value
                     and state.seed.get("src_ip")
-                    and "fetch_network_log" not in {t.tool_name for t in state.tool_calls if t.success}
+                    and "fetch_network_log" not in {t.tool_name for t in state.tool_calls}
                     and not any("network" in t.queried_layers for t in state.tool_calls)
                 ):
                     state.notes.append(
@@ -216,6 +263,70 @@ class InvestigationAgent:
         result["statistics"]["tool_calls_max"] = self.max_calls
         # [42] 조사 결과를 반환 agent/pipeline.py로 돌아감
         return result
+
+    def _termination_rejections(self, state: AgentState, termination_reason: str) -> list:
+        """종료 요청을 거부할 사유 목록 (비어 있으면 승인).
+
+        confidence_sufficient: (a) 실제 신뢰도 < threshold, (b) 서로 다른 도구 1종류 이하,
+          (c) seed에 src_ip가 있는데 network 조회를 시도하지 않음.
+        strict_termination=True일 때 두 종료 사유 모두에 추가 [2026-09-24]:
+          (d) no_more_evidence인데 도구를 1종류 이하만 시도했고, 아직 시도하지 않은 로그 조회
+              도구가 남아 있음. 경고만 남기던 방식으로는 EC2 main.py에서도 도구 1개로 끝나는
+              사건이 계속 나왔다. 등록된 도구를 다 써봤다면 "정말 더 볼 게 없음"이므로 승인한다.
+          (e) 도구 결과에서 seed src_ip의 로그인 성공이 관측됐는데 audit(fetch_audit_log/
+              get_process_tree/fetch_event_logs)을 한 번도 시도하지 않음. 침해 판정 자체는 원칙 7이
+              Q1+Q2로 확정하지만, 로그인 후 무엇을 했는지(피해 범위)는 audit으로만 알 수 있다.
+              0918 시나리오 비교에서 network alert로 신뢰도가 먼저 차 audit 없이 끝나는 사례가 나왔다.
+        """
+        attempted = {t.tool_name for t in state.tool_calls}
+        queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
+        # 도구 종류 수((b), (d))는 LLM이 직접 고른 호출만 센다. 시스템 사전 조회까지 세면 LLM이
+        # 도구 1개만 고르고도 관문을 통과해, 0918 웹셸 시나리오에서 audit(명령 실행 확인) 없이
+        # 끝났다. network 확인 여부((c))는 사전 조회도 인정한다.
+        chosen = [t for t in state.tool_calls if t.sequence not in state.system_call_sequences]
+        chosen_tools = {t.tool_name for t in chosen}
+        chosen_layers = {layer for t in chosen for layer in t.queried_layers}
+        reasons = []
+
+        if self.strict_termination and state.login_successes:
+            registered = {spec.name for spec in self.tool_registry.list_tools()}
+            audit_tools = registered & AUDIT_TOOLS
+            if audit_tools and not (attempted & audit_tools) and "audit" not in queried_layers:
+                # audit의 user는 명령 실행 계정(sudo 뒤엔 root)이라 로그인 계정 이름으로는 세션
+                # 명령이 안 잡힌다(0918 시나리오 비교에서 user=ubuntu 조회 0건). 세션 pid로 안내한다.
+                hints = [f"ppid={login['pid']}({login['user']}, {login['timestamp']})"
+                         for login in state.login_successes[:3] if login.get("pid") is not None]
+                reasons.append(
+                    f"seed의 src_ip({state.seed.get('src_ip')}) 로그인 성공이 확인됐는데 로그인 후 행위를 "
+                    "audit으로 확인하지 않음. fetch_audit_log를 로그인 세션의 sshd pid로 조회하십시오: "
+                    + (", ".join(hints) or "ppid=<auth 레코드의 sshd pid>")
+                )
+
+        if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
+            successful = {t.tool_name for t in chosen if t.success}
+            distinct = max(len(successful), len(chosen_layers))
+            if state.current_confidence < self.confidence_threshold:
+                reasons.append(
+                    f"실제 신뢰도({state.current_confidence:.2f})가 임계값({self.confidence_threshold}) 미달"
+                )
+            if distinct <= 1:
+                reasons.append(f"서로 다른 도구 {distinct}종류만 사용됨(1개 이하)")
+            # 실패한 호출도 "조회 시도"로 인정 — network 데이터 소스 장애 시 종료 불가를 막는다
+            if state.seed.get("src_ip") and "fetch_network_log" not in attempted and "network" not in queried_layers:
+                reasons.append(
+                    f"seed에 src_ip({state.seed.get('src_ip')})가 있는데 "
+                    "fetch_network_log로 네트워크 활동을 확인하지 않음"
+                )
+        elif termination_reason == TerminationReason.NO_MORE_EVIDENCE.value and self.strict_termination:
+            registered = {spec.name for spec in self.tool_registry.list_tools()}
+            remaining = sorted((registered & LOG_TOOLS) - attempted)
+            if max(len(chosen_tools), len(chosen_layers)) <= 1 and remaining:
+                reasons.append(
+                    f"도구를 {len(chosen_tools)}종류만 직접 확인하고 no_more_evidence로 종료하려 함. "
+                    f"아직 확인하지 않은 도구({', '.join(remaining)}) 중 판정 원칙이 요구하는 계층을 "
+                    "최소 1회 확인하십시오"
+                )
+        return reasons
 
     # ------------------------------------------------------------------
     # [2026-09-17 추가] LLM이 강제 종료 턴(force_terminate=True)에서도
@@ -368,6 +479,14 @@ class InvestigationAgent:
                 state.raw_ref_locations[ref] = list(dict.fromkeys(state.raw_ref_locations.get(ref, []) + sources))
             queried_layers = [layer for layer in result.get("layer_counts", {})
                               if layer not in result.get("errors", {})]
+            # 종료 관문 (e)용: seed src_ip의 로그인 성공이 결과에 있었는지 기록
+            src_ip = state.seed.get("src_ip")
+            seen = {login["raw_ref"] for login in state.login_successes}
+            for record in result.get("records") or []:
+                if (isinstance(record, dict) and src_ip and record.get("event") == "ssh_accepted"
+                        and record.get("src_ip") == src_ip and record.get("raw_ref") not in seen):
+                    state.login_successes.append({key: record.get(key) for key in ("raw_ref", "pid", "user", "timestamp")})
+                    seen.add(record.get("raw_ref"))
             # [38] 이 도구 + 이 조건 조합은 이미 썼다고 표시 (중복 방지)
             state.mark_called(name, args)
             state.tool_calls.append(

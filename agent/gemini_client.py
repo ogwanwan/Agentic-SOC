@@ -122,11 +122,26 @@ class GeminiClient:
 
         from google.genai import errors
 
+        # 연결이 중간에 끊기는 오류(SSL EOF, WinError 10053 등)도 일시적이라 재시도한다.
+        # 2026-09-24 재현성 실행 중 두 번 발생해 그 조사 1건이 통째로 실패했다.
+        # google-genai는 httpx를 쓰므로 httpx.TransportError도 함께 잡는다.
+        try:
+            import httpx
+            transport_errors: tuple = (OSError, httpx.TransportError)
+        except ImportError:  # pragma: no cover - httpx는 google-genai 의존성
+            transport_errors = (OSError,)
+
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
                 return self._client.models.generate_content(
                     model=self.model, contents=user_prompt, config=config
                 )
+            except transport_errors as exc:
+                if attempt == self.MAX_ATTEMPTS:
+                    raise
+                delay = 5.0 * attempt
+                print(f"[Gemini 연결 오류: {type(exc).__name__}] {delay:.0f}초 후 재시도 ({attempt}/{self.MAX_ATTEMPTS - 1})")
+                time.sleep(delay)
             except errors.APIError as exc:
                 if exc.code not in self._RETRYABLE_STATUS or attempt == self.MAX_ATTEMPTS:
                     raise

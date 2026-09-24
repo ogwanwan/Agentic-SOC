@@ -1,4 +1,4 @@
-﻿"""EC2에서 가져온 실제 raw log 샘플(4계층)로 전체 흐름을 검증하는 스크립트.
+"""EC2에서 가져온 실제 raw log 샘플(4계층)로 전체 흐름을 검증하는 스크립트.
 
 S3/AWS 자격 증명 없이, 로컬 파일 + 실제 Gemini API 키만으로:
 1. EC2에서 받아온 web/auth/audit/network raw 로그(정규화 안 된 원본)를 전부 로드
@@ -178,7 +178,8 @@ def main() -> None:
     top_seeds = seeds[:INVESTIGATE_TOP_N]
     for i, seed in enumerate(top_seeds, start=1):
         print(f"\n[3단계] {i}순위 seed({seed.get('incident_id')}) 심층 조사 시작...")
-        agent = InvestigationAgent(llm_client, tool_registry, max_calls=8, confidence_threshold=0.85)
+        agent = InvestigationAgent(llm_client, tool_registry, max_calls=8, confidence_threshold=0.85,
+                                   strict_termination=True)  # 이 스크립트의 로컬 도구는 ip 인자가 없어 사전 조회 제외
         result = agent.run(seed)
 
         print(f"\n{'='*10} 조사 결과: {result['incident_id']} {'='*10}")

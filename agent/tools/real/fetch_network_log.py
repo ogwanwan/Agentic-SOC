@@ -16,6 +16,9 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
     실제 출발지) 중 하나와 일치. 공통 정규화는 XFF가 없는 alert 이벤트의 src_ip를 비워두기
     때문에, src_ip만 보면 공격자 IP로 거른 inbound alert가 0건이 된다(9/18 자체 파서 대비
     퇴보, 2026-09-24 수정).
+  - ip: 방향 무관 — src_ip/transport_src_ip/dest_ip 중 하나와 일치. 공격자 IP가 출발지(inbound
+    공격)인지 목적지(역방향 셸·유출 등 outbound)인지 모를 때 쓴다. 2026-09-24 0918 시나리오
+    비교에서 src_ip로만 사전 조회하자 outbound 역방향 셸 alert를 놓쳐 추가했다.
   - dst_ip → dest_ip, src_port → transport_src_port, dst_port → transport_dest_port
   - protocol: 대소문자 무시 일치
   - alert_only: event_type == "alert"인 이벤트만
@@ -30,12 +33,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..log_source import load_window_events, pagination
+from ..log_source import filtered_out_hint, load_window_events, pagination
 
 _PORT_FIELDS = {"src_port": "transport_src_port", "dst_port": "transport_dest_port"}
 
 
 def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
+    if args.get("ip") is not None and args["ip"] not in (
+        record.get("src_ip"), record.get("transport_src_ip"), record.get("dest_ip")
+    ):
+        return False
     if args.get("src_ip") is not None and args["src_ip"] not in (record.get("src_ip"), record.get("transport_src_ip")):
         return False
     if args.get("dst_ip") is not None and record.get("dest_ip") != args["dst_ip"]:
@@ -70,7 +77,8 @@ def fetch_network_log(args: Dict[str, Any]) -> Dict[str, Any]:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 네트워크 이벤트를 찾지 못했습니다. "
             "host 이름, 기간, 또는 NETWORK_LOG_LOCAL_PATH/NETWORK_LOG_BUCKET 설정을 확인하세요."
-        )
+        ) + filtered_out_hint(len(loaded["events"]), args,
+                              ("ip", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only"))
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"
         more_desc = f"더 있음 (next_offset={next_offset})" if has_more else "더 없음"
