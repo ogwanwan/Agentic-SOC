@@ -43,7 +43,9 @@ class GeminiClient:
         self,
         api_key: Optional[str] = None,
         model: str = "gemini-3.5-flash-lite",  # 무료 티어 실습에서 지정한 모델
-        max_output_tokens: int = 2000,
+        # [2026-09-24] 2000 → 8192. EC2 main.py에서 LLM이 raw_ref 109개를 evidence에 옮겨 적다
+        # 2000 토큰에서 응답이 잘려 JSON 파싱이 실패했고, 그 예외로 main.py 전체가 멈췄다.
+        max_output_tokens: int = 8192,
         temperature: float = 0.0,
     ) -> None:
         # google-genai 패키지는 실제 호출 시에만 필요하므로 지연 import한다.

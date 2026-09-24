@@ -310,9 +310,12 @@ rules: |
     이미 있는지 확인하십시오. 이전에 기록한 사실의 해석(contradicting 여부, 지지하는 가설)이 바뀌었다면
     새 evidence를 만들지 말고 hypotheses의 confidence/status를 갱신하십시오. "지금까지의 내용을
     종합하면..." 같은 요약성 evidence는 만들지 마십시오. 종합 논증은 final_verdict.reasoning의 역할입니다.
-  - new_evidence.raw_refs에는 그 사실의 근거가 된 로그의 raw_ref/raw_refs를 원문 그대로 복사하십시오.
-    audit처럼 여러 줄로 조립된 이벤트는 raw_refs 전체를 보존하고, known_raw_refs에 없는 참조를 만들거나
-    수정하지 마십시오. source_log는 설명용 이름이며 raw_refs를 대신하지 않습니다. 조회 결과가
+  - new_evidence.raw_refs에는 그 사실의 근거가 된 로그의 raw_ref/raw_refs를 원문 그대로 복사하되,
+    한 evidence당 대표 10개까지만 적으십시오(첫 건·마지막 건·특징적인 건 위주). 전체 건수는
+    description에 숫자로 적습니다(예: "POST 109건"). 전체 목록은 도구 결과에 이미 보관되어 있으며,
+    수십 개를 옮겨 적으면 응답이 잘려 조사가 실패합니다.
+    audit처럼 여러 줄로 조립된 이벤트는 그 이벤트의 raw_ref 하나만 적어도 시스템이 나머지 줄을 함께
+    연결합니다. known_raw_refs에 없는 참조를 만들거나 수정하지 마십시오. source_log는 설명용 이름이며 raw_refs를 대신하지 않습니다. 조회 결과가
     0건이라는 사실은 원본 로그 참조가 없으므로 evidence가 아니라 unknowns/investigation_notes에 적으십시오.
   - "contradicting"은 그 증거가 현재 주요 가설(confidence가 가장 높은 hypothesis)을 약화시키는지를
     뜻합니다. "정상적이었다/의심스럽지 않았다"는 사실이 자동으로 contradicting은 아닙니다. 가설이

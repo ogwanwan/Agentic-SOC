@@ -142,6 +142,38 @@ def test_different_rejection_reasons_do_not_force_termination():
     assert result["statistics"]["termination_reason"] == "confidence_sufficient"
 
 
+def test_unparseable_llm_response_falls_back_instead_of_crashing():
+    """LLM 응답 해석 실패가 두 번 연속 나면 예외로 멈추지 않고 폴백 판정으로 마무리한다."""
+
+    class GeminiDecisionError(Exception):
+        pass
+
+    class BrokenLLM:
+        calls = 0
+
+        def reason(self, state, tool_registry, **_kwargs):
+            BrokenLLM.calls += 1
+            raise GeminiDecisionError("Gemini 응답을 JSON으로 파싱하지 못했습니다: Unterminated string")
+
+    result = InvestigationAgent(BrokenLLM(), build_default_registry(handlers=MOCK_HANDLERS),
+                                network_precheck=True, strict_termination=True).run(SEED)
+    assert BrokenLLM.calls == 2  # 1회 재시도
+    assert result["final_verdict"]["verdict"] in ("INCONCLUSIVE", "THREAT_CONFIRMED", "FALSE_POSITIVE")
+    assert "자동 폴백 판정" in result["final_verdict"]["reasoning"]
+    assert any("LLM 응답 해석 실패" in n for n in result["investigation_notes"])
+
+    class ConfigError(Exception):
+        pass
+
+    class BadKeyLLM:
+        def reason(self, *_args, **_kwargs):
+            raise ConfigError("API key invalid")
+
+    import pytest
+    with pytest.raises(ConfigError):  # 설정 오류는 가리지 않고 그대로 올린다
+        InvestigationAgent(BadKeyLLM(), build_default_registry(handlers=MOCK_HANDLERS)).run(SEED)
+
+
 def test_no_more_evidence_allowed_when_no_other_tool_registered():
     from agent.tools import ToolRegistry, ToolSpec
 

@@ -112,6 +112,28 @@ class InvestigationAgent:
         self.network_precheck = network_precheck
         self.strict_termination = strict_termination
 
+    # 응답 해석 실패 시 재시도 횟수. 해석 실패 예외(GeminiDecisionError, ClaudeDecisionError)는
+    # 클라이언트 모듈을 import하지 않으려고 클래스 이름("...DecisionError")으로 판별한다.
+    LLM_RESPONSE_RETRIES = 1
+
+    def _safe_reason(self, state: AgentState, **kwargs: Any) -> Optional[Dict[str, Any]]:
+        """llm_client.reason() 호출. 응답 해석 실패는 1회 재시도하고, 그래도 실패하면 None.
+
+        [2026-09-24] EC2 main.py에서 LLM 응답이 출력 한도에서 잘려 JSON 파싱이 실패했고, 그 예외
+        하나로 main.py 전체(다른 seed 조사 포함)가 멈췄다. 이제는 그 사건만 폴백 판정으로 마무리한다.
+        API 키·권한 같은 설정 오류는 그대로 올려 보내 원인이 가려지지 않게 한다.
+        """
+        for attempt in range(self.LLM_RESPONSE_RETRIES + 1):
+            try:
+                return self.llm_client.reason(state, self.tool_registry, **kwargs)
+            except Exception as exc:
+                if not type(exc).__name__.endswith("DecisionError"):
+                    raise
+                first_line = str(exc).splitlines()[0][:200]
+                state.notes.append(f"LLM 응답 해석 실패({attempt + 1}회차): {first_line}")
+        state.notes.append("LLM 응답을 연속으로 해석하지 못해, 지금까지의 증거로 자동 폴백 판정했습니다.")
+        return None
+
     def _run_network_precheck(self, state: AgentState) -> None:
         args = network_precheck_args(state.seed)
         if args is None or "fetch_network_log" not in {s.name for s in self.tool_registry.list_tools()}:
@@ -156,13 +178,17 @@ class InvestigationAgent:
             # [23] agent/gemini_client.py 통해 Gemini가 분석한 결과 반환
             # [2026-09-17 수정] confidence_threshold와 gate_rejection_reason을 매 턴 함께
             # 전달 — LLM이 신뢰도 임계값 도달 여부와 직전 거부 사실을 스스로 확인할 수 있게 함
-            decision = self.llm_client.reason(
+            decision = self._safe_reason(
                 state,
-                self.tool_registry,
                 confidence_threshold=self.confidence_threshold,
                 gate_rejection_reason=gate_rejection_reason,
             )
             gate_rejection_reason = None  # 이번 턴 프롬프트에 이미 실어 보냈으니 초기화
+            if decision is None:
+                # LLM 응답을 두 번 연속 해석하지 못함 — 이 사건만 지금까지의 증거로 마무리한다
+                termination_reason = TerminationReason.NO_MORE_EVIDENCE.value
+                final_verdict = self._derive_fallback_verdict(state, cause="LLM 응답을 해석하지 못해 조사를 중단함")
+                break
 
             # [24] 방금 받은 분석 결과를 state에 기록
             self._apply_decision(state, decision)
@@ -190,12 +216,9 @@ class InvestigationAgent:
                             "강제 종료 턴으로 전환합니다."
                         )
                         termination_reason = TerminationReason.NO_MORE_EVIDENCE.value
-                        final_decision = self.llm_client.reason(
-                            state,
-                            self.tool_registry,
-                            confidence_threshold=self.confidence_threshold,
-                            force_terminate=True,
-                        )
+                        final_decision = self._safe_reason(
+                            state, confidence_threshold=self.confidence_threshold, force_terminate=True
+                        ) or {}
                         self._apply_decision(state, final_decision)
                         final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
                         break
@@ -227,12 +250,9 @@ class InvestigationAgent:
                 # [2026-09-17 수정] max_call 도달 시, 도구 호출 없이 판정만 요청하는
                 # 마무리 턴을 1회 추가로 호출한다 (기존엔 이 시점 decision에
                 # final_verdict가 없어 항상 자체 폴백만 썼음).
-                final_decision = self.llm_client.reason(
-                    state,
-                    self.tool_registry,
-                    confidence_threshold=self.confidence_threshold,
-                    force_terminate=True,
-                )
+                final_decision = self._safe_reason(
+                    state, confidence_threshold=self.confidence_threshold, force_terminate=True
+                ) or {}
                 self._apply_decision(state, final_decision)
                 final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
                 break
@@ -249,12 +269,9 @@ class InvestigationAgent:
             termination_reason = TerminationReason.MAX_CALL_REACHED.value
             # [2026-09-17 추가] 안전장치(max_cycles 전부 소진)로 빠진 경우도 동일하게
             # 마무리 턴을 한 번 시도한다.
-            final_decision = self.llm_client.reason(
-                state,
-                self.tool_registry,
-                confidence_threshold=self.confidence_threshold,
-                force_terminate=True,
-            )
+            final_decision = self._safe_reason(
+                state, confidence_threshold=self.confidence_threshold, force_terminate=True
+            ) or {}
             self._apply_decision(state, final_decision)
             final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
 
@@ -332,7 +349,7 @@ class InvestigationAgent:
     # [2026-09-17 추가] LLM이 강제 종료 턴(force_terminate=True)에서도
     # final_verdict를 못 준 경우를 대비한 최후 안전망.
     # ------------------------------------------------------------------
-    def _derive_fallback_verdict(self, state: AgentState) -> Dict[str, Any]:
+    def _derive_fallback_verdict(self, state: AgentState, cause: Optional[str] = None) -> Dict[str, Any]:
         if state.current_confidence >= self.confidence_threshold:
             verdict_type = VerdictType.THREAT_CONFIRMED.value
         elif state.contradicting_evidence and not state.evidence:
@@ -361,7 +378,7 @@ class InvestigationAgent:
             "attack_type": leading_hyp.title if leading_hyp else "unknown",
             "affected_systems": affected_systems,
             "summary": (
-                f"최대 조사 횟수({self.max_calls}회) 또는 최대 사이클에 도달해 강제 종료됨. "
+                f"{cause or f'최대 조사 횟수({self.max_calls}회) 또는 최대 사이클에 도달해 강제 종료됨'}. "
                 f"현재 신뢰도 {state.current_confidence:.2f} 기준 잠정 판단: {verdict_type}. "
                 f"최근 근거: {supporting}"
             ),

@@ -464,6 +464,18 @@ strict는 세 시나리오 모두 3회 동일하게 3개 계층을 연결했다.
 | 01: 사유가 다른 거부 2회((d) → (b))를 "연속 2회"로 세어 강제 종료 → seed의 audit을 안 봄 | 강제 종료는 **같은 사유**(숫자 제외 비교)로 연속 2회 거부될 때만. 거부 안내에 "도구 수·audit 미확인 사유는 종료 사유를 바꿔도 다시 거부되니 도구부터 호출" 추가 |
 | Gemini 호출 중 SSL EOF, WinError 10053으로 조사 1건이 통째로 실패 | `gemini_client._generate_with_retry()`가 연결 오류(`OSError`, `httpx.TransportError`)도 5·10·15초 간격으로 재시도 |
 
+### EC2 첫 실행에서 발견한 응답 잘림 (`9b5991e` 이후)
+EC2 `main.py`에서 xmlrpc 사건(103.82.158.245, POST 109건)을 조사하던 중 LLM이 evidence에 raw_ref 109개를
+전부 옮겨 적다가 출력 한도(`max_output_tokens=2000`)에서 응답이 잘렸다. JSON 파싱 실패 예외가 그대로 올라가
+`main.py` 전체가 멈췄다.
+
+| 수정 | 내용 |
+|---|---|
+| `agent/gemini_client.py` | `max_output_tokens` 2000 → 8192 |
+| `investigation.yaml` 증거 기록 규칙 | raw_refs는 evidence당 대표 10개까지, 전체 건수는 description에 숫자로. audit 다중 줄 이벤트는 raw_ref 하나만 적어도 시스템이 나머지 줄을 연결(기존 동작) |
+| `agent/loop.py` `_safe_reason()` | LLM 응답 해석 실패(`...DecisionError`)는 1회 재시도, 또 실패하면 그 사건만 폴백 판정으로 마무리하고 다음 seed 조사를 계속. API 키·권한 같은 다른 예외는 그대로 올린다. 폴백 판정 summary에 실제 중단 사유를 적음 |
+| 테스트 | `test_unparseable_llm_response_falls_back_instead_of_crashing` 추가. 총 114개 통과. 웹셸 시나리오 2회 재확인(TC 2/2, network → web → audit) |
+
 ### 남은 확인
 - EC2에서 `python3 main.py`를 다시 실행해 xmlrpc 사건이 network 사전 조회 → 원칙 9 기준으로 판정되는지 확인한다.
 - 8종 각각 `--runs 8`로 0918과 같은 횟수의 재측정(무료 한도 고려해 하루에 나눠서).
