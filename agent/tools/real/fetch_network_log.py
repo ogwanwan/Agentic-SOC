@@ -123,5 +123,6 @@ def fetch_network_log(args: Dict[str, Any]) -> Dict[str, Any]:
         "next_offset": next_offset,
         "scanned_objects": loaded["scanned_objects"],
         "invalid_timestamps": loaded["invalid_timestamps"],
+        "window_total": len(loaded["events"]),  # 필터 전 구간 전체 건수 — 0이면 로그 미확보
         **({"error": loaded["error"]} if loaded["error"] else {}),
     }

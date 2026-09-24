@@ -23,11 +23,63 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 from typing import Any, Dict, List
 
 from ..log_source import filtered_out_hint, load_window_events, pagination
 
 FILTER_KEYS = ("pid", "ppid", "user", "serial", "event_type", "exclude_interactive", "include_user_cmd")
+TOP_N = 5
+# 웹 서버 프로세스 계정. 이 계정이 셸·다운로드를 실행하면 웹셸/원격 코드 실행 신호다(원칙 9 [침해 신호]).
+WEB_SERVER_USERS = ("www-data", "apache", "nginx", "http")
+SUSPICIOUS_CMD_RE = re.compile(
+    r"(\bcurl\b|\bwget\b|\bnc\b|\bncat\b|/dev/tcp|bash -i|sh -c|base64|chmod \+x|python[0-9.]* -c|perl -e|"
+    r"crontab|authorized_keys|useradd|/etc/shadow)",
+    re.IGNORECASE,
+)
+
+
+def _top(counter: Counter) -> str:
+    return ", ".join(f"{key} {count}건" for key, count in counter.most_common(TOP_N)) or "-"
+
+
+def _command(record: Dict[str, Any]) -> str:
+    return str(record.get("exec_args") or record.get("comm") or "")
+
+
+def audit_rule_check(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """조건에 맞는 전체 이벤트(페이지와 무관) 기준 웹 서버 계정 실행·의심 명령 집계.
+
+    로컬 재현(2026-09-24): audit 307건 중 첫 200건만 받은 실행이 뒤쪽의 www-data `curl | sh`를
+    못 보고 "침해 없음"으로 끝냈다(1/3). 전체 기준으로 코드가 세서 summary와 rule_checks로 준다.
+    """
+    web_exec = [r for r in records if r.get("user") in WEB_SERVER_USERS and _command(r)]
+    suspicious = [r for r in records if SUSPICIOUS_CMD_RE.search(_command(r))]
+    web_suspicious = [r for r in web_exec if SUSPICIOUS_CMD_RE.search(_command(r))]
+    return {
+        "rule": "audit_post_exploitation",
+        "web_server_exec": len(web_exec),
+        "web_server_suspicious": len(web_suspicious),
+        "suspicious": len(suspicious),
+        "examples": [f"{r.get('user')}: {_command(r)[:80]} ({r.get('raw_ref')})"
+                     for r in (web_suspicious or suspicious)[:3]],
+    }
+
+
+def _audit_stats(records: List[Dict[str, Any]], check: Dict[str, Any]) -> str:
+    times = sorted(r["timestamp"] for r in records if r.get("timestamp"))
+    users = Counter(r.get("user") or "-" for r in records)
+    comms = Counter(r.get("comm") or "-" for r in records)
+    return (
+        f"이벤트 {len(records)}건(실제 기록 시각 {times[0] if times else '-'}~{times[-1] if times else '-'}), "
+        f"실행 계정별: {_top(users)}, 명령별: {_top(comms)}. "
+        f"[후속 침해 확인] 웹 서버 계정({'/'.join(WEB_SERVER_USERS)}) 실행 {check['web_server_exec']}건 중 "
+        f"의심 명령 {check['web_server_suspicious']}건, 전체 의심 명령(curl/wget/sh -c//dev/tcp/crontab 등) "
+        f"{check['suspicious']}건"
+        + (f" — 예: {' / '.join(check['examples'])}" if check["examples"] else "")
+        + ". (페이지와 무관한 전체 기준. 0건이 아니면 user나 pid로 다시 조회해 원본을 확인하십시오)"
+    )
 
 
 def _event_type_matches(record: Dict[str, Any], wanted: Any) -> bool:
@@ -80,7 +132,8 @@ def fetch_audit_log(args: Dict[str, Any]) -> Dict[str, Any]:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 audit 이벤트 총 {total_matched}건 중 "
             f"{page_desc} {len(page)}건 반환. ({more_desc}, uid/euid/session_type/exec_args까지 구조화, "
-            "1차 탐지팀 공통 정규화 함수 사용)"
+            "1차 탐지팀 공통 정규화 함수 사용) "
+            f"[조회 구간 전체 집계] {_audit_stats(matched, audit_rule_check(matched))}"
         )
 
     return {
@@ -92,5 +145,7 @@ def fetch_audit_log(args: Dict[str, Any]) -> Dict[str, Any]:
         "next_offset": next_offset,
         "scanned_objects": loaded["scanned_objects"],
         "invalid_timestamps": loaded["invalid_timestamps"],
+        "window_total": len(loaded["events"]),  # 필터 전 구간 전체 건수 — 0이면 로그 미확보
+        **({"rule_checks": [audit_rule_check(matched)]} if matched else {}),
         **({"error": loaded["error"]} if loaded["error"] else {}),
     }

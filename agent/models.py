@@ -130,6 +130,9 @@ class AgentState:
     # [2026-09-24] 도구가 계산한 판정 원칙 기준 중 seed src_ip에 대해 "위협 기준 충족"인 것
     # (예: 원칙 9 인증 대입 POST 10회 이상). 충족인데 FALSE_POSITIVE로 끝내려 하면 관문이 거부한다.
     rule_floors: List[Dict[str, Any]] = field(default_factory=list)
+    # [2026-09-24] 로그 조회 도구가 돌려준 "필터 전 구간 전체 건수"(window_total). 모두 0이면 그 시간대
+    # 로그 자체가 없는 것(수집 누락·교체)이라, 관문이 INCONCLUSIVE 외 판정을 거부한다.
+    window_totals: List[int] = field(default_factory=list)
 
     # [0917 희진] _to_hashable 메소드 추가
     @staticmethod

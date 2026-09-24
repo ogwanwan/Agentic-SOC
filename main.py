@@ -98,15 +98,18 @@ def main() -> None:
         return
 
     # [45] 조사 결과 프롬포트에 출력 + JSON 파일로 저장
+    # 원본 JSON은 results/에 저장되므로 콘솔에는 보고서와 저장 파일명만 띄운다 (2026-09-24 팀 의견).
+    saved_paths = []
     for i, result in enumerate(results, start=1):
+        saved_path = save_investigation_result(result)
+        saved_paths.append(saved_path)
         print(f"\n{'='*10} 조사 {i}/{len(results)} — {result['incident_id']} {'='*10}")
         print(format_text_report(result))
+        print(f"\n[참고 자료] 원본 조사 결과 JSON: {saved_path}")
 
-        saved_path = save_investigation_result(result)
-        print(f"[저장 완료] {saved_path}")
-
-    print("\n--- 원본 JSON (raw investigation_result 리스트) ---")
-    print(json.dumps(results, ensure_ascii=False, indent=2))
+    print(f"\n--- 저장된 조사 결과 JSON {len(saved_paths)}건 ---")
+    for path in saved_paths:
+        print(f"  {path}")
 
 
 # [1] main() 함수 실행

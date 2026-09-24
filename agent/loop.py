@@ -206,9 +206,7 @@ class InvestigationAgent:
 
                 # 종료 관문 (_termination_rejections 참고). 2026-09-24부터 no_more_evidence에도
                 # "도구 1종류만 보고 끝내기"를 막는 조건을 적용한다.
-                reasons = self._termination_rejections(
-                    state, termination_reason, (decision.get("final_verdict") or {}).get("verdict")
-                )
+                reasons = self._termination_rejections(state, termination_reason, decision.get("final_verdict"))
                 if reasons:
                     reason_text = ", ".join(reasons)
                     state.notes.append(f"종료 관문 발동 — 종료 거부: {reason_text}")
@@ -288,9 +286,9 @@ class InvestigationAgent:
             final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
 
         # 거부·강제 종료를 거치고도 원칙 기준과 다른 판정이 남으면 판정은 바꾸지 않고 드러내 기록한다
-        if (self.strict_termination and state.rule_floors
-                and (final_verdict or {}).get("verdict") == VerdictType.FALSE_POSITIVE.value):
-            state.notes.append("⚠ 판정-원칙 불일치: " + self._rule_floor_conflict(state) + " (최종 판정은 LLM 결과 그대로 둠)")
+        if self.strict_termination:
+            for conflict in self._verdict_conflicts(state, final_verdict):
+                state.notes.append("⚠ 판정-원칙 불일치: " + conflict + " (최종 판정은 LLM 결과 그대로 둠)")
 
         # [41] state 안에 쌓은 조사 결과를 agent/report.py의 build_investigation_result() 넘겨서 최종 JSON 생성
         result = build_investigation_result(state, termination_reason, final_verdict)
@@ -299,7 +297,7 @@ class InvestigationAgent:
         return result
 
     def _termination_rejections(self, state: AgentState, termination_reason: str,
-                                verdict: Optional[str] = None) -> list:
+                                final_verdict: Optional[Dict[str, Any]] = None) -> list:
         """종료 요청을 거부할 사유 목록 (비어 있으면 승인).
 
         confidence_sufficient: (a) 실제 신뢰도 < threshold, (b) 서로 다른 도구 1종류 이하,
@@ -323,8 +321,8 @@ class InvestigationAgent:
         chosen_layers = {layer for t in chosen for layer in t.queried_layers}
         reasons = []
 
-        if self.strict_termination and verdict == VerdictType.FALSE_POSITIVE.value and state.rule_floors:
-            reasons.append(self._rule_floor_conflict(state))
+        if self.strict_termination:
+            reasons.extend(self._verdict_conflicts(state, final_verdict))
 
         if self.strict_termination and state.login_successes:
             registered = {spec.name for spec in self.tool_registry.list_tools()}
@@ -377,12 +375,38 @@ class InvestigationAgent:
     }
 
     @staticmethod
-    def _rule_floor_conflict(state: AgentState) -> str:
-        check = state.rule_floors[0]
-        met = (f"인증·원격호출 엔드포인트 POST {check['auth_posts']}회(기준 10회 이상)" if check.get("auth_bruteforce")
-               else f"서로 다른 경로 {check['distinct_paths']}개·4xx {check['four_xx']}건(경로 스캔 기준)")
-        return (f"원칙 9 기준 충족({check['src_ip']}: {met})인데 FALSE_POSITIVE로 판정함. User-Agent(Jetpack 등)와 "
-                "응답 코드(2xx/5xx)는 이 판정을 바꾸지 않으므로 원칙 9에 따라 THREAT_CONFIRMED로 판정하십시오")
+    def _verdict_conflicts(state: AgentState, final_verdict: Optional[Dict[str, Any]]) -> list:
+        """도구가 계산한 사실(rule_floors, window_totals)과 어긋나는 판정 사유 목록.
+
+        - 조회한 모든 로그가 구간 전체 0건(로그 미확보)인데 INCONCLUSIVE가 아님
+        - 원칙 9 기준 충족(seed src_ip)인데 FALSE_POSITIVE
+        - 웹 서버 계정의 의심 명령 실행이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만
+        """
+        verdict = (final_verdict or {}).get("verdict")
+        severity = str((final_verdict or {}).get("severity") or "").upper()
+        conflicts = []
+        if verdict and verdict != VerdictType.INCONCLUSIVE.value and state.window_totals and not any(state.window_totals):
+            conflicts.append(
+                "조회한 모든 로그에 이 시간대 기록 자체가 없음(로그 미확보 — 수집 누락·로그 교체 가능). "
+                "기록이 없다는 것은 '활동 없음'의 증거가 아니므로 INCONCLUSIVE로 판정하고 unknowns에 "
+                "'원본 로그 미확보'를 남기십시오"
+            )
+        for check in state.rule_floors:
+            if check.get("rule") == "principle_9" and verdict == VerdictType.FALSE_POSITIVE.value:
+                met = (f"인증·원격호출 엔드포인트 POST {check['auth_posts']}회(기준 10회 이상)" if check.get("auth_bruteforce")
+                       else f"서로 다른 경로 {check['distinct_paths']}개·4xx {check['four_xx']}건(경로 스캔 기준)")
+                conflicts.append(
+                    f"원칙 9 기준 충족({check['src_ip']}: {met})인데 FALSE_POSITIVE로 판정함. User-Agent(Jetpack 등)와 "
+                    "응답 코드(2xx/5xx)는 이 판정을 바꾸지 않으므로 원칙 9에 따라 THREAT_CONFIRMED로 판정하십시오"
+                )
+            if check.get("rule") == "audit_post_exploitation" and (
+                    verdict == VerdictType.FALSE_POSITIVE.value or severity not in ("HIGH", "CRITICAL")):
+                conflicts.append(
+                    f"웹 서버 계정의 의심 명령 실행 {check['web_server_suspicious']}건이 audit에 있음"
+                    f"({' / '.join(check['examples'])}). 원칙 9 [침해 신호]에 따라 THREAT_CONFIRMED, "
+                    "severity HIGH 이상으로 판정하고 그 명령을 evidence로 기록하십시오"
+                )
+        return conflicts
 
     def _untried_tool_hint(self, attempted: set) -> str:
         registered = {spec.name for spec in self.tool_registry.list_tools()}
@@ -546,10 +570,13 @@ class InvestigationAgent:
             # 종료 관문 (f)용: 도구가 계산한 원칙 기준 중 seed src_ip가 위협 기준을 충족한 것
             src_ip = state.seed.get("src_ip")
             for check in result.get("rule_checks") or []:
-                if (src_ip and check.get("src_ip") == src_ip
-                        and (check.get("auth_bruteforce") or check.get("path_scan"))
-                        and check not in state.rule_floors):
+                principle9_met = (check.get("rule") == "principle_9" and src_ip and check.get("src_ip") == src_ip
+                                  and (check.get("auth_bruteforce") or check.get("path_scan")))
+                web_exec_met = check.get("rule") == "audit_post_exploitation" and check.get("web_server_suspicious")
+                if (principle9_met or web_exec_met) and check not in state.rule_floors:
                     state.rule_floors.append(check)
+            if "window_total" in result:
+                state.window_totals.append(result["window_total"])
             # 종료 관문 (e)용: seed src_ip의 로그인 성공이 결과에 있었는지 기록
             seen = {login["raw_ref"] for login in state.login_successes}
             for record in result.get("records") or []:

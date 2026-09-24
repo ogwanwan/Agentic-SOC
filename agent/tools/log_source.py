@@ -116,8 +116,13 @@ def filtered_out_hint(window_total: int, args: Dict[str, Any], filter_keys: Iter
     LLM이 "필터에 안 맞음"을 "그 시간에 활동 없음"으로 읽고 조사를 끝내는 사례가 있었다
     (2026-09-24 지속성 시나리오: audit event_type="EXECVE" 0건 → INCONCLUSIVE).
     """
+    if window_total == 0:
+        # 필터와 무관하게 구간 자체에 기록이 없음 — 수집 누락·로그 교체일 수 있어 "활동 없음"과 다르다.
+        # 로컬 재현(2026-09-24)에서 로그가 없는 날짜의 seed를 LLM이 3/4 FALSE_POSITIVE로 판정했다.
+        return (" 이 구간에는 이 계층의 로그 기록 자체가 없습니다(수집 누락·로그 교체 가능). "
+                "'활동이 없었다'는 증거로 쓰지 말고 unknowns에 '원본 로그 미확보'로 남기십시오.")
     used = [key for key in filter_keys if args.get(key) is not None]
-    if window_total == 0 or not used:
+    if not used:
         return ""
     return (f" 단, 같은 구간에 필터 없이 보면 이벤트가 {window_total}건 있습니다 — 사용한 필터({', '.join(used)})가 "
             "맞지 않았을 수 있으니, 필터를 빼거나 바꿔서 다시 조회한 뒤 판단하십시오.")
