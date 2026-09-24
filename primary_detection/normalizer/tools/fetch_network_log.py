@@ -18,9 +18,7 @@ Suricata 신규 Sigma 룰은 없다 — alert.signature 를 교차검증 증거�
 """
 
 import os
-import re
 import json
-import ipaddress
 from datetime import datetime, timezone
 
 # 스크립트 직접 실행도 되게 레포 루트를 path 에 올린다.
@@ -35,7 +33,9 @@ except Exception:  # pragma: no cover
 
 from tools.base import success, failure
 from tools.registry import register
+from common.network import canonical_ip, raw_path_and_query
 from common.schema import build_event
+from common.timeparse import normalize_iso
 
 SURICATA_LOG_PATH = os.getenv("SURICATA_LOG_PATH", "/var/log/suricata/eve.json")
 SENSOR_ID = os.getenv("SURICATA_SENSOR_ID", "suricata_ec2")
@@ -44,29 +44,6 @@ _SELECTED_EVENT_TYPES = frozenset({"http", "alert"})
 
 
 # --- XFF/IP 해석 (설계 문서 로직 이식) ----------------------------------------
-def canonical_ip(value):
-    """유효 IPv4/IPv6 → 표준형 문자열, 아니면 None. 대괄호 IPv6 authority 형도 허용."""
-    if not isinstance(value, str):
-        return None
-    c = value.strip()
-    if not c or c == "-":
-        return None
-    if len(c) >= 2 and c[0] == c[-1] == '"':
-        c = c[1:-1].strip()
-    if c.startswith("["):
-        end = c.find("]")
-        if end < 0:
-            return None
-        addr, suffix = c[1:end], c[end + 1:]
-        if suffix and (not suffix.startswith(":") or not suffix[1:].isdigit()):
-            return None
-        c = addr
-    try:
-        return str(ipaddress.ip_address(c))
-    except ValueError:
-        return None
-
-
 def parse_xff_chain(value):
     """XFF 체인 문자열 → (표준화 IP 리스트, status). 한 토큰이라도 무효면 invalid."""
     if not isinstance(value, str) or not value.strip() or value.strip() == "-":
@@ -117,7 +94,7 @@ def _parse_ts(value):
     if not isinstance(value, str):
         return None
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(normalize_iso(value))
     except ValueError:
         return None
     if dt.tzinfo is None:
@@ -129,27 +106,8 @@ def _parse_ts(value):
 def _iso_to_dt(iso_str):
     if iso_str is None:
         return None
-    s = iso_str.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    dt = datetime.fromisoformat(s)
+    dt = datetime.fromisoformat(normalize_iso(iso_str))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def raw_path_and_query(target):
-    """요청 target → (path, query). 선행 '//'는 보존한다."""
-    if not isinstance(target, str) or not target:
-        return None, None
-    if target.startswith(("http://", "https://")):
-        from urllib.parse import urlsplit
-        try:
-            p = urlsplit(target)
-        except ValueError:
-            return None, None
-        return p.path or "/", p.query or None
-    path, sep, query = target.partition("?")
-    path = path.split("#", 1)[0]
-    return path, (query.split("#", 1)[0] if sep and query else None)
 
 
 # --- 1. EVE 한 행 → 공통스키마 network 이벤트 ---------------------------------

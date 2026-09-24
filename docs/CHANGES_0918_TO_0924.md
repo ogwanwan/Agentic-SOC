@@ -189,7 +189,7 @@ records의 각 이벤트에는 `raw_ref`, `raw_refs`, `raw_ref_locations`(원본
 
 - **위치**: `primary_detection/normalizer/{common,tools}/`. 1차 탐지팀 저장소 코드를 바이트 단위로 그대로
   가져왔고, `primary_detection/normalizer/vendor_sync_check.py`로 원본과 같은지 검사한다.
-  **이 폴더는 수정하지 않는다.**
+  **이 폴더는 수정하지 않는다.** 현재 기준은 1차 탐지팀 `feature/primary-detection`의 `b300d41`(09-23)이다(15장).
 - **호출 경로**: `agent/tools/log_source.normalize_documents()` → `agent/tools/normalizer_adapter.normalize_log_documents()`
   → `fetch_apache_log` / `fetch_auth_log` / `fetch_audit_log` / `fetch_network_log`.
   어댑터가 원본 텍스트(여러 S3 객체 포함)를 임시 파일로 합쳐 넘기고, 돌아온 raw_ref를 실제 객체·줄 위치로
@@ -324,3 +324,38 @@ host 검사 에러로 도구 호출이 낭비되고 종료가 거부된 뒤 LLM�
 
 교훈: 날짜 계산이나 로그 줄 세기처럼 **정답이 정해진 계산은 LLM에게 맡기지 말고 코드가 해서 숫자로 건넨다.**
 LLM에게는 그 숫자를 판정 규칙에 대입하는 일만 남긴다.
+
+## 15. 1차 탐지팀 공통 정규화 사본 갱신 (0924, 1차 탐지팀 동의)
+
+### 증상
+EC2에서 `fetch_network_log`가 항상 0건을 반환했다(에러·시각 불명 표시 없음). web/auth/audit은 정상.
+
+### 원인
+- 우리 사본은 1차 탐지팀의 09-23 수정 이전 버전이었다. 옛 코드는 시각을 `value.replace("Z", "+00:00")` 후
+  `datetime.fromisoformat()`으로 읽는다.
+- Suricata는 시각을 `2026-09-22T13:35:35.722646+0000`처럼 콜론 없는 오프셋으로 쓴다.
+  `fromisoformat()`은 Python 3.11부터 이 형식을 읽지만 **EC2의 Python 3.10은 못 읽는다.**
+- 시각 파싱에 실패한 이벤트는 정규화 단계(`fetch_network_log.py`의 `if ts is None: return None`)에서 버려져,
+  에이전트 도구까지 오지 못했다. 로컬(Python 3.13)에서는 문제가 드러나지 않았다.
+- web(`...Z`), auth(syslog), audit(epoch)은 형식이 달라 영향이 없었다.
+- 1차 탐지팀은 09-23에 `common/timeparse.py`의 `normalize_iso()`로 이미 고쳤다(로컬 3.14, EC2 3.10 차이를 발견).
+  즉 EC2에서 1차 탐지는 network를 읽고 에이전트는 0건을 받아 **완료 기준이 깨진 상태**였다.
+
+### 수정
+- 1차 탐지팀 `feature/primary-detection` `b300d41`(09-23)에서 10개 파일을 **내용 수정 없이** 복사:
+  `common/schema.py`, `common/timeparse.py`(신규), `common/network.py`(신규), `tools/base.py`, `tools/registry.py`,
+  `tools/normalize.py`, `tools/fetch_{apache,auth,audit,network}_log.py`. git blob 해시로 원본과 동일함을 확인.
+- 1차 탐지팀 쪽 변경 내용은 리팩터링(시각 파싱을 `normalize_iso()`로, IP/경로 처리를 `common/network.py`로 이동)이며,
+  실제 동작 차이는 콜론 없는 오프셋 처리뿐이다.
+- `vendor_sync_check.py`: 새 파일 2개를 비교 목록에 추가, 줄바꿈(CRLF/LF)만 다른 경우는 같은 파일로 판정
+  (Windows 체크아웃 때 전부 "내용 다름"으로 나와 실제 갱신 여부를 알 수 없었음).
+
+### 확인
+| 항목 | 결과 |
+|---|---|
+| `vendor_sync_check.py` | 10개 파일 모두 원본과 동일 |
+| Suricata 로그 정규화 (http 8건 포함) | Python 3.10: 0건 → **8건**, Python 3.13: 8건 |
+| 완료 기준: 같은 원본을 1차 탐지 함수 / 에이전트 도구에 넣은 결과 | web 500, auth 500, audit 105, network 8건 모두 동일 |
+| `pytest` | 100개 통과 |
+
+EC2에서는 `git pull` 후 `fetch_network_log` 건수가 0이 아닌지 확인한다.

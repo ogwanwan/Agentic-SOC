@@ -33,15 +33,13 @@ from tools.fetch_apache_log import fetch_apache_log      # web
 from tools.fetch_auth_log import fetch_auth_log          # auth
 from tools.fetch_network_log import fetch_network_log    # network
 from tools.fetch_audit_log import fetch_audit_log        # system
+from common.timeparse import normalize_iso
 
 
 def _ts_key(event):
     """timestamp(ISO8601 UTC, 'Z') → datetime. 정밀도 차이에도 정확히 정렬."""
-    s = (event.get("timestamp") or "").strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(s)
+        return datetime.fromisoformat(normalize_iso(event.get("timestamp") or ""))
     except ValueError:
         return datetime.min.replace(tzinfo=timezone.utc)
 

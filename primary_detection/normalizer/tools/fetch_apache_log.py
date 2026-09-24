@@ -64,6 +64,7 @@ except Exception:  # pragma: no cover
 from tools.base import success, failure
 from tools.registry import register
 from common.schema import build_event
+from common.timeparse import normalize_iso
 
 # 로그 경로 (.env → 기본 Ubuntu Apache 경로)
 APACHE_LOG_PATH = os.getenv("APACHE_LOG_PATH", "/var/log/apache2/access.log")
@@ -122,9 +123,8 @@ def _parse_ts(ts):
     if not ts:
         return None
     s = ts.strip()
-    iso = s[:-1] + "+00:00" if s.endswith("Z") else s
     try:
-        datetime.fromisoformat(iso)
+        datetime.fromisoformat(normalize_iso(s))
     except ValueError:
         return None
     return s
@@ -134,10 +134,7 @@ def _iso_to_dt(iso_str):
     """ISO8601(UTC, 'Z' 허용) → aware datetime. time_window 비교용."""
     if iso_str is None:
         return None
-    s = iso_str.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    dt = datetime.fromisoformat(s)
+    dt = datetime.fromisoformat(normalize_iso(iso_str))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt

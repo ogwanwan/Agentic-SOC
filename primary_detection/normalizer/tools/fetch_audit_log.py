@@ -40,6 +40,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, timezone
 from typing import Iterable, Iterator
 
+from common.timeparse import normalize_iso
+
 MSG_RE = re.compile(r"msg=audit\((?P<epoch>\d+\.\d+):(?P<serial>\d+)\)")
 TYPE_RE = re.compile(r"^type=(?P<type>[A-Z_]+)\s")
 KV_RE = re.compile(r'(?P<k>[A-Za-z_][A-Za-z0-9_]*)=(?P<v>"(?:[^"\\]|\\.)*"|\S+)')
@@ -235,10 +237,7 @@ def normalize_file(path: str, source: str | None = None) -> Iterator[dict]:
 
 # ── 도구 계약: 순수 함수 + 필터 ─────────────────────────────────────────────
 def _iso_to_dt(iso: str) -> datetime:
-    s = str(iso).strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    t = datetime.fromisoformat(s)
+    t = datetime.fromisoformat(normalize_iso(str(iso)))
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 

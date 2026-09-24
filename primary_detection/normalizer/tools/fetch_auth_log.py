@@ -588,6 +588,8 @@ try:  # dotenv 선택 의존성
 except Exception:  # pragma: no cover
     pass
 
+from common.timeparse import normalize_iso
+
 
 def _auth_year_from_env():
     y = _os.getenv("AUTH_LOG_YEAR")
@@ -598,11 +600,8 @@ def _ts_dt(iso_str):
     """ISO8601('...Z') → aware datetime. time_window 비교용(문자열 정밀도 버그 회피)."""
     if not iso_str:
         return None
-    s = iso_str.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(s)
+        return datetime.fromisoformat(normalize_iso(iso_str))
     except ValueError:
         return None
 

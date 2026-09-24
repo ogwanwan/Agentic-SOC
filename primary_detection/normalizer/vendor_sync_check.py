@@ -28,6 +28,9 @@ DEFAULT_BRANCH = "feature/primary-detection"
 # (벤더 위치, 원본 저장소 내 경로) 쌍
 VENDORED_FILES = [
     ("common/schema.py", "common/schema.py"),
+    # 2026-09-24: 1차 탐지팀 b300d41(09-23)에서 시각 파싱·IP/경로 처리가 이 두 파일로 분리됨
+    ("common/timeparse.py", "common/timeparse.py"),
+    ("common/network.py", "common/network.py"),
     ("tools/base.py", "tools/base.py"),
     ("tools/registry.py", "tools/registry.py"),
     ("tools/normalize.py", "tools/normalize.py"),
@@ -38,6 +41,18 @@ VENDORED_FILES = [
 ]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _same_content(a: str, b: str) -> bool:
+    """줄바꿈(CRLF/LF)만 다른 경우는 같은 파일로 본다.
+
+    Windows에서 git이 체크아웃할 때 CRLF로 바꾸는 경우가 있어, 바이트 비교만 하면
+    내용이 같은데도 전부 "내용 다름"으로 나와 실제 갱신 여부를 알 수 없었다(2026-09-24).
+    """
+    if filecmp.cmp(a, b, shallow=False):
+        return True
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        return fa.read().replace(b"\r\n", b"\n") == fb.read().replace(b"\r\n", b"\n")
 
 
 def main() -> int:
@@ -62,7 +77,7 @@ def main() -> int:
             if not os.path.exists(vendored_path):
                 mismatches.append(f"벤더 쪽에 없음: {vendored_rel}")
                 continue
-            if not filecmp.cmp(vendored_path, source_path, shallow=False):
+            if not _same_content(vendored_path, source_path):
                 mismatches.append(f"내용 다름: {vendored_rel} != {source_rel}")
 
         if mismatches:
@@ -71,7 +86,7 @@ def main() -> int:
                 print(f"  - {m}")
             return 1
 
-        print(f"OK: {len(VENDORED_FILES)}개 파일 전부 {args.repo_url}@{args.branch} 와 바이트 단위 동일")
+        print(f"OK: {len(VENDORED_FILES)}개 파일 전부 {args.repo_url}@{args.branch} 와 동일 (줄바꿈 차이 무시)")
         return 0
 
 
