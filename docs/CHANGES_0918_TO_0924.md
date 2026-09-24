@@ -506,3 +506,72 @@ THREAT_CONFIRMED가 나왔다. 결과를 검토하며 아래를 고쳤다.
 - 8종 각각 `--runs 8`로 0918과 같은 횟수의 재측정(무료 한도 고려해 하루에 나눠서).
 - (선택) Jetpack/Automattic 공개 IP 대역을 조회하는 도구를 두면 "진짜 Jetpack 연동"을 판정할 수 있다. 지금은 IP 소유를 확인할 방법이 없어 원칙 9는 횟수 기준만 쓴다.
 - 원칙 9의 기준값(POST 10회, 경로 20개)은 팀 판정 정책으로 정한 값이다. 실제 로그 분포를 보고 조정할 수 있다.
+
+## 17. 실제 트래픽 재현성 확인과 미검증 사례 점검 (0924 밤)
+
+16장 이후 커밋: `96c1295`(EC2 두 번째 실행 보완, 16장 마지막 절 내용) → `aca56b9`(이 장의 수정).
+
+### EC2 실제 트래픽 재현성 (`96c1295` 기준)
+EC2에서 `git pull` 후 xmlrpc 사건 seed를 `tests.test_consistency --runs 5`로 반복했다.
+
+| seed | 판정 | 신뢰도 | 도구 흐름 |
+|---|---|---|---|
+| INC-XMLRPC-BRUTE (103.82.158.245, `/xmlrpc.php` POST, 전부 503) | THREAT_CONFIRMED 5/5 | 표준편차 0.024 | network(사전 조회) → web → audit |
+
+16장 증상(web 1회 후 FALSE_POSITIVE)이 실제 트래픽에서 재현되지 않았다.
+
+참고: 첫 시도는 seed 파일을 이름순 glob으로 골라 다른 사건을 돌렸다. 가장 최근 파일(`os.path.getmtime`)로 고르면 된다.
+
+#### network 사전 조회는 매번 실행되는가
+seed에 `src_ip`가 있으면 사건 종류와 관계없이 첫 LLM 턴 전에 한 번 실행된다. src_ip가 없는 seed(06·07 등 호스트 내부 사건)는 건너뛴다.
+- 비용: 도구 호출 1회. LLM 호출 수는 늘지 않는다. 결과는 대표 20건과 전체 집계로 줄여서 넘긴다.
+- 0건이어도 쓸모가 있다. "해당 IP의 network 경보·외부 통신 없음"이 확인된 사실이 되고, 종료 관문 (c)를 통과한다.
+- LLM이 고른 도구 수(관문 (b))에는 포함하지 않는다. 사전 조회만으로 "도구 2종류"를 채우지 못하게 하기 위해서다.
+
+### 아직 확인하지 않았던 사례 점검 (로컬, Gemini, 각 3~4회)
+지금까지 검증은 SSH·xmlrpc·0918 합성 시나리오 위주였다. 로컬 `sample_logs`(09-22 실제 웹 트래픽)의 다른 사건과
+일부러 만든 어려운 사례로 확인했다.
+
+| seed | 사건 | 결과 | 평가 |
+|---|---|---|---|
+| INC-WPLOGIN-LOCAL (206.189.44.36) | 24초 동안 `/wp-login.php` POST 다수 | TC 3/3, MEDIUM, 0.80~0.90 | 원칙 9대로. 문제 없음 |
+| INC-WPPROBE-LOCAL (198.235.24.136) | 11초 동안 WordPress 관리 경로 7건 | FP 3/3, LOW, 0.80~0.90 | 경로 20개 미만이라 원칙 9 기준 미충족 → FP로 일관. 1회는 근거에 User-Agent("공인 보안 스캐너")를 인용함(판정에는 영향 없음, 원칙 9는 UA를 근거로 쓰지 말라고 함) |
+| INC-GITCONFIG-LOCAL (142.93.207.53) | `/.git/config` 반복 요청(404) 8건 | TC 3/3, LOW, 0.80~0.87 | 일관되지만 원칙 9 수치 기준(경로 20개)만 보면 FP다. LLM은 "민감 파일 노출 탐색"으로 봤다. **팀 정책 결정 필요** |
+| INC-XMLRPC-MISSING (143.105.155.9) | seed 구간(09-20)에 로그 파일 자체가 없음 | **FP 3/4**, INCONCLUSIVE 1/4 | ✗ 로그를 못 본 것을 "활동 없음"으로 해석 |
+| INC-XMLRPC-HIDDEN (203.0.113.50) | xmlrpc POST 30건 + 그 뒤 audit에 www-data `curl ... \| sh` (`scratchpad/hidden_webshell.py`로 생성) | 앞쪽 audit 105건: TC 3/3 HIGH~CRITICAL. 앞쪽 audit 200건 이상: **1/3이 MEDIUM** | ✗ audit 도구가 한 번에 200건만 돌려줘서 뒤쪽 웹셸 실행을 못 봄 |
+
+실패 두 가지를 고쳤다.
+
+### 수정 (`aca56b9`)
+| 파일 | 내용 |
+|---|---|
+| `agent/tools/log_source.py` | `filtered_out_hint()`: 필터 전 구간 전체가 0건이면 "이 구간에는 이 계층의 로그 기록 자체가 없음(수집 누락·로그 교체 가능). 활동 없음의 증거로 쓰지 말고 unknowns에 '원본 로그 미확보'로 남길 것"을 안내 |
+| `fetch_web_log` / `fetch_auth_log` / `fetch_network_log` / `fetch_audit_log` | 반환값에 `window_total`(필터 전 구간 전체 건수) 추가 |
+| `agent/tools/real/fetch_audit_log.py` | `audit_rule_check()`: 페이지(limit)와 관계없이 조건에 맞는 전체 이벤트에서 웹 서버 계정(www-data/apache/nginx/http) 실행 수, 그중 의심 명령 수, 전체 의심 명령 수(curl·wget·nc·`/dev/tcp`·`bash -i`·`sh -c`·base64·`chmod +x`·`python -c`·`perl -e`·crontab·authorized_keys·useradd·`/etc/shadow`)를 센다. summary에 `[조회 구간 전체 집계]`(건수, 실제 기록 시각, 계정·명령 상위 5개)와 `[후속 침해 확인]`(예시 3건과 raw_ref)으로 붙이고 `rule_checks`로도 반환 |
+| `agent/loop.py` `_verdict_conflicts()` | 종료 관문(strict)에서 판정이 코드 계산 결과와 어긋나면 거부. (1) 도구가 돌려준 `window_total`이 모두 0인데 INCONCLUSIVE가 아님. (2) 원칙 9 기준 충족인데 FALSE_POSITIVE(16장 (f)를 이 함수로 옮김). (3) audit에 웹 서버 계정 의심 명령이 있는데 FALSE_POSITIVE이거나 severity가 HIGH/CRITICAL이 아님. 끝까지 어긋나면 판정은 그대로 두고 "⚠ 판정-원칙 불일치"를 notes에 남김 |
+| `agent/models.py` | `AgentState.window_totals` 추가 |
+| `agent/prompts/investigation.yaml` | 원칙 1: 조회 구간 로그 자체가 0건이면 "활동 없음"이 아니라 데이터 공백이고 INCONCLUSIVE. 원칙 9 [침해 신호]: audit summary의 `[후속 침해 확인]` 집계를 사용하고, 웹 서버 계정 의심 명령이 있으면 THREAT_CONFIRMED·HIGH 이상 |
+| `main.py` | 원본 JSON 전체를 콘솔에 출력하지 않는다(팀원 의견: `results/`에 저장됨). 각 보고서 아래에 `[참고 자료] 원본 조사 결과 JSON: results/...json`, 끝에 저장 파일 목록을 표시 |
+| 테스트 | `tests/test_network_precheck.py`에 데이터 공백 관문, audit 전체 집계·관문 테스트 추가. 총 120개 통과 |
+
+### 수정 후 재검증: 미완료
+두 seed(MISSING 4회, HIDDEN 4회)를 다시 돌리던 중 Gemini 무료 한도(429)에 걸려 중단했다. 오프라인 테스트로 관문과 집계
+동작만 확인한 상태다. 한도가 풀리면 아래로 다시 확인한다(`sample_logs` 원복 필수). seed JSON과
+`hidden_webshell.py`는 저장소에 넣지 않은 로컬 실험 파일이다(seed 내용은 위 표의 IP·구간과 같다).
+
+```bash
+python -m tests.test_consistency --runs 4 --seed-json seedMISSING.json   # 기대: INCONCLUSIVE 4/4
+python scratchpad/hidden_webshell.py 200                                 # audit 200건 뒤에 웹셸 실행 추가
+python -m tests.test_consistency --runs 4 --seed-json seedHIDDEN.json    # 기대: THREAT_CONFIRMED + HIGH 이상 4/4
+git checkout HEAD -- sample_logs
+```
+
+### 남은 과제 (팀 결정 포함)
+| 항목 | 상태 |
+|---|---|
+| 위 두 seed 재검증 | Gemini 한도 해제 후 |
+| `/.git/config` 같은 민감 파일 탐색을 TC로 볼지 FP로 볼지 | **팀 결정 필요**. 지금은 LLM이 일관되게 TC(LOW)로 판정하지만 원칙 9 수치 기준과 다르다. 정하면 원칙 9에 "민감 파일 경로" 항목으로 명시 |
+| 타임라인 시작 시각 | 원칙으로 "실제 기록 시각"을 쓰라고 했지만 여전히 seed 시각을 쓰는 실행이 있다. 코드로 보정할지 결정 필요 |
+| Jetpack/Automattic IP 대역 확인 도구 | 선택 (16장 참고) |
+| 8종 seed `--runs 8` 재측정 | 무료 한도를 고려해 나눠서 |
+| `seed_generation`의 unknown refs ValueError, README 정리 | 이후 |
