@@ -24,12 +24,32 @@ gemini_client.py 등의 코드는 수정할 필요가 없다 (agent.prompts가 �
 from __future__ import annotations
 
 import json
+from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
 
 from ..provenance import strip_trace_fields
+from ..tools.time_utils import parse_iso
+
+# 원칙 7 Q1(시도 범위) 조회 구간. LLM에게 "trigger_time 기준 24시간 전"을 계산하라고 하면
+# 1~2시간만 조회하는 경우가 반복돼(2026-09-24 재현성 테스트), 코드가 계산한 값을 그대로 준다.
+AUTH_LOOKBACK_BEFORE = timedelta(hours=24)
+AUTH_LOOKBACK_AFTER = timedelta(hours=1)
+
+
+def auth_lookback_window(seed: Dict[str, Any]) -> Optional[list]:
+    """seed에 src_ip와 기준 시각이 있으면 [시각-24h, 시각+1h] (UTC ISO 'Z')를 반환."""
+    anchor = seed.get("trigger_time") or seed.get("timestamp")
+    if not seed.get("src_ip") or not anchor:
+        return None
+    try:
+        at = parse_iso(anchor).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    fmt = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    return [fmt(at - AUTH_LOOKBACK_BEFORE), fmt(at + AUTH_LOOKBACK_AFTER)]
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -138,6 +158,9 @@ def build_user_prompt(
         "provenance_issues": state.provenance_issues,
         "tool_calls_used": len(state.tool_calls),
     }
+    lookback = auth_lookback_window(state.seed)
+    if lookback:
+        payload["auth_lookback_window"] = lookback
 
     instruction = (
         "다음은 현재까지의 조사 상태입니다. 이를 바탕으로 시스템 프롬프트의 JSON 스키마에 "
@@ -152,9 +175,10 @@ def build_user_prompt(
             f"거부 사유: {gate_rejection_reason}\n"
             "같은 상태로 다시 terminate를 요청하면 또 거부됩니다. 아래 중 하나를 선택하십시오:\n"
             "1) 아직 조회하지 않은 관련 계층의 도구를 호출해 추가 증거를 확보하십시오.\n"
-            "2) 이미 충분히 조사했다고 판단되면, new_evidence의 confidence_contribution을 "
-            "실제 확신 수준에 맞게 재평가해서 제출하십시오 (지금까지 낮게 산정되어 "
-            "current_confidence가 임계값에 못 미치고 있을 수 있습니다)."
+            "2) 더 확인할 관련 계층이 없다면 termination_reason을 no_more_evidence로 바꿔 "
+            "지금 증거로 판정하십시오. 임계값을 넘기려고 이미 기록한 사실을 다시 evidence로 "
+            "만들거나 confidence_contribution을 부풀리지 마십시오 (같은 raw_ref를 다시 인용한 "
+            "evidence는 시스템이 신뢰도에 반영하지 않습니다)."
         )
 
     if force_terminate:

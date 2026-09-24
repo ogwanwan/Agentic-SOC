@@ -73,7 +73,7 @@
 ### 3.2 재현성 테스트: `python -m tests.test_consistency --runs 8`
 
 수집과 seed 생성([6]~[14])을 건너뛴다. 파일 안에 적어 둔 `SEED`로 `InvestigationAgent.run()`([17])부터
-시작한다. 시나리오 로그는 `scenarios/generate_*.py`가 `.env`의 `*_LOG_LOCAL_PATH` 파일에 덧붙인다(8장).
+시작한다. 시나리오 로그는 `scenarios/generate_*.py`가 `.env`의 `*_LOG_LOCAL_PATH` 파일에 덧붙인다(9장).
 
 ### 3.3 도구 한 번 호출할 때의 경로
 
@@ -123,12 +123,12 @@ records의 각 이벤트에는 `raw_ref`, `raw_refs`, `raw_ref_locations`(원본
 | `fetch_network_log` | `parsers/network_parser.py` (flow 포함) | 공통 정규화 `fetch_network_log` (http/alert만) | `src_ip`는 `src_ip` 또는 `transport_src_ip` 중 하나와 일치(5장 7번), `dst_ip`→`dest_ip`, `src_port`/`dst_port`→`transport_*_port`, `protocol` 대소문자 무시, `alert_only`는 alert만 |
 | `get_process_tree` | 자체 파서 + `parsers/process_tree.py` | 공통 정규화 + `build_ancestry_chain()`을 이 파일로 이동 | 조상 추적 로직은 0918과 같음. 파일 없음/권한 없음을 예외 대신 summary·error로 반환하도록 수정 |
 | `fetch_event_logs` | 없음 | C/D에서 추가 | 사건 window 또는 timestamp±초로 여러 계층을 한 번에 조회. 내부에서 위 4개 도구를 호출하고, 계층별 `filters`는 그 도구가 받는 인자만 허용 |
-| `resolve_ip_geo` | 목업 | 목업(변경 없음) | `main.py`에서는 제외. `test_consistency.py`에서는 등록됨 |
+| `resolve_ip_geo` | 목업 | 목업(변경 없음) | `main.py`와 `test_consistency.py` 모두 제외 |
 
 0918 대비 기능 차이:
 - `include_user_cmd` 기본값 True(sudo 기록 누락 방지)는 결과가 같다. 공통 정규화가 USER_CMD만 있는 이벤트도 원래 포함한다.
 - 권한 에러 처리와 limit/offset 페이지네이션은 그대로 있다.
-- 없어진 정보는 network flow 이벤트(`bytes_toserver` 등)뿐이다. 공통 정규화가 flow 이벤트를 버리기 때문이며, 프롬프트를 이에 맞췄다(7장).
+- 없어진 정보는 network flow 이벤트(`bytes_toserver` 등)뿐이다. 공통 정규화가 flow 이벤트를 버리기 때문이며, 프롬프트를 이에 맞췄다(8장).
 
 ### 4.4 필드 이름 변경 (자체 파서 → 공통 정규화)
 
@@ -154,7 +154,7 @@ records의 각 이벤트에는 `raw_ref`, `raw_refs`, `raw_ref_locations`(원본
 | 2 | `loop.py`가 raw_ref를 빠뜨리거나 형식이 틀린 증거의 신뢰도 기여를 0으로 만듦 | LLM이 raw_ref를 정확히 복사했는지에 따라 confidence가 실행마다 달라짐 | 빠뜨림/형식 오류는 기여를 반영하고 provenance에만 기록. 없는 참조를 지어낸 경우와 위치가 모호한 경우만 0 유지 |
 | 3 | 웹셸 시나리오가 nginx JSON을 생성, 공통 정규화는 apache만 읽음 | web 계층 0건 | 시나리오를 apache 형식으로 변경 |
 | 4 | 시나리오 생성기가 `sample_web.log`/`sample_network.log`에 쓰는데 `.env`는 다른 파일을 가리킴 | 도구가 시나리오 로그를 전혀 못 봄 | `scenarios/_log_paths.py` 추가. 생성기 5개가 `.env`의 `*_LOG_LOCAL_PATH`에 씀 |
-| 5 | 공통 정규화가 flow 이벤트를 버리고 `alert_signature` 이름이 바뀜. 프롬프트는 옛 필드를 확인하라고 지시 | 유출 판단 근거를 못 찾음 | 프롬프트 원칙 8로 `signature` + audit 전송 명령 + `dest_ip` 기준 판단 (7장) |
+| 5 | 공통 정규화가 flow 이벤트를 버리고 `alert_signature` 이름이 바뀜. 프롬프트는 옛 필드를 확인하라고 지시 | 유출 판단 근거를 못 찾음 | 프롬프트 원칙 8로 `signature` + audit 전송 명령 + `dest_ip` 기준 판단 (8장) |
 | 6 | 도구 설명이 옛 필드(`target_file`, `ssh_login` 등)를 안내 | LLM이 없는 필드를 찾음 | `registry.py` 도구 설명을 실제 반환 필드에 맞춤 |
 | 7 | 공통 정규화는 XFF가 없는 alert의 `src_ip`를 비움 | 공격자 IP로 거른 inbound alert가 0건 (0918에서는 잡힘) | `fetch_network_log`의 `src_ip` 필터를 `transport_src_ip`까지 비교 |
 
@@ -179,7 +179,7 @@ records의 각 이벤트에는 `raw_ref`, `raw_refs`, `raw_ref_locations`(원본
 - `loop.py`: raw_ref 누락 시 신뢰도 기여 처리 변경 (5장 2번).
   - `tests/test_provenance.py`: "누락/형식 오류도 confidence 증가 0"을 검사하던 테스트를 둘로 나눴다.
     "지어낸 참조는 0"과 "누락/형식 오류는 반영하되 provenance incomplete"를 각각 검사한다.
-- `tests/test_abcd_pipeline.py`: seed 프롬프트에서 추적용 필드를 빼게 되어(7장), "seed 입력과 도구 결과가
+- `tests/test_abcd_pipeline.py`: seed 프롬프트에서 추적용 필드를 빼게 되어(8장), "seed 입력과 도구 결과가
   같은가" 비교 전에 도구 결과에도 같은 필드를 빼도록 한 줄 수정. 두 경로의 정규화 결과가 같은지 확인한다는
   테스트 의도는 그대로다.
 - `fetch_event_logs`의 `filters`: 예전에는 모든 계층 필터 키를 아무 계층에나 허용했다. 이제는 계층별로
@@ -261,16 +261,12 @@ Q1~Q3 판정 조합)는 바꾸지 않았다.**
 
 1. **재현성 본검증**: 시나리오 5종 + 수동 seed 2종을 각각 `--runs 8`로 다시 측정해야 0918 표와 비교할 수
    있다. 지금은 유출 시나리오 3회만 확인했다.
-2. **중복 증거로 confidence 부풀리기**: `main.py` 실행에서 종료가 거부된 뒤 LLM이 같은 raw_ref를 다시 인용한
-   증거를 만들어 임계값을 채웠다. 이미 인용된 raw_ref만 다시 인용한 증거는 코드에서 기여를 0으로 처리하는
-   방안을 검토한다.
-3. **로그인 성공 없는 브루트포스**: 실패만 있는 사건을 THREAT_CONFIRMED로 판정했다. 원칙 7에
-   "성공 없이 실패만 있으면 시도 단계"라는 기준을 명시하는 방안을 검토한다.
-4. **seed 생성 실패**: LLM이 입력에 없는 raw_ref를 인용하면 `seed_generation.py`가 `ValueError`를 내서
+2. ~~중복 증거로 confidence 부풀리기~~, ~~로그인 성공 없는 브루트포스 판정 흔들림~~ → 14장에서 해결.
+3. **seed 생성 실패**: LLM이 입력에 없는 raw_ref를 인용하면 `seed_generation.py`가 `ValueError`를 내서
    seed 생성 전체가 실패한다. 해당 후보만 버리는 방식을 검토한다.
-5. **옛 구조를 설명하는 README**: `README.md`, `agent/README.md`, `agent/tools/README.md`,
+4. **옛 구조를 설명하는 README**: `README.md`, `agent/README.md`, `agent/tools/README.md`,
    `agent/tools/real/README.md`에 삭제된 `parsers/` 설명이 남아 있다.
-6. `test_consistency.py`는 `resolve_ip_geo` 목업을 LLM에게 노출한다(0918과 동일).
+5. 14장 수정 이후 다른 시나리오(유출·웹셸 등)는 아직 다시 검증하지 않았다.
 
 ## 13. 변경 파일 목록 (이번 커밋, `4358d10` 대비)
 
@@ -291,3 +287,40 @@ Q1~Q3 판정 조합)는 바꾸지 않았다.**
 | `tests/test_provenance.py`, `tests/test_abcd_pipeline.py` | 6장 참고 |
 | `docs/C_D_IMPLEMENTATION.md` | host 검사 문단 |
 | `docs/CHANGES_0918_TO_0924.md` | 이 문서 |
+
+## 14. 추가 수정: SSH 실패 전용 사건의 판정 흔들림 (0924 오후)
+
+### 증상
+같은 seed(`INC-SSH-BRUTE`: 171.235.42.109 → root SSH 로그인 실패, 성공 없음)로 조사를 반복하면
+판정이 INCONCLUSIVE / FALSE_POSITIVE / THREAT_CONFIRMED로 갈렸다. C/D 병합 전(0918 코드)에도 같은
+흔들림이 있었으므로 병합과 무관하게 원래 있던 문제다. 병합 직후에 THREAT_CONFIRMED가 나온 것은
+host 검사 에러로 도구 호출이 낭비되고 종료가 거부된 뒤 LLM이 confidence를 부풀린 영향이었다(5장 1번).
+
+### 원인
+1. 원칙 7이 "실패와 성공이 섞인" 경우만 다뤄, 실패만 있는 경우의 판정 기준이 없었다.
+2. 이 IP는 9시간 동안 10회 실패했지만 seed는 마지막 1회만 가리킨다. LLM이 1~2시간만 조회해 매번
+   "1회 실패"로 봤다. 24시간 조회하라고 지시해도 시각 계산을 하지 않았다.
+3. 실패 1회가 로그 3줄(PAM 인증 실패, Failed password, 연결 종료)로 남아 LLM이 1회/3회로 제각각 셌다.
+4. 종료가 거부되면 "confidence를 재평가하라"는 안내에 따라 같은 사실을 다시 evidence로 만들어 임계값을 채웠다.
+5. `test_consistency.py`만 `resolve_ip_geo` 목업을 LLM에게 노출했다.
+
+### 수정
+| 파일 | 내용 |
+|---|---|
+| `agent/prompts/investigation.yaml` 원칙 7 | 실패만 있고 성공이 없는 경우: 같은 src_ip 실패 5회 이상 또는 계정 2개 이상 → THREAT_CONFIRMED("SSH 무차별 대입 시도", severity LOW~MEDIUM, confidence 0.75~0.85, "침해 없음" 명시). 1~4회·단일 계정 → FALSE_POSITIVE. 이 경우 INCONCLUSIVE 금지 (팀 판정 정책) |
+| `agent/prompts/__init__.py` | seed에 src_ip가 있으면 `auth_lookback_window`([기준 시각-24h, +1h])를 코드가 계산해 user prompt에 넣음. 원칙 7 Q1은 이 값을 그대로 쓰도록 지시 |
+| `agent/tools/real/fetch_auth_log.py` | summary 끝에 `[조회 구간 전체 집계] 로그인 실패 N회(ssh_failed+ssh_invalid_user 기준), 실패 대상 계정 M개, 로그인 성공 K회` 추가. 원칙 7은 이 숫자를 그대로 쓰도록 지시 |
+| `agent/loop.py` | 이미 인용된 raw_ref만 다시 인용한 evidence는 신뢰도 기여 0 |
+| 종료 거부 안내 (`prompts/__init__.py`, 원칙 4) | "재평가해 제출" → "더 볼 계층이 없으면 no_more_evidence로 종료, 부풀리기 금지" |
+| `tests/test_consistency.py` | `resolve_ip_geo` 제외 (`main.py`와 동일 조건) |
+| 테스트 | `tests/test_auth_q1_inputs.py`(조회 구간, 실패 횟수 집계), `test_provenance.py`(중복 인용) 추가. 총 100개 통과 |
+
+### 결과 (같은 seed, Gemini 5회씩)
+| 단계 | 판정 분포 | confidence |
+|---|---|---|
+| 수정 전 | INCONCLUSIVE 3, FALSE_POSITIVE 2 (60%) | 0.50~0.90 (표준편차 0.169) |
+| 원칙 7 규칙만 추가 | THREAT_CONFIRMED 3, FALSE_POSITIVE 2 (60%) | 0.75~0.85 (0.040) |
+| 조회 구간·집계를 코드가 제공 | **THREAT_CONFIRMED 5 (100%)** | 0.80~0.85 (0.024) |
+
+교훈: 날짜 계산이나 로그 줄 세기처럼 **정답이 정해진 계산은 LLM에게 맡기지 말고 코드가 해서 숫자로 건넨다.**
+LLM에게는 그 숫자를 판정 규칙에 대입하는 일만 남긴다.

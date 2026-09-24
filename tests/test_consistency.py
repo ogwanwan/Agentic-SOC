@@ -56,7 +56,8 @@ def run_once_with_retry(run_index: int, max_retries: int = 3) -> Dict[str, Any] 
     for attempt in range(1, max_retries + 1):
         try:
             llm = GeminiClient()
-            registry = build_default_registry()
+            # main.py와 같은 조건: resolve_ip_geo는 목업이라 LLM에게 가짜 IP 정보를 줄 수 있어 제외
+            registry = build_default_registry(exclude=["resolve_ip_geo"])
             agent = InvestigationAgent(llm, registry, max_calls=8, confidence_threshold=0.85)
 
             result = agent.run(SEED)

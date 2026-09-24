@@ -72,8 +72,9 @@ principles:
       user prompt에 "previous_termination_rejected": true가 있으면 직전 종료 요청이
       거부된 것입니다. "rejection_reason"을 확인하고 같은 상태로 다시 terminate를 요청하지
       마십시오. 대신 (1) 아직 조회하지 않은 관련 계층의 도구를 호출해 증거를 추가로 확보하거나,
-      (2) 이미 충분히 조사했다면 new_evidence의 confidence_contribution을 실제 확신 수준에
-      맞게 재평가해 제출하십시오.
+      (2) 더 확인할 관련 계층이 없다면 no_more_evidence로 종료하고 지금 증거로 판정하십시오.
+      임계값을 넘기려고 이미 기록한 사실을 다시 evidence로 만들거나 confidence_contribution을
+      부풀리지 마십시오. 같은 raw_ref를 다시 인용한 evidence는 신뢰도에 반영되지 않습니다.
 
   - id: 5
     title: 계층 간 연결
@@ -123,8 +124,8 @@ principles:
   - id: 7
     title: 계정/인증 관련 사건의 판단 절차
     text: |
-      로그인 실패와 성공이 섞여 있거나 계정 탐색으로 의심되는 패턴(예: 존재하지 않는 계정 시도
-      후 다른 계정으로 성공)이 보이면, 아래 세 질문에 각각 명시적으로 답한 뒤 판정하십시오.
+      SSH 로그인 실패·성공, 계정 탐색(예: 존재하지 않는 계정 시도 후 다른 계정으로 성공)과
+      관련된 사건은 아래 세 질문에 각각 명시적으로 답한 뒤 판정하십시오.
 
       auth 레코드 읽는 법: 로그인 성공/실패는 event(ssh_accepted/ssh_failed/ssh_invalid_user
       등), 인증 방식은 method(password/publickey) 필드입니다. pam_session_opened는 로그인
@@ -132,6 +133,13 @@ principles:
 
       Q1 [시도 범위]: 로그인 실패가 몇 건이고 몇 개의 서로 다른 계정을 대상으로 했는가?
           (1건/1계정 = 단순 오타 가능성. 다수 건/다수 계정 = 계정 탐색 가능성.)
+          seed가 가리키는 로그는 마지막 한두 건일 수 있습니다. user prompt에 auth_lookback_window
+          ([시작, 끝])가 있으면, 첫 fetch_auth_log는 반드시 start_time=그 [0], end_time=그 [1],
+          src_ip=seed의 src_ip로 호출하십시오. 시각을 직접 계산하거나 더 좁은 구간으로 바꾸지
+          마십시오.
+          횟수는 직접 세지 말고 fetch_auth_log summary의 [조회 구간 전체 집계]에 나온 숫자를
+          그대로 쓰십시오. 로그인 실패 1회 = ssh_failed 또는 ssh_invalid_user 이벤트 1건이며,
+          실패 한 번마다 함께 남는 pam 인증 실패·연결 종료 기록은 세지 않습니다.
       Q2 [인증 강도]: 성공한 로그인의 인증 방식은 무엇인가?
           (공개키 = 사전에 등록된 키가 있어야 하므로 탈취 없이는 성공 불가능한 강한 정상 신호.
           비밀번호 = 추측/탈취 가능성이 상대적으로 있음.)
@@ -152,6 +160,14 @@ principles:
         비밀번호 인증 시도 끝에 로그인이 성공했다는 사실 자체가 계정 침해의 확정적 증거이며,
         후속 행위는 피해 범위를 넓히는 부가 정보일 뿐입니다. "후속 악성 행위가 확인되지
         않았다"는 이유만으로 confidence를 낮추거나 INCONCLUSIVE로 후퇴하지 마십시오.
+      - 로그인 성공이 한 번도 없고(실패만 있음) 후속 행위도 없는 경우 → 성공이 없으므로 Q2/Q3는
+        "해당 없음"으로 적고, Q1의 전체 실패 횟수로만 판정합니다.
+        - 같은 src_ip에서 실패 5회 이상, 또는 2개 이상의 서로 다른 계정 대상 → THREAT_CONFIRMED
+          (attack_type은 "SSH 무차별 대입 시도", severity LOW~MEDIUM, confidence 0.75~0.85).
+          summary에 "로그인 성공은 없어 계정 침해는 발생하지 않았다"를 반드시 명시합니다.
+        - 실패 1~4회이고 단일 계정 대상 → FALSE_POSITIVE (단발성 실패, confidence 0.75~0.85).
+        이 경우는 INCONCLUSIVE로 판정하지 마십시오. 필요한 사실(실패 횟수·계정 수·성공 여부)은
+        fetch_auth_log로 모두 확인할 수 있습니다.
       - 그 외에 일부 신호만 침해 방향이면 → 침해 방향 신호의 개수와 종류를 reasoning에
         명시하고 THREAT_CONFIRMED 또는 INCONCLUSIVE 중에서 판단합니다.
       - Q1~Q3 중 하나라도 확인할 도구/데이터가 없어 답할 수 없으면 → INCONCLUSIVE로 판정하고,

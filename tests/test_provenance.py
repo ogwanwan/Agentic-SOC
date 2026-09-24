@@ -140,6 +140,16 @@ def test_missing_or_malformed_refs_keep_confidence_but_mark_provenance_incomplet
     assert result["evidence_chain"][0]["raw_refs"] == []
 
 
+def test_recited_raw_refs_do_not_count_twice():
+    # 2026-09-24: 종료 거부 후 같은 로그를 다시 인용한 evidence로 임계값을 채우던 사례 방지
+    seed = {"incident_id": "DUP", "raw_ref": "source:1", "confidence_initial": 0.3}
+    llm = ScriptedInvestigator([terminate([evidence(raw_refs=["source:1"]),
+                                           evidence(raw_refs=["source:1"], description="same fact again")])])
+    result = InvestigationAgent(llm, ToolRegistry()).run(seed)
+    assert result["statistics"]["confidence_increase"] == pytest.approx(0.2)
+    assert [e["confidence_contribution"] for e in result["evidence_chain"]] == [0.2, 0.0]
+
+
 def test_legacy_uncited_results_are_not_marked_validated():
     result = InvestigationAgent(ScriptedInvestigator([terminate()]), ToolRegistry()).run({"incident_id": "LEGACY"})
     assert result["provenance"]["status"] == "unavailable"

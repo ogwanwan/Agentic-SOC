@@ -13,6 +13,9 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
   - 이 파일(에이전트 도구): 도구 인자 해석, 필터, limit/offset 페이지네이션,
     LLM에게 돌려줄 summary/반환 형식.
 
+summary 끝의 [조회 구간 전체 집계]는 페이지와 무관하게 조건에 맞는 전체 이벤트 기준
+로그인 실패 횟수·실패 대상 계정 수·성공 횟수를 준다(원칙 7 Q1에 그대로 쓰도록).
+
 필드 주의: 공통 정규화 스키마는 event(ssh_accepted/ssh_failed/ssh_invalid_user/
 pam_auth_failure/sudo_command/su_failure 등 세분화된 값)·src_ip·raw_ref를 쓴다.
 도구 인자 event_type은 이 event 값과 비교한다.
@@ -22,9 +25,28 @@ pam_auth_failure/sudo_command/su_failure 등 세분화된 값)·src_ip·raw_ref�
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Dict, List
 
 from ..log_source import load_window_events, pagination
+
+# 로그인 "시도" 1회로 세는 event. 실패 1회는 보통 PAM 인증 실패·Failed password·연결 종료
+# 3줄로 남는데, LLM이 이를 1회/3회로 제각각 세서 판정이 갈렸다(2026-09-24). 그래서
+# 세는 기준을 코드로 고정하고 summary에 숫자로 준다.
+FAILED_LOGIN_EVENTS = ("ssh_failed", "ssh_invalid_user")
+SUCCESS_LOGIN_EVENTS = ("ssh_accepted",)
+
+
+def _login_stats(records: List[Dict[str, Any]]) -> str:
+    counts = Counter(r.get("event") for r in records)
+    failed = [r for r in records if r.get("event") in FAILED_LOGIN_EVENTS]
+    failed_users = sorted({r.get("user") for r in failed if r.get("user")})
+    by_event = ", ".join(f"{event} {count}건" for event, count in counts.most_common() if event)
+    return (
+        f"로그인 실패 {len(failed)}회(ssh_failed+ssh_invalid_user 기준), "
+        f"실패 대상 계정 {len(failed_users)}개({', '.join(failed_users) or '-'}), "
+        f"로그인 성공 {sum(counts[e] for e in SUCCESS_LOGIN_EVENTS)}회. event별: {by_event}"
+    )
 
 
 def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
@@ -63,7 +85,8 @@ def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 인증 이벤트 총 {total_matched}건 중 "
             f"{page_desc} {len(page)}건 반환. ({more_desc}, event/result까지 구조화, "
-            "1차 탐지팀 공통 정규화 함수 사용)"
+            "1차 탐지팀 공통 정규화 함수 사용) "
+            f"[조회 구간 전체 집계] {_login_stats(matched)}"
         )
 
     return {

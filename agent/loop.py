@@ -302,6 +302,13 @@ class InvestigationAgent:
                 contribution = 0.0
             if not raw_refs and not unknown_refs and state.raw_refs:
                 state.notes.append(f"증거 {sequence}: raw_ref 인용이 없습니다(신뢰도 기여는 반영, provenance 미완료).")
+            # [2026-09-24] 같은 로그를 다시 인용한 증거는 신뢰도에 두 번 반영하지 않는다.
+            # 종료 관문이 거부된 뒤 LLM이 이미 기록한 사실을 새 evidence로 다시 만들어
+            # 임계값을 채우는 사례가 main.py 실행에서 확인됐다(원칙: 한 관찰 사실은 한 번만).
+            cited = {ref for e in state.evidence + state.contradicting_evidence for ref in e.raw_refs}
+            if raw_refs and set(raw_refs) <= cited and contribution:
+                contribution = 0.0
+                state.notes.append(f"증거 {sequence}: 이미 인용된 raw_ref만 다시 인용해 신뢰도 기여를 제외했습니다.")
             evidence = Evidence.new(
                 sequence=sequence,
                 time=ev.get("time"),
