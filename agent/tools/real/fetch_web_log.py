@@ -32,6 +32,7 @@ EC2 main.py(2026-09-24 INC-xmlrpc-flood)에서 LLM이 records를 직접 세고 �
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Any, Dict, List
 
@@ -39,6 +40,12 @@ from ..log_source import filtered_out_hint, load_window_events, pagination
 
 TOP_N = 5
 MAX_UA_CHARS = 80
+# 원칙 9 판정 기준(investigation.yaml과 같은 값). LLM이 기준을 알고도 User-Agent·2xx를 근거로
+# 판정을 바꾸는 사례가 로컬 xmlrpc 재현(2026-09-24)에서 반복돼, SSH 실패 횟수처럼 충족 여부를
+# 코드가 계산해 summary에 적는다.
+AUTH_ENDPOINT_RE = re.compile(r"(xmlrpc\.php|wp-login\.php|/login|/signin|/user/login|/admin/login)", re.IGNORECASE)
+AUTH_POST_THRESHOLD = 10
+SCAN_PATH_THRESHOLD = 20
 
 
 def _status_class(status: Any) -> str:
@@ -62,7 +69,44 @@ def _request_stats(records: List[Dict[str, Any]]) -> str:
         f"요청 {len(records)}건(실제 기록 시각 {span}), 출발지 IP {len(src_ips)}개, "
         f"메서드별: {_top(methods)}, 상태코드 계열별: {_top(statuses)}, "
         f"서로 다른 경로 {len(paths)}개, 상위 경로: {_top(paths)}, "
-        f"User-Agent 상위: {_top(agents)}"
+        f"User-Agent 상위: {_top(agents)} "
+        f"{_principle9_text(principle9_check(records))}"
+    )
+
+
+def principle9_check(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    """원칙 9 기준 계산. 출발지 IP가 하나일 때만(src_ip로 거른 조회) 값을 낸다.
+
+    결과는 summary 문장과 함께 반환값 "rule_checks"로도 나간다. loop.py는 이 값으로
+    "기준 충족인데 FALSE_POSITIVE" 종료를 거부한다(strict_termination).
+    """
+    src_ips = {r.get("src_ip") for r in records if r.get("src_ip")}
+    if len(src_ips) != 1:
+        return None
+    paths = {r.get("path") or "-" for r in records}
+    four_xx = sum(1 for r in records if isinstance(r.get("status"), int) and r["status"] // 100 == 4)
+    auth_posts = sum(1 for r in records if str(r.get("method") or "").upper() == "POST"
+                     and AUTH_ENDPOINT_RE.search(r.get("path") or ""))
+    return {
+        "rule": "principle_9",
+        "src_ip": next(iter(src_ips)),
+        "auth_posts": auth_posts,
+        "auth_bruteforce": auth_posts >= AUTH_POST_THRESHOLD,
+        "distinct_paths": len(paths),
+        "four_xx": four_xx,
+        "path_scan": len(paths) >= SCAN_PATH_THRESHOLD and four_xx * 2 > len(records),
+    }
+
+
+def _principle9_text(check: Dict[str, Any] | None) -> str:
+    if check is None:
+        return "[원칙 9 기준] 출발지 IP가 여러 개라 계산하지 않음 — src_ip로 거른 조회에서 확인하십시오."
+    return (
+        f"[원칙 9 기준] 인증·원격호출 엔드포인트 POST {check['auth_posts']}회 → 인증 대입 기준(POST "
+        f"{AUTH_POST_THRESHOLD}회 이상) {'충족' if check['auth_bruteforce'] else '미충족'}, "
+        f"서로 다른 경로 {check['distinct_paths']}개·4xx {check['four_xx']}건 → 경로 스캔 기준(경로 "
+        f"{SCAN_PATH_THRESHOLD}개 이상이고 4xx 과반) {'충족' if check['path_scan'] else '미충족'}. "
+        "(응답 코드·User-Agent와 무관하게 이 값으로 판정)"
     )
 
 
@@ -123,5 +167,6 @@ def fetch_web_log(args: Dict[str, Any]) -> Dict[str, Any]:
         "next_offset": next_offset,
         "scanned_objects": loaded["scanned_objects"],
         "invalid_timestamps": loaded["invalid_timestamps"],
+        **({"rule_checks": [check]} if matched and (check := principle9_check(matched)) else {}),
         **({"error": loaded["error"]} if loaded["error"] else {}),
     }

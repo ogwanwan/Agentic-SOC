@@ -58,6 +58,7 @@ from .tools import ToolRegistry, ToolValidationError
 from .tools.time_utils import parse_iso
 
 NETWORK_PRECHECK_PAD = timedelta(minutes=30)
+NETWORK_PRECHECK_LIMIT = 20
 # no_more_evidence 관문에서 "아직 안 본 계층이 남았는가"를 따질 때 세는 로그 조회 도구
 LOG_TOOLS = frozenset({"fetch_web_log", "fetch_auth_log", "fetch_audit_log", "fetch_network_log",
                        "fetch_event_logs", "get_process_tree"})
@@ -85,11 +86,14 @@ def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # ip = 방향 무관(출발지·목적지 양쪽). src_ip로만 조회하면 서버→공격자 outbound(역방향 셸,
     # 유출)가 0건으로 나오고, LLM은 network를 "이미 확인함"으로 여겨 다시 보지 않았다
     # (2026-09-24 CONSISTENCY-TEST-03 비교에서 Metasploit alert 누락).
+    # limit: 사전 조회는 규모 파악용이라 대표 레코드만 받는다. 전체 규모·경보·목적지는 도구 summary의
+    # [조회 구간 전체 집계]가 페이지와 무관하게 준다. 150건을 통째로 넘기다 LLM 응답이 잘린 적이 있다.
     return {
         "host": seed["host"],
         "start_time": start_dt.strftime(fmt),
         "end_time": end_dt.strftime(fmt),
         "ip": seed["src_ip"],
+        "limit": NETWORK_PRECHECK_LIMIT,
     }
 
 # [17] seed 하나당 이 루프가 "충분하다" 판단이 나올 때까지 반복됨
@@ -202,7 +206,9 @@ class InvestigationAgent:
 
                 # 종료 관문 (_termination_rejections 참고). 2026-09-24부터 no_more_evidence에도
                 # "도구 1종류만 보고 끝내기"를 막는 조건을 적용한다.
-                reasons = self._termination_rejections(state, termination_reason)
+                reasons = self._termination_rejections(
+                    state, termination_reason, (decision.get("final_verdict") or {}).get("verdict")
+                )
                 if reasons:
                     reason_text = ", ".join(reasons)
                     state.notes.append(f"종료 관문 발동 — 종료 거부: {reason_text}")
@@ -259,7 +265,13 @@ class InvestigationAgent:
 
             # [27] 종료 조건 1,2로 안 끝났으면 = LLM이 "도구를 더 부르자"고 한 것 -> 진짜 tool 실행
             # [39] 결과 반환해서 돌아옴
+            calls_before = len(state.tool_calls)
             self._execute_tool_call(state, decision.get("tool_call") or {})
+            if len(state.tool_calls) > calls_before:
+                # 새 도구를 실행했으면 진전이 있는 것 — 연속 거부 횟수를 다시 센다. EC2 xmlrpc
+                # 사건(2026-09-24)에서 거부 → web 조회 → 거부가 "연속 2회"로 세어져 강제 종료됐다.
+                consecutive_rejections = 0
+                last_rejection_kind = None
             # [40] confidence 체크
             # confidence가 충분해도(0.85 넘어도) 여기선 그냥 메모만 하나 남기고 끝
             # break 없기 때문에, 다시 llm_client.reason() 부르러 감 루프!
@@ -275,13 +287,19 @@ class InvestigationAgent:
             self._apply_decision(state, final_decision)
             final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
 
+        # 거부·강제 종료를 거치고도 원칙 기준과 다른 판정이 남으면 판정은 바꾸지 않고 드러내 기록한다
+        if (self.strict_termination and state.rule_floors
+                and (final_verdict or {}).get("verdict") == VerdictType.FALSE_POSITIVE.value):
+            state.notes.append("⚠ 판정-원칙 불일치: " + self._rule_floor_conflict(state) + " (최종 판정은 LLM 결과 그대로 둠)")
+
         # [41] state 안에 쌓은 조사 결과를 agent/report.py의 build_investigation_result() 넘겨서 최종 JSON 생성
         result = build_investigation_result(state, termination_reason, final_verdict)
         result["statistics"]["tool_calls_max"] = self.max_calls
         # [42] 조사 결과를 반환 agent/pipeline.py로 돌아감
         return result
 
-    def _termination_rejections(self, state: AgentState, termination_reason: str) -> list:
+    def _termination_rejections(self, state: AgentState, termination_reason: str,
+                                verdict: Optional[str] = None) -> list:
         """종료 요청을 거부할 사유 목록 (비어 있으면 승인).
 
         confidence_sufficient: (a) 실제 신뢰도 < threshold, (b) 서로 다른 도구 1종류 이하,
@@ -305,6 +323,9 @@ class InvestigationAgent:
         chosen_layers = {layer for t in chosen for layer in t.queried_layers}
         reasons = []
 
+        if self.strict_termination and verdict == VerdictType.FALSE_POSITIVE.value and state.rule_floors:
+            reasons.append(self._rule_floor_conflict(state))
+
         if self.strict_termination and state.login_successes:
             registered = {spec.name for spec in self.tool_registry.list_tools()}
             audit_tools = registered & AUDIT_TOOLS
@@ -327,7 +348,8 @@ class InvestigationAgent:
                     f"실제 신뢰도({state.current_confidence:.2f})가 임계값({self.confidence_threshold}) 미달"
                 )
             if distinct <= 1:
-                reasons.append(f"서로 다른 도구 {distinct}종류만 사용됨(1개 이하)")
+                reasons.append(f"서로 다른 도구 {distinct}종류만 사용됨(1개 이하). "
+                               + self._untried_tool_hint(attempted))
             # 실패한 호출도 "조회 시도"로 인정 — network 데이터 소스 장애 시 종료 불가를 막는다
             if state.seed.get("src_ip") and "fetch_network_log" not in attempted and "network" not in queried_layers:
                 reasons.append(
@@ -340,10 +362,35 @@ class InvestigationAgent:
             if max(len(chosen_tools), len(chosen_layers)) <= 1 and remaining:
                 reasons.append(
                     f"도구를 {len(chosen_tools)}종류만 직접 확인하고 no_more_evidence로 종료하려 함. "
-                    f"아직 확인하지 않은 도구({', '.join(remaining)}) 중 판정 원칙이 요구하는 계층을 "
-                    "최소 1회 확인하십시오"
+                    + self._untried_tool_hint(attempted)
                 )
         return reasons
+
+    # 거부 사유에 붙이는 "다음에 볼 도구" 안내. 예전 문구("도구 1종류만 사용됨")만으로는 LLM이
+    # 무엇을 더 봐야 할지 몰라 같은 종료를 반복했다(EC2 xmlrpc 사건, 2026-09-24).
+    UNTRIED_TOOL_PURPOSE = {
+        "fetch_audit_log": "서버에서 실행된 명령·파일 변경(웹 서버 프로세스 www-data/apache2의 셸·다운로드 실행, "
+                           "로그인 세션의 명령) — 공격이 서버 안까지 이어졌는지 확인",
+        "fetch_auth_log": "같은 IP·계정의 로그인 시도와 성공 여부",
+        "fetch_web_log": "같은 IP의 웹 요청(경로·상태코드)",
+        "fetch_network_log": "같은 IP의 외부 통신과 Suricata 경보",
+    }
+
+    @staticmethod
+    def _rule_floor_conflict(state: AgentState) -> str:
+        check = state.rule_floors[0]
+        met = (f"인증·원격호출 엔드포인트 POST {check['auth_posts']}회(기준 10회 이상)" if check.get("auth_bruteforce")
+               else f"서로 다른 경로 {check['distinct_paths']}개·4xx {check['four_xx']}건(경로 스캔 기준)")
+        return (f"원칙 9 기준 충족({check['src_ip']}: {met})인데 FALSE_POSITIVE로 판정함. User-Agent(Jetpack 등)와 "
+                "응답 코드(2xx/5xx)는 이 판정을 바꾸지 않으므로 원칙 9에 따라 THREAT_CONFIRMED로 판정하십시오")
+
+    def _untried_tool_hint(self, attempted: set) -> str:
+        registered = {spec.name for spec in self.tool_registry.list_tools()}
+        options = [f"{name}: {purpose}" for name, purpose in self.UNTRIED_TOOL_PURPOSE.items()
+                   if name in registered and name not in attempted]
+        if not options:
+            return "등록된 로그 도구를 모두 확인했습니다."
+        return "아직 확인하지 않은 도구 중 사건과 관련된 것을 최소 1회 호출하십시오 — " + " / ".join(options)
 
     # ------------------------------------------------------------------
     # [2026-09-17 추가] LLM이 강제 종료 턴(force_terminate=True)에서도
@@ -496,8 +543,14 @@ class InvestigationAgent:
                 state.raw_ref_locations[ref] = list(dict.fromkeys(state.raw_ref_locations.get(ref, []) + sources))
             queried_layers = [layer for layer in result.get("layer_counts", {})
                               if layer not in result.get("errors", {})]
-            # 종료 관문 (e)용: seed src_ip의 로그인 성공이 결과에 있었는지 기록
+            # 종료 관문 (f)용: 도구가 계산한 원칙 기준 중 seed src_ip가 위협 기준을 충족한 것
             src_ip = state.seed.get("src_ip")
+            for check in result.get("rule_checks") or []:
+                if (src_ip and check.get("src_ip") == src_ip
+                        and (check.get("auth_bruteforce") or check.get("path_scan"))
+                        and check not in state.rule_floors):
+                    state.rule_floors.append(check)
+            # 종료 관문 (e)용: seed src_ip의 로그인 성공이 결과에 있었는지 기록
             seen = {login["raw_ref"] for login in state.login_successes}
             for record in result.get("records") or []:
                 if (isinstance(record, dict) and src_ip and record.get("event") == "ssh_accepted"

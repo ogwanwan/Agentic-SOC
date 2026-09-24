@@ -127,6 +127,9 @@ class AgentState:
     # [2026-09-24] 시스템이 LLM 대신 실행한 도구 호출(network 사전 조회)의 sequence.
     # 종료 관문의 "서로 다른 도구 2종류" 계산에서는 빼서, LLM이 스스로 2개 계층을 고르게 한다.
     system_call_sequences: List[int] = field(default_factory=list)
+    # [2026-09-24] 도구가 계산한 판정 원칙 기준 중 seed src_ip에 대해 "위협 기준 충족"인 것
+    # (예: 원칙 9 인증 대입 POST 10회 이상). 충족인데 FALSE_POSITIVE로 끝내려 하면 관문이 거부한다.
+    rule_floors: List[Dict[str, Any]] = field(default_factory=list)
 
     # [0917 희진] _to_hashable 메소드 추가
     @staticmethod
@@ -176,5 +179,7 @@ class AgentState:
         )
 
     def update_confidence(self, delta: float, stage: str, reason: str) -> None:
-        self.current_confidence = max(0.0, min(1.0, self.current_confidence + delta))
+        # round: 0.6+0.25 같은 덧셈이 0.8499999…가 되어 임계값 0.85 비교에서 "미달"로 거부되던
+        # 부동소수점 오차를 없앤다 (2026-09-24 로컬 xmlrpc 재현에서 3회 연속 거부).
+        self.current_confidence = round(max(0.0, min(1.0, self.current_confidence + delta)), 6)
         self.record_confidence(stage, reason)

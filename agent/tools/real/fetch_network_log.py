@@ -31,11 +31,36 @@ direction(internal/outbound/inbound)은 계산하지 않는다 — 호스트 IP 
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Dict, List
 
 from ..log_source import filtered_out_hint, load_window_events, pagination
 
 _PORT_FIELDS = {"src_port": "transport_src_port", "dst_port": "transport_dest_port"}
+TOP_N = 5
+
+
+def _top(counter: Counter) -> str:
+    return ", ".join(f"{key} {count}건" for key, count in counter.most_common(TOP_N)) or "-"
+
+
+def _network_stats(records: List[Dict[str, Any]]) -> str:
+    """조건에 맞는 전체 이벤트(페이지와 무관) 집계. web/auth 도구와 같은 방식으로, records를 다
+    읽지 않아도 규모·경보·목적지를 판단할 수 있게 한다. EC2 xmlrpc 사건(2026-09-24)에서 150건이
+    records로 통째로 LLM에게 가 응답이 잘린 뒤 추가했다."""
+    times = sorted(r["timestamp"] for r in records if r.get("timestamp"))
+    alerts = Counter(r.get("signature") or "-" for r in records if r.get("event_type") == "alert")
+    http = [r for r in records if r.get("event_type") == "http"]
+    statuses = Counter(f"{r['status'] // 100}xx" if isinstance(r.get("status"), int) else "-" for r in http)
+    paths = Counter(r.get("url_path") or "-" for r in http)
+    peers = Counter(f"{r.get('dest_ip')}:{r.get('dest_port')}" for r in records if r.get("dest_ip"))
+    return (
+        f"이벤트 {len(records)}건(실제 기록 시각 {times[0] if times else '-'}~{times[-1] if times else '-'}), "
+        f"종류별: {_top(Counter(r.get('event_type') or '-' for r in records))}, "
+        f"alert signature: {_top(alerts)}, "
+        f"http 상태코드 계열: {_top(statuses)}, http 상위 경로: {_top(paths)}, "
+        f"목적지 상위: {_top(peers)}"
+    )
 
 
 def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
@@ -85,7 +110,8 @@ def fetch_network_log(args: Dict[str, Any]) -> Dict[str, Any]:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 네트워크 이벤트 총 {total_matched}건 중 "
             f"{page_desc} {len(page)}건 반환. ({more_desc}, http 이벤트는 url/method/status/xff까지 포함, "
-            "1차 탐지팀 공통 정규화 함수 사용)"
+            "1차 탐지팀 공통 정규화 함수 사용) "
+            f"[조회 구간 전체 집계] {_network_stats(matched)}"
         )
 
     return {

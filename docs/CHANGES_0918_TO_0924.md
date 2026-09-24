@@ -476,7 +476,33 @@ EC2 `main.py`에서 xmlrpc 사건(103.82.158.245, POST 109건)을 조사하던 �
 | `agent/loop.py` `_safe_reason()` | LLM 응답 해석 실패(`...DecisionError`)는 1회 재시도, 또 실패하면 그 사건만 폴백 판정으로 마무리하고 다음 seed 조사를 계속. API 키·권한 같은 다른 예외는 그대로 올린다. 폴백 판정 summary에 실제 중단 사유를 적음 |
 | 테스트 | `test_unparseable_llm_response_falls_back_instead_of_crashing` 추가. 총 114개 통과. 웹셸 시나리오 2회 재확인(TC 2/2, network → web → audit) |
 
+### EC2 두 번째 실행 후 보완 (`7676a6d` 이후)
+EC2 `main.py`(INC-XMLRPC-BRUTE, 103.82.158.245, POST 150건 전부 503)는 끝까지 실행됐고 원칙 9대로
+THREAT_CONFIRMED가 나왔다. 결과를 검토하며 아래를 고쳤다.
+
+| 발견 | 수정 |
+|---|---|
+| 거부 → web 조회 → 거부가 "같은 사유 연속 2회"(숫자만 다름)로 세어져 강제 종료 | 거부 사이에 새 도구를 실행하면 연속 거부 횟수를 초기화 |
+| 거부 사유 "도구 1종류만 사용됨"이 무엇을 볼지 알려주지 않음 | (b)(d) 거부 사유에 아직 안 본 도구와 확인 목적을 적음(예: `fetch_audit_log`: 웹 서버 프로세스의 셸·다운로드 실행 확인) |
+| 같은 요청 150건이 network·web evidence로 두 번 +0.25 반영 | 원칙: 다른 계층의 같은 행위는 "교차 확인"으로 ±0.05, 새 사실이 있을 때만 기준대로 |
+| 타임라인 시작이 seed 시각(08:11)으로, 실제 첫 요청(07:52)과 다름 | 원칙: 타임라인은 도구 summary의 "실제 기록 시각"을 사용 |
+| 사전 조회가 150건 전부를 LLM에게 넘김 | 사전 조회는 `limit=20`. `fetch_network_log` summary에 전체 집계(종류별, alert signature, http 상태코드·경로, 목적지, 실제 기록 시각) 추가. 집계에 경보가 있는데 records에 없으면 `alert_only`로 재조회하도록 원칙 4에 명시 |
+
+로컬 재현(EC2 샘플의 143.105.155.9, xmlrpc POST 81건, 전부 2xx, Jetpack User-Agent)에서 LLM이 원칙 9를
+어기고 "Jetpack 정상 연동"으로 FALSE_POSITIVE를 내는 실행이 반복됐다(3/3 → 문구 보강 후에도 1/3~1/4).
+
+| 수정 | 내용 |
+|---|---|
+| 원칙 9 | xmlrpc는 로그인 실패에도 200을 주므로 2xx는 정상·성공 근거가 아님. 인증 대입 기준은 응답 코드·User-Agent와 무관. 정상 서비스로 보려면 IP 소유를 확인한 도구 결과가 필요 |
+| `fetch_web_log` | src_ip로 거른 조회면 `[원칙 9 기준]` 충족/미충족을 코드가 계산해 summary에 적고, `rule_checks`로도 반환 (SSH 실패 횟수와 같은 방식) |
+| 종료 관문 (f) | `strict_termination`에서 seed src_ip가 원칙 9 기준을 충족했는데 FALSE_POSITIVE로 끝내려 하면 거부. 끝까지 FALSE_POSITIVE면 판정은 바꾸지 않고 "⚠ 판정-원칙 불일치"를 기록 |
+| `models.update_confidence` | 0.6+0.25가 0.8499…가 되어 임계값 0.85에 "미달"로 거부되던 부동소수점 오차 제거(반올림) |
+
+결과: 로컬 xmlrpc seed 4/4 THREAT_CONFIRMED(network → web → audit/auth). 회귀 확인: 04 웹셸 2/2,
+03 브루트포스 2/2(도구 흐름 동일). 테스트 118개 통과.
+
 ### 남은 확인
-- EC2에서 `python3 main.py`를 다시 실행해 xmlrpc 사건이 network 사전 조회 → 원칙 9 기준으로 판정되는지 확인한다.
+- EC2에서 `python3 main.py`를 다시 실행해 위 보완이 실제 트래픽에서 동작하는지 확인한다.
 - 8종 각각 `--runs 8`로 0918과 같은 횟수의 재측정(무료 한도 고려해 하루에 나눠서).
+- (선택) Jetpack/Automattic 공개 IP 대역을 조회하는 도구를 두면 "진짜 Jetpack 연동"을 판정할 수 있다. 지금은 IP 소유를 확인할 방법이 없어 원칙 9는 횟수 기준만 쓴다.
 - 원칙 9의 기준값(POST 10회, 경로 20개)은 팀 판정 정책으로 정한 값이다. 실제 로그 분포를 보고 조정할 수 있다.

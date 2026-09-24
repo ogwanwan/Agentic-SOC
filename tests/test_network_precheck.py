@@ -62,6 +62,7 @@ def test_precheck_args_pad_seed_window():
         "start_time": "2026-09-24T04:38:15Z",
         "end_time": "2026-09-24T05:43:42Z",
         "ip": "129.222.213.124",
+        "limit": 20,
     }
     point = {"host": "h", "src_ip": "1.2.3.4", "trigger_time": "2026-09-24T05:00:00Z"}
     assert network_precheck_args(point)["start_time"] == "2026-09-24T04:30:00Z"
@@ -174,6 +175,50 @@ def test_unparseable_llm_response_falls_back_instead_of_crashing():
         InvestigationAgent(BadKeyLLM(), build_default_registry(handlers=MOCK_HANDLERS)).run(SEED)
 
 
+def test_rejection_count_resets_after_new_tool_and_hint_names_tools():
+    """거부 → 새 도구 → 거부는 '연속'이 아니다(EC2 xmlrpc 사건). 거부 사유에는 볼 도구를 적어준다."""
+    llm = RecordingLLM([_terminate("confidence_sufficient", 0.95), _call("fetch_web_log"),
+                        _terminate("confidence_sufficient", 0.95), _call("fetch_audit_log"),
+                        _terminate("confidence_sufficient", 0.95)])
+    seed = {**SEED, "confidence_initial": 0.95}
+    result = InvestigationAgent(llm, build_default_registry(handlers=MOCK_HANDLERS),
+                                network_precheck=True, strict_termination=True).run(seed)
+    notes = result["investigation_notes"]
+    assert not any("강제 종료 턴으로 전환" in n for n in notes)
+    assert [t["tool_name"] for t in result["tools_called"]] == ["fetch_network_log", "fetch_web_log", "fetch_audit_log"]
+    assert any("fetch_audit_log: 서버에서 실행된 명령" in n for n in notes if "종료 관문" in n)
+    assert result["statistics"]["termination_reason"] == "confidence_sufficient"
+
+
+def test_network_summary_has_aggregate(tmp_path, monkeypatch):
+    import json as _json
+
+    from agent.tools.real.fetch_network_log import fetch_network_log
+
+    for key in [*LOCAL_PATH_ENV.values(), "LOG_LOCAL_HOST"]:
+        monkeypatch.delenv(key, raising=False)
+    rows = [{"timestamp": f"2026-09-24T05:08:{10 + i:02d}.000000+0000", "event_type": "http",
+             "src_ip": "129.222.213.124", "dest_ip": "10.0.7.236", "src_port": 40000 + i, "dest_port": 443,
+             "proto": "TCP", "http": {"url": "/xmlrpc.php", "http_method": "POST", "status": 503}}
+            for i in range(30)]
+    rows.append({"timestamp": "2026-09-24T05:09:00.000000+0000", "event_type": "alert",
+                 "src_ip": "129.222.213.124", "dest_ip": "10.0.7.236", "src_port": 41000, "dest_port": 443,
+                 "proto": "TCP", "alert": {"signature": "ET SCAN xmlrpc flood", "severity": 2}})
+    path = tmp_path / "eve.json"
+    path.write_text("\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    monkeypatch.setenv("NETWORK_LOG_LOCAL_PATH", str(path))
+
+    result = fetch_network_log({"host": "web-01", "start_time": "2026-09-24T05:00:00Z",
+                                "end_time": "2026-09-24T06:00:00Z", "ip": "129.222.213.124", "limit": 20})
+    summary = result["summary"]
+    assert result["count"] == 20 and result["total_matched"] == 31 and result["has_more"]
+    assert "이벤트 31건" in summary
+    assert "종류별: http 30건, alert 1건" in summary
+    assert "alert signature: ET SCAN xmlrpc flood 1건" in summary
+    assert "http 상태코드 계열: 5xx 30건" in summary
+    assert "/xmlrpc.php 30건" in summary
+
+
 def test_no_more_evidence_allowed_when_no_other_tool_registered():
     from agent.tools import ToolRegistry, ToolSpec
 
@@ -263,3 +308,40 @@ def test_web_summary_has_request_aggregate(tmp_path, monkeypatch):
     assert "상태코드 계열별: 5xx 12건, 4xx 1건" in summary
     assert "서로 다른 경로 2개" in summary
     assert "/xmlrpc.php 12건" in summary
+    assert "인증·원격호출 엔드포인트 POST 12회 → 인증 대입 기준(POST 10회 이상) 충족" in summary
+    assert "경로 스캔 기준(경로 20개 이상이고 4xx 과반) 미충족" in summary
+
+
+def test_false_positive_rejected_when_principle9_met():
+    """원칙 9 인증 대입 기준 충족인데 FALSE_POSITIVE로 끝내려 하면 한 번 거부하고 다시 판정시킨다."""
+    def web_with_rule(_args):
+        return {"count": 1, "summary": "POST 81건", "records": [],
+                "rule_checks": [{"rule": "principle_9", "src_ip": "129.222.213.124", "auth_posts": 81,
+                                 "auth_bruteforce": True, "distinct_paths": 1, "four_xx": 0, "path_scan": False}]}
+
+    def fp(conf=0.85):
+        d = _terminate("confidence_sufficient", conf)
+        d["final_verdict"] = {**d["final_verdict"], "verdict": "FALSE_POSITIVE"}
+        return d
+
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_web_log": web_with_rule})
+    seed = {**SEED, "confidence_initial": 0.9}
+    llm = RecordingLLM([_call("fetch_web_log"), _call("fetch_audit_log"), fp(), _terminate("confidence_sufficient", 0.9)])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(seed)
+    assert result["final_verdict"]["verdict"] == "THREAT_CONFIRMED"
+    assert sum("원칙 9 기준 충족" in n for n in result["investigation_notes"]) == 1
+
+    # 끝까지 FALSE_POSITIVE면 판정은 그대로 두고 불일치 경고를 남긴다
+    llm = RecordingLLM([_call("fetch_web_log"), _call("fetch_audit_log"), fp()])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(seed)
+    assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
+    assert any(n.startswith("⚠ 판정-원칙 불일치") for n in result["investigation_notes"])
+
+
+def test_confidence_sum_has_no_float_drift():
+    from agent.models import AgentState
+
+    state = AgentState(incident_id="X", seed={})
+    state.current_confidence = 0.6
+    state.update_confidence(0.25, "s", "r")
+    assert state.current_confidence == 0.85 and not state.current_confidence < 0.85
