@@ -206,6 +206,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 | 기준과 판정의 일치 검사 | `agent/loop.py` `_verdict_conflicts()`, `_rule_determined_verdict()` |
 
 **원칙을 바꿀 때는 세 곳을 함께 맞춰야 한다** — yaml의 문장, 도구의 숫자 계산, loop의 일치 검사. 한 곳만 바꾸면 관문이 LLM 판정을 계속 거부한다.
+원칙별 내용과 생긴 이유는 [PROMPT_GUIDE.md](PROMPT_GUIDE.md).
 
 ---
 
