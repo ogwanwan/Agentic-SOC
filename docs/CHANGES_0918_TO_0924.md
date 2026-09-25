@@ -605,7 +605,8 @@ rm -r sample_logs && cp -r sample_logs_orig sample_logs                  # 원�
 
 ## 18. EC2 실행 결과 반영: SSH 판정 기준 코드화와 계층별 조회 구간 (0925)
 
-커밋: `8069134`(원칙 7·audit·IP 필터 안내) → `fd92cf8`(계층별 조회 구간).
+커밋: `8069134`(원칙 7·audit·IP 필터 안내) → `fd92cf8`(계층별 조회 구간) → `7e7adab`(SSH 탐침 규칙) →
+`d99b664`(기준과 같은 판정의 신뢰도 면제, 강제 종료 판정 유지).
 
 ### 증상 (EC2 `main.py`, INC-SSH-BRUTE)
 92.118.39.50 → root SSH 로그인 실패 2회, 성공 0회. auth 도구 집계는 정확했다("실패 2회, 계정 1개, 성공 0회").
@@ -641,3 +642,20 @@ rm -r sample_logs && cp -r sample_logs_orig sample_logs                  # 원�
 
 EC2 1회차는 network 사전 조회와 auth만 보고 끝났다(같은 사유 연속 거부 후 강제 종료로 추정). 로그인 성공이 없는
 사건이라 판정에는 영향이 없다.
+
+### 추가: SSH 접속 탐침 사건 (`7e7adab`, `d99b664`)
+EC2 `main.py`의 다음 사건 INC-SSH-PROBE-01(45.239.159.94)은 auth 2건이 모두 `ssh_probe`(계정 없이 끊긴 연결)였다.
+원칙 7에 "실패 0회" 규칙이 없어 INCONCLUSIVE(0.55)로 판정됐다.
+
+| 발견 | 수정 |
+|---|---|
+| 실패 0회·접속 흔적만 있는 경우 규칙 없음 → INCONCLUSIVE | `principle7_check()`: 실패 0회이고 `ssh_probe`/`ssh_disconnect`만 1~4건이면 "스캐너 탐침, 다른 공격 정황 없으면 FALSE_POSITIVE". 탐침 5건 이상이거나 `ssh_auth_fail_close`/`ssh_max_auth`가 있으면 기준을 내지 않는다 — `authenticating user root ... [preauth]`는 키 전용 서버에서 실제 인증 시도라 탐침으로 세면 무차별 대입을 놓친다. 관문은 원칙 7 기준이 계산된 사건의 INCONCLUSIVE도 거부(원칙 7: 실패만 있는 경우 INCONCLUSIVE 금지). 원칙 7 프롬프트에 탐침 규칙 추가 |
+| 수정 후 3회 중 1회 THREAT_CONFIRMED: LLM이 FALSE_POSITIVE로 5회 종료 요청했으나 신뢰도 0.80 < 0.85로 모두 거부 → 도구를 더 부르다(5회) 강제 종료 턴에서 판정을 새로 쓰며 뒤집힘 | `_rule_determined_verdict()`: 도구 기준으로 판정이 정해지는 경우(로그 미확보 → INCONCLUSIVE, 원칙 9·웹 서버 계정 의심 명령 → TC, 원칙 7만 있으면 무차별 대입 TC/단발성·탐침 FP) LLM 판정이 그와 같으면 신뢰도 미달로는 거부하지 않음(도구 수·network 조건은 유지). `_settle_forced_verdict()`: 강제 종료 턴 판정이 원칙과 어긋나면 그 전에 LLM이 낸 원칙에 맞는 판정을 사용(코드가 판정을 새로 만들지는 않음) |
+
+| 확인 (EC2, 각 3회) | 판정 | 도구 호출 |
+|---|---|---|
+| 수정 전 (`main.py` 1회) | INCONCLUSIVE | 3 |
+| `7e7adab` (탐침 규칙) | FALSE_POSITIVE 2, THREAT_CONFIRMED 1 | 3~5 |
+| `d99b664` (신뢰도 면제·강제 종료 판정 유지) | **FALSE_POSITIVE 3/3**, 신뢰도 0.80~0.85 | 3 |
+
+테스트: 탐침 계산·예외, INCONCLUSIVE 거부, 기준과 같은 판정의 신뢰도 면제, 강제 종료 판정 유지. 총 127개 통과.
