@@ -18,6 +18,7 @@ _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from correlate.registry import LINKERS
 from correlate.guards import apply_guards
 from correlate.incident import build_incident
+from correlate.dedup import dedup_incidents
 
 
 def _load_linkers():
@@ -59,13 +60,14 @@ def _clusters(nodes, edges):
 MAX_INCIDENT_MEMBERS = 500
 
 
-def correlate(events, seeds=None, require_seed=False, max_members=MAX_INCIDENT_MEMBERS):
+def correlate(events, seeds=None, require_seed=False, max_members=MAX_INCIDENT_MEMBERS, dedup=True):
     """이벤트 + seed → Incident 리스트.
 
     require_seed=True 면 탐지 seed 가 하나도 안 걸린 클러스터(= 계보만으로 뭉친 blob)는
     사건으로 내보내지 않는다. 탐지 근거 없는 프로세스 트리가 사건 목록을 채우는 것을 막는다.
     max_members: 이 수를 넘는 거대 사건은 멤버 목록을 잘라 실어 보낸다(트리아지 입력 폭주 방지).
     None 이면 자르지 않는다.
+    dedup=True 면 같은 (entity, 사유) 로 쪼개진 파편 사건을 한 건으로 병합한다(스캐너 반복요청 폭주 방지).
     """
     seeds = list(seeds or [])
     _load_linkers()
@@ -115,6 +117,10 @@ def correlate(events, seeds=None, require_seed=False, max_members=MAX_INCIDENT_M
         cev = [by_ref[r] for r in s.get("evidence_refs", []) if r in by_ref]
         if cev:
             incidents.append(build_incident(cev, [], [s], max_members=max_members))
+
+    # 5) 파편 병합(같은 entity+사유) — 스캐너 반복요청이 수백 사건으로 쪼개지는 것 방지
+    if dedup:
+        incidents = dedup_incidents(incidents, max_members=max_members)
 
     incidents.sort(key=lambda i: i["window"][0] or "")
     return incidents
