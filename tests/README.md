@@ -8,7 +8,7 @@
 가상환경을 활성화한 뒤:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt
 python -m pytest -q
 python -m scripts.demo_abcd
 ```

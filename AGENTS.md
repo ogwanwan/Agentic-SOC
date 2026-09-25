@@ -58,7 +58,7 @@
 프로젝트 루트에서 Python 3.10 이상을 사용한다. 가상환경의 Python으로 실행한다.
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt
 python -m pytest -q
 python -m scripts.demo_abcd
 ```

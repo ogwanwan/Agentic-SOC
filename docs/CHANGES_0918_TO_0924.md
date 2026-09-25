@@ -563,7 +563,7 @@ seed에 `src_ip`가 있으면 사건 종류와 관계없이 첫 LLM 턴 전에 �
 python -m tests.test_consistency --runs 4 --seed-json seedMISSING.json   # 기대: INCONCLUSIVE 4/4
 python scratchpad/hidden_webshell.py 200                                 # audit 200건 뒤에 웹셸 실행 추가
 python -m tests.test_consistency --runs 4 --seed-json seedHIDDEN.json    # 기대: THREAT_CONFIRMED + HIGH 이상 4/4
-git checkout HEAD -- sample_logs
+rm -r sample_logs && cp -r sample_logs_orig sample_logs                  # 원복 (아래 "저장소 정리" 참고)
 ```
 
 ### 남은 과제 (팀 결정 포함)
@@ -575,3 +575,15 @@ git checkout HEAD -- sample_logs
 | Jetpack/Automattic IP 대역 확인 도구 | 선택 (16장 참고) |
 | 8종 seed `--runs 8` 재측정 | 무료 한도를 고려해 나눠서 |
 | `seed_generation`의 unknown refs ValueError, README 정리 | 이후 |
+
+### 저장소 정리 (0925)
+| 대상 | 처리 | 이유 |
+|---|---|---|
+| `sample_logs/` | git 추적 중단, `.gitignore` 추가. 로컬 파일은 유지 | EC2 실제 트래픽(외부 IP, 운영 도메인)이 들어 있음 — `AGENTS.md`의 "실제 운영 로그 커밋 금지". 과거 커밋 이력에는 남아 있다(이력 재작성은 하지 않음) |
+| `consistency_results.json` | 삭제, `.gitignore` 추가 | 0918 측정 결과 파일. 코드가 읽지 않고, `test_consistency`의 기본 출력이라 다시 생겨도 올라가지 않게 함 |
+| `requirements-dev.txt` | `requirements.txt`에 합치고 삭제 (`pytest` 한 줄 추가) | EC2에서 `pip install -r requirements.txt` 한 번으로 테스트까지 돌릴 수 있게 함 |
+
+`sample_logs`를 git에서 빼면서 실험 후 원복은 `git checkout HEAD -- sample_logs` 대신 로컬 백업
+`sample_logs_orig/`(역시 `.gitignore`)를 쓴다. 절차는 `scenarios/README.md`에 있다.
+`tests/`, `pytest.ini`, `examples/`, `scenarios/`, `scripts/`는 EC2 검증에 쓰므로 1차 탐지·ATT&CK 매핑과
+통합이 끝난 뒤 최종 정리 때 삭제한다.

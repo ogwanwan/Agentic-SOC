@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 results/
 .pytest_cache/
+# 로컬 개발용 로그 (EC2 실제 트래픽 포함 — 저장소에 올리지 않음)
+sample_logs/
+sample_logs_orig/
+# tests.test_consistency 기본 출력
+consistency_results.json

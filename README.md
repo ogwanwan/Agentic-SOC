@@ -8,7 +8,7 @@
 
 - [A·B·C·D 통합 테스트와 쉬운 설명](docs/ABCD_TEST_GUIDE.md) — 팀원용 실행 순서, 예상 결과, 파일별 역할
 - [C·D 사용법과 병합 내용](docs/C_D_IMPLEMENTATION.md)
-- 오프라인 검증: `pip install -r requirements-dev.txt` → `python -m pytest -q`
+- 오프라인 검증: `pip install -r requirements.txt` → `python -m pytest -q`
 - 전체 파이프라인 데모: `python -m scripts.demo_abcd` → `results/abcd_demo.json`
 - 사건 조회 데모: `python -m scripts.demo_event_window` → `results/cd_demo.json`
 
@@ -166,7 +166,7 @@ RAW_LOG_WINDOW_MINUTES=10
 
 ```bash
 # 단위/통합 테스트 (API 키/AWS 불필요)
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt
 python -m pytest -q                 # 전체 오프라인 테스트
 python -m scripts.demo_abcd         # 실제 도구를 연결한 A/B/C/D 데모
 python -m tests.test_normalizer_parity   # 완료 기준(1차 탐지와 동일한 정규화 결과) 직접 검증

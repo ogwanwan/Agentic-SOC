@@ -19,7 +19,7 @@ Agentic-SOC: LLM 기반 SOC(보안관제) 파이프라인을 만드는 팀 프�
 
 ```bash
 # 오프라인 검증 — API 키/AWS/.env 불필요
-pip install -r requirements-dev.txt
+pip install -r requirements.txt                      # 테스트용 pytest 포함 (requirements-dev.txt는 합쳐짐)
 python -m pytest -q                                 # 전체 오프라인 테스트
 python -m pytest tests/test_loop.py::test_name       # 단일 테스트
 python -m pytest -q tests/test_network_precheck.py   # 사전 조회·종료 관문·도구 집계
@@ -29,7 +29,6 @@ python -m scripts.verify_all_tools                   # 조사 도구 + raw_log_i
 python -m tests.test_normalizer_parity                # 1차 탐지팀 정규화 결과와 동일성 검증
 
 # 실제 LLM 실행
-pip install -r requirements.txt
 cp .env.example .env                                  # 키/경로 채워넣기 (Windows: Copy-Item .env.example .env)
 python main.py                                         # 기본 Gemini. LLM_PROVIDER=anthropic 로 Claude 전환
 python -m tests.test_consistency --runs 8              # 실제 API로 판정 재현성 반복 측정 (수동, 과금 발생)
@@ -115,7 +114,7 @@ evidence의 `raw_refs`(예: `auth.log:15`, `s3://bucket/key:20`)는 `references(
 `GeminiClient`(기본값, 무료 티어)와 `ClaudeClient`는 동일 인터페이스(`.reason(state, tool_registry, ...)`, `.complete_json(...)`)라 `LLM_PROVIDER` 환경변수로 교체할 수 있다. Gemini는 `max_output_tokens=8192`이고, 503과 연결 오류(`OSError`, `httpx.TransportError`)를 5·10·15초 간격으로 재시도한다. 무료 티어의 일일 요청 제한(429)과 간헐적 503은 코드 문제가 아니다 — 반복 측정(`test_consistency`)은 한도를 고려해 나눠 돌린다.
 
 ### 로컬 개발용 우회
-`.env`에 `<계층>_LOG_LOCAL_PATH`를 지정하면 S3 대신 `sample_logs/*.log`를 읽는다(값을 지우면 S3 모드). 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다 — **`sample_logs/`는 git으로 추적되므로 실험 후 반드시 `git checkout HEAD -- sample_logs`로 원복**해야 한다.
+`.env`에 `<계층>_LOG_LOCAL_PATH`를 지정하면 S3 대신 `sample_logs/*.log`를 읽는다(값을 지우면 S3 모드). 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다. `sample_logs/`는 EC2 실제 트래픽이 들어 있어 **git으로 추적하지 않는다**(`.gitignore`) — 실험 전에 `sample_logs_orig/`로 백업해 두고 실험 후 그 백업으로 원복한다(`scenarios/README.md`). 새로 clone한 저장소에는 샘플이 없으니 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받는다.
 
 ### 건드리지 않는 영역
 - `primary_detection/normalizer/` — 1차 탐지팀 산출물 (위 참조)

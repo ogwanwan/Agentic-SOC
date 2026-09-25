@@ -67,7 +67,7 @@ def save_investigation_result(result: dict, output_dir: str = RESULTS_DIR) -> st
 
 def main() -> None:
     # S3 파티션의 host= 값과 반드시 일치해야 함 (예: "library-web-01"이 아니라 "web-01")
-    host = os.environ.get("HOST", "web-01")
+    host = os.environ.get("HOST") or "web-01"  # .env에 HOST= 로 비워 둔 경우도 기본값 사용
     minutes = int(os.environ.get("RAW_LOG_WINDOW_MINUTES", "10"))
 
     # resolve_ip_geo는 실제 구현은 있지만 지금 우선순위가 아니라서 제외해둔다.

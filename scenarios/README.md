@@ -13,16 +13,17 @@
 
 ## 사용 흐름
 
-1. `sample_logs`가 깨끗한 원본 상태인지 확인 (`git status`에 아무것도 안 잡혀야 함)
+1. (처음 한 번) 깨끗한 원본을 백업: `cp -r sample_logs sample_logs_orig`
 2. 원하는 시나리오 스크립트 실행 → `sample_logs/*.log`에 로그 추가 + 콘솔에 `SEED` 딕셔너리 출력
-3. 출력된 `SEED`를 프로젝트 루트의 `tests/test_consistency.py`에 복사해 붙여넣기 (**`incident_id`가
-   의도한 시나리오와 일치하는지 꼭 확인** — 다른 시나리오로 착각하고 돌린 사고가 있었음)
-4. `python -m tests.test_consistency --runs 8`로 재현성 검증
-5. 검증 끝나면 반드시 원본으로 복구: `git checkout HEAD -- sample_logs`
+3. 출력된 `SEED`를 JSON 파일로 저장해 `--seed-json`으로 넘기거나 `tests/test_consistency.py`에 붙여넣기
+   (**`incident_id`가 의도한 시나리오와 일치하는지 꼭 확인** — 다른 시나리오로 착각하고 돌린 사고가 있었음)
+4. `python -m tests.test_consistency --runs 8 --seed-json seed.json`으로 재현성 검증
+5. 검증 끝나면 반드시 원본으로 복구: `rm -r sample_logs && cp -r sample_logs_orig sample_logs`
+   (Windows PowerShell: `Remove-Item -Recurse sample_logs; Copy-Item -Recurse sample_logs_orig sample_logs`)
 
-**`sample_logs`는 git으로 추적되는 파일**이라, 실험 전후로 항상 `git status`로 상태를
-확인하고 `git checkout HEAD -- sample_logs`로 복구하는 것을 권장합니다 (zip 백업보다
-빠르고 확실합니다).
+[2026-09-25] `sample_logs/`는 EC2 실제 트래픽이 들어 있어 git 추적에서 뺐습니다(`.gitignore`).
+이제 `git checkout HEAD -- sample_logs`로는 복구되지 않으니 위의 `sample_logs_orig` 백업을 쓰세요.
+샘플이 없으면 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받으세요.
 
 ## 시나리오 목록
 
