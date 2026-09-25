@@ -25,6 +25,8 @@ from detect.engine import detect  # noqa: E402
 from detect.loader import load_rules  # noqa: E402
 from detect.suricata_seed import build_suricata_seeds  # noqa: E402
 from tools.normalize import normalize_all  # noqa: E402
+from triage.llm_review import llm_review  # noqa: E402
+from triage.triage import triage  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 
@@ -42,6 +44,8 @@ def main() -> int:
     ap.add_argument("--no-require-seed", action="store_true",
                     help="탐지 seed 없는 클러스터도 사건으로 낸다(기본: 안 냄)")
     ap.add_argument("--out-incidents", help="Incident JSONL 저장 경로")
+    ap.add_argument("--min-priority", choices=["P1", "P2", "P3", "P4"],
+                    help="이 우선순위 이상만 출력/저장(예: P2). 미지정 시 전부")
     ap.add_argument("--show", type=int, default=10, help="콘솔에 보여줄 다계층 사건 수")
     args = ap.parse_args()
 
@@ -65,6 +69,23 @@ def main() -> int:
     dist = Counter(len(set(i["layers"])) for i in incidents)
     multi = [i for i in incidents if len(set(i["layers"])) >= 2]
     print(f"[correlate] Incident {len(incidents)}건, 계층수 분포={dict(sorted(dist.items()))}, 다계층(2+)={len(multi)}건")
+
+    # ④ 트리아지 — 결정론 점수 게이트(정렬·라우팅만, 판단 아님)
+    incidents = triage(incidents)
+    pdist = Counter(i["priority"] for i in incidents)
+    pretty = {p: pdist[p] for p in ("P1", "P2", "P3", "P4") if pdist.get(p)}
+    print(f"[triage] priority 분포={pretty}")
+
+    # ④-b 트리아지 뒷단(LLM): 상위(P1~P2) 사건을 경량 LLM(Claude Haiku)으로 재검토 —
+    # 점수/정렬 불변, llm_investigate·llm_reason 만 부착. 키 없으면 결정론 결과만 사용(안 죽음).
+    incidents = llm_review(incidents)
+    reviewed = sum(1 for i in incidents if "llm_reason" in i)
+    print(f"[triage] LLM 재검토 {reviewed}건(P1~P2 상위)")
+
+    if args.min_priority:
+        # P1 이 최상위 → 'P1' <= 'P2' 문자열 비교로 지정 이상만 유지
+        incidents = [i for i in incidents if i["priority"] <= args.min_priority]
+        print(f"[triage] --min-priority {args.min_priority} → {len(incidents)}건 남김")
 
     for i in sorted(multi, key=lambda x: -len(x["members"]))[: args.show]:
         joins = sorted({e["join"] for e in i["join_path"]})
