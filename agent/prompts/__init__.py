@@ -48,8 +48,47 @@ def auth_lookback_window(seed: Dict[str, Any]) -> Optional[list]:
         at = parse_iso(anchor).astimezone(timezone.utc)
     except (TypeError, ValueError):
         return None
-    fmt = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
-    return [fmt(at - AUTH_LOOKBACK_BEFORE), fmt(at + AUTH_LOOKBACK_AFTER)]
+    return [_fmt(at - AUTH_LOOKBACK_BEFORE), _fmt(at + AUTH_LOOKBACK_AFTER)]
+
+
+# 계층별 첫 조회 구간 (seed 사건 구간 기준, 앞/뒤). auth만 정하고 나머지를 LLM에게 맡겼더니 같은 seed에서도
+# audit을 24시간 무필터로 보거나(EC2 2026-09-25, 3728건) web을 seed 구간 11초만 보는 등 실행마다 달랐다.
+# web: 같은 IP의 앞뒤 요청까지 봐야 반복 횟수(원칙 9)가 사건 경계에 덜 흔들린다.
+# audit: 공격 뒤 후속 행위(명령 실행)를 보려고 뒤쪽을 더 넓힌다.
+# network: 시스템 사전 조회(loop.NETWORK_PRECHECK_PAD)와 같은 구간.
+LAYER_WINDOW_PADS = {
+    "web": (timedelta(hours=1), timedelta(hours=1)),
+    "audit": (timedelta(minutes=30), timedelta(hours=1)),
+    "network": (timedelta(minutes=30), timedelta(minutes=30)),
+}
+
+
+def _fmt(dt) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def layer_query_windows(seed: Dict[str, Any]) -> Optional[Dict[str, list]]:
+    """seed 사건 구간(window, 없으면 trigger_time 한 점)으로 계층별 첫 조회 구간을 계산한다.
+
+    auth는 원칙 7 Q1용 24시간 구간(auth_lookback_window)이고, src_ip가 있을 때만 준다.
+    """
+    window = seed.get("window") or []
+    anchor = seed.get("trigger_time") or seed.get("timestamp")
+    start = window[0] if len(window) == 2 else anchor
+    end = window[1] if len(window) == 2 else anchor
+    if not start or not end:
+        return None
+    try:
+        start_dt = parse_iso(start).astimezone(timezone.utc)
+        end_dt = parse_iso(end).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    windows = {layer: [_fmt(start_dt - before), _fmt(end_dt + after)]
+               for layer, (before, after) in LAYER_WINDOW_PADS.items()}
+    lookback = auth_lookback_window(seed)
+    if lookback:
+        windows["auth"] = lookback
+    return windows
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -161,6 +200,9 @@ def build_user_prompt(
     lookback = auth_lookback_window(state.seed)
     if lookback:
         payload["auth_lookback_window"] = lookback
+    windows = layer_query_windows(state.seed)
+    if windows:
+        payload["query_windows"] = windows
 
     instruction = (
         "다음은 현재까지의 조사 상태입니다. 이를 바탕으로 시스템 프롬프트의 JSON 스키마에 "

@@ -15,6 +15,23 @@ def test_lookback_window_from_seed():
     assert auth_lookback_window({"src_ip": "192.0.2.10", "trigger_time": "bad"}) is None
 
 
+def test_layer_query_windows_from_seed_window():
+    """계층별 첫 조회 구간은 seed 사건 구간 기준으로 코드가 계산한다 (2026-09-25)."""
+    from agent.prompts import layer_query_windows
+
+    seed = {"src_ip": "92.118.39.50", "trigger_time": "2026-09-25T03:39:25Z",
+            "window": ["2026-09-25T03:39:25Z", "2026-09-25T03:39:27Z"]}
+    windows = layer_query_windows(seed)
+    assert windows["web"] == ["2026-09-25T02:39:25Z", "2026-09-25T04:39:27Z"]
+    assert windows["audit"] == ["2026-09-25T03:09:25Z", "2026-09-25T04:39:27Z"]
+    assert windows["network"] == ["2026-09-25T03:09:25Z", "2026-09-25T04:09:27Z"]  # 사전 조회와 같은 구간
+    assert windows["auth"] == ["2026-09-24T03:39:25Z", "2026-09-25T04:39:25Z"]
+    # src_ip 없는 호스트 내부 사건: auth 24시간 구간은 주지 않고 나머지는 준다
+    internal = layer_query_windows({"trigger_time": "2026-09-25T03:39:25Z"})
+    assert "auth" not in internal and internal["audit"] == ["2026-09-25T03:09:25Z", "2026-09-25T04:39:25Z"]
+    assert layer_query_windows({"trigger_time": "bad"}) is None
+
+
 def test_summary_counts_one_attempt_once(tmp_path, monkeypatch):
     for key in [*LOCAL_PATH_ENV.values(), "LOG_LOCAL_HOST"]:
         monkeypatch.delenv(key, raising=False)
