@@ -554,10 +554,20 @@ seed에 `src_ip`가 있으면 사건 종류와 관계없이 첫 LLM 턴 전에 �
 | `main.py` | 원본 JSON 전체를 콘솔에 출력하지 않는다(팀원 의견: `results/`에 저장됨). 각 보고서 아래에 `[참고 자료] 원본 조사 결과 JSON: results/...json`, 끝에 저장 파일 목록을 표시 |
 | 테스트 | `tests/test_network_precheck.py`에 데이터 공백 관문, audit 전체 집계·관문 테스트 추가. 총 120개 통과 |
 
-### 수정 후 재검증: 미완료
-두 seed(MISSING 4회, HIDDEN 4회)를 다시 돌리던 중 Gemini 무료 한도(429)에 걸려 중단했다. 오프라인 테스트로 관문과 집계
-동작만 확인한 상태다. 한도가 풀리면 아래로 다시 확인한다(`sample_logs` 원복 필수). seed JSON과
-`hidden_webshell.py`는 저장소에 넣지 않은 로컬 실험 파일이다(seed 내용은 위 표의 IP·구간과 같다).
+### 수정 후 재검증 (0925, `fd92cf8` 기준)
+0924에는 Gemini 무료 한도(429)로 중단했고, 0925에 18장 수정까지 반영된 코드로 다시 돌렸다.
+
+| seed | 수정 전 | 수정 후 (각 4회) |
+|---|---|---|
+| INC-XMLRPC-MISSING (로그 없는 날짜) | FP 3/4, INCONCLUSIVE 1/4 | **INCONCLUSIVE 4/4**, 신뢰도 0.45~0.50. 관문 거부 없이 LLM이 "로그 기록 자체가 없음" 안내를 따름 |
+| INC-XMLRPC-HIDDEN (audit 200건 뒤 www-data `curl \| sh`) | 1/3이 MEDIUM | **THREAT_CONFIRMED 4/4, CRITICAL 3·HIGH 1**, 신뢰도 0.85~0.95 |
+
+숨은 웹셸 4회차는 audit을 필터 없이 `limit=50`으로 조회해 받은 레코드에 www-data 명령이 없었지만, summary의
+`[후속 침해 확인]` 전체 집계로 웹셸 실행을 보고 HIGH로 판정했다. 나머지 3회는 `user=www-data`로 좁혀 2건을 직접 확인했다.
+세 도구 모두 18장의 계층별 구간 그대로 조회했다.
+
+재현 방법(`sample_logs` 원복 필수). seed JSON과 `hidden_webshell.py`는 저장소에 넣지 않은 로컬 실험 파일이다
+(seed 내용은 위 표의 IP·구간과 같다).
 
 ```bash
 python -m tests.test_consistency --runs 4 --seed-json seedMISSING.json   # 기대: INCONCLUSIVE 4/4
@@ -569,7 +579,7 @@ rm -r sample_logs && cp -r sample_logs_orig sample_logs                  # 원�
 ### 남은 과제 (팀 결정 포함)
 | 항목 | 상태 |
 |---|---|
-| 위 두 seed 재검증 | Gemini 한도 해제 후 |
+| 위 두 seed 재검증 | 0925 완료 (위 표) |
 | `/.git/config` 같은 민감 파일 탐색을 TC로 볼지 FP로 볼지 | **팀 결정 필요**. 지금은 LLM이 일관되게 TC(LOW)로 판정하지만 원칙 9 수치 기준과 다르다. 정하면 원칙 9에 "민감 파일 경로" 항목으로 명시 |
 | 타임라인 시작 시각 | 원칙으로 "실제 기록 시각"을 쓰라고 했지만 여전히 seed 시각을 쓰는 실행이 있다. 코드로 보정할지 결정 필요 |
 | Jetpack/Automattic IP 대역 확인 도구 | 선택 (16장 참고) |
@@ -587,3 +597,47 @@ rm -r sample_logs && cp -r sample_logs_orig sample_logs                  # 원�
 `sample_logs_orig/`(역시 `.gitignore`)를 쓴다. 절차는 `scenarios/README.md`에 있다.
 `tests/`, `pytest.ini`, `examples/`, `scenarios/`, `scripts/`는 EC2 검증에 쓰므로 1차 탐지·ATT&CK 매핑과
 통합이 끝난 뒤 최종 정리 때 삭제한다.
+
+`.env.example`도 EC2 운영 기준으로 정리했다. 로그 경로 기본값은 `/var/log/...`이고, 로컬 샘플 경로와
+`AUTH_LOG_YEAR`는 주석 안내로 뒀다. S3 설정(AWS 키·버킷)과 `RAW_LOG_WINDOW_MINUTES`는 쓰지 않아 맨 아래 주석으로
+옮겼다. 로그 파일 경로를 쓰면 seed 생성은 시각과 무관하게 계층별 파일 끝 `RAW_LOG_LOCAL_MAX_LINES`(50)건을 보고,
+`RAW_LOG_WINDOW_MINUTES`는 S3 모드에서만 쓰인다. `HOST`는 비워 두면 `main.py`가 `web-01`을 쓴다.
+
+## 18. EC2 실행 결과 반영: SSH 판정 기준 코드화와 계층별 조회 구간 (0925)
+
+커밋: `8069134`(원칙 7·audit·IP 필터 안내) → `fd92cf8`(계층별 조회 구간).
+
+### 증상 (EC2 `main.py`, INC-SSH-BRUTE)
+92.118.39.50 → root SSH 로그인 실패 2회, 성공 0회. auth 도구 집계는 정확했다("실패 2회, 계정 1개, 성공 0회").
+1. **판정 오류**: 원칙 7(실패 1~4회·계정 1개 → FALSE_POSITIVE)을 어기고 THREAT_CONFIRMED(LOW)로 판정했다.
+   종료 관문이 신뢰도 0.78로 한 번 거부하자, audit을 조회해 "침해 없음"을 위협 쪽 증거로 쌓아 0.88을 채웠다.
+   원칙 9(웹)는 코드가 기준을 계산하지만 원칙 7은 프롬프트에만 의존하고 있었다.
+2. **audit 의심 명령 과다**: LLM이 audit을 24시간 무필터로 조회(3728건, 결과 JSON 114KB)했고,
+   `[후속 침해 확인]`에 "의심 명령 245건"이 나왔다. 대부분 cron의 `sh -c`와 EC2 Instance Connect
+   (`sshd -o AuthorizedKeysCommand .../eic_run_authorized_keys`, `authorized_keys` 패턴에 걸림)였다.
+3. **network 사전 조회 안내 혼동**: IP로 거른 0건에 "필터를 빼고 다시 조회하라"는 안내가 붙어,
+   LLM이 notes에 "네트워크 재확인 고려"를 남겼다.
+4. **조회 구간이 실행마다 다름**: auth(24시간)만 코드가 정하고 나머지는 LLM이 정했다. audit 24시간 무필터,
+   web은 seed 구간(수 초~수십 분)만 보는 식이었다.
+
+### 수정
+| 파일 | 내용 |
+|---|---|
+| `fetch_auth_log.py` | `principle7_check()`: IP 하나로 거른 조회에서 로그인 성공이 없으면 원칙 7 기준(실패 5회 이상 또는 계정 2개 이상)을 계산해 summary `[원칙 7 기준]`과 `rule_checks`로 반환. 성공이 있으면 Q2/Q3 판단이 필요해 내지 않는다 |
+| `loop.py` `_verdict_conflicts()` | 원칙 7 기준 충족인데 FALSE_POSITIVE, 또는 미충족(단발성)이고 다른 위협 기준(원칙 9, 웹 서버 계정 의심 명령)도 없는데 THREAT_CONFIRMED면 종료 거부. 원칙 7은 충족·미충족을 모두 `state.rule_floors`에 기록 |
+| `fetch_audit_log.py` | 전체 의심 명령에서 `sh -c`를 빼고 EC2 Instance Connect를 제외. 웹 서버 계정은 셸 실행 자체를 의심으로 센다(`sh -c id`도 포함). `authorized_keys` 백도어 추가는 계속 잡는다 |
+| `log_source.filtered_out_hint()` | IP 필터(`ip`/`src_ip`/`dest_ip`)로만 0건이면 "구간 전체 N건은 다른 대상의 이벤트, 해당 IP의 활동 없음으로 기록"으로 안내 |
+| `prompts/__init__.py` `layer_query_windows()` | seed 사건 구간 기준 계층별 첫 조회 구간을 계산해 user prompt `query_windows`로 제공: web 앞뒤 1시간, audit 30분 전~1시간 후, network 앞뒤 30분(사전 조회와 동일), auth 24시간 전~1시간 후(src_ip 있을 때) |
+| `investigation.yaml` | 원칙 2: 각 계층 첫 호출은 `query_windows` 그대로, 다른 구간은 두 번째 호출부터 실제 기록 시각을 근거로. audit은 넓은 구간 무필터 조회 금지, 집계를 먼저 보고 ppid/user로 좁힘. 원칙 7: `[원칙 7 기준]`을 따르고 "root 대상"·"preauth" 같은 표현은 횟수 기준을 바꾸지 않음. 원칙 9: 첫 web 조회는 `query_windows` 구간 |
+| 테스트 | 원칙 7 계산·관문 양방향, audit 정상 명령 제외, IP 필터 안내, 계층별 구간 계산. 총 125개 통과 |
+
+### 결과
+| 확인 | 결과 |
+|---|---|
+| EC2 INC-SSH-BRUTE, `8069134` | FALSE_POSITIVE 3/3 (수정 전 THREAT_CONFIRMED), 신뢰도 0.80~0.85 |
+| EC2 INC-SSH-BRUTE, `fd92cf8` | FALSE_POSITIVE 3/3, 신뢰도 0.85~0.90. 세 번 모두 코드가 준 구간 그대로 조회: network 앞뒤 30분(0건), auth 24시간(7건), audit 30분 전~1시간 후(50건, 수정 전 24시간 3728건), web 앞뒤 1시간(0건) |
+| 로컬 INC-XMLRPC-LOCAL, `fd92cf8` | THREAT_CONFIRMED 2/2. 두 번 모두 같은 구간·조건: web 앞뒤 1시간 `src_ip`(82건, 수정 전 seed 구간 81건), audit `user=www-data`(0건) |
+| 로컬 로그 누락·숨은 웹셸, `fd92cf8` | INCONCLUSIVE 4/4, THREAT_CONFIRMED(HIGH 이상) 4/4 — 17장 재검증 표 참고 |
+
+EC2 1회차는 network 사전 조회와 auth만 보고 끝났다(같은 사유 연속 거부 후 강제 종료로 추정). 로그인 성공이 없는
+사건이라 판정에는 영향이 없다.
