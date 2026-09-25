@@ -6,7 +6,7 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로
 
 - **동작 흐름(파일·함수 순서, 코드 주석 `[N]` 번호 대응)**: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
 - **조사 프롬프트 설명(원칙별 역할·생긴 이유·코드 대응)**: [docs/PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md)
-- 변경 이력과 검증 결과: [docs/CHANGES_0918_TO_0924.md](docs/CHANGES_0918_TO_0924.md)
+- 변경 이력과 검증 결과: [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)
 - A·B·C·D 연결과 테스트 안내: [docs/ABCD_TEST_GUIDE.md](docs/ABCD_TEST_GUIDE.md), [docs/C_D_IMPLEMENTATION.md](docs/C_D_IMPLEMENTATION.md)
 - 작업 규칙: [AGENTS.md](AGENTS.md)
 

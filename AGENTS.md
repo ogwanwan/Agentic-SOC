@@ -91,7 +91,7 @@ Windows에서 가상환경을 활성화하지 않았다면 `python` 대신
 
 ## 필요할 때 읽는 문서
 
-- 이 조사 브랜치의 도구 복구·재현성 변경: [0918→0924 변경 정리](docs/CHANGES_0918_TO_0924.md)
+- 이 조사 브랜치의 도구 복구·재현성 변경: [0918→0925 변경 정리](docs/CHANGES_0918_TO_0925.md)
 - 설치·데모·A/B/C/D 전체 흐름: [통합 테스트 안내](docs/ABCD_TEST_GUIDE.md)
 - C/D 입력·출력과 알려진 제한: [C/D 구현 안내](docs/C_D_IMPLEMENTATION.md)
 - 테스트별 검증 범위: [테스트 안내](tests/README.md)

@@ -22,7 +22,7 @@
   agent/provenance.py          validate_citations() 등     원본 참조 검증
   [41] agent/report.py         build_investigation_result() 최종 JSON
 
-설계 이유(요약 — 자세한 경위는 docs/CHANGES_0918_TO_0924.md)
+설계 이유(요약 — 자세한 경위는 docs/CHANGES_0918_TO_0925.md)
   - network 사전 조회: 프롬프트로 "network를 보라"고 해도 LLM이 web 1회만 보고 끝내는 일이
     EC2에서 반복돼, src_ip가 있으면 첫 턴 전에 코드가 직접 조회한다. LLM 호출 수는 늘지 않는다.
   - no_more_evidence에도 관문 적용(strict): 경고만 남기던 시절 도구 1개로 끝나는 조사가 계속 나왔다.

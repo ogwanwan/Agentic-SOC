@@ -1,7 +1,7 @@
 # 조사 프롬프트 설명서
 
 조사 에이전트가 LLM에게 보내는 프롬프트가 **어떻게 구성되고, 각 원칙이 무엇을 지시하며, 왜 생겼는지**를
-정리한 문서다. 전체 실행 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md), 변경 경위는 [CHANGES_0918_TO_0924.md](CHANGES_0918_TO_0924.md).
+정리한 문서다. 전체 실행 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md), 변경 경위는 [CHANGES_0918_TO_0925.md](CHANGES_0918_TO_0925.md).
 
 - 프롬프트 본문: `agent/prompts/investigation.yaml`
 - 조립 코드: `agent/prompts/__init__.py` (`build_system_prompt`, `build_user_prompt`)
