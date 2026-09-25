@@ -1,6 +1,6 @@
 """fetch_network_log(agent/tools/real/fetch_network_log.py) 단독 테스트.
 
-실제 AWS 없이, boto3를 흉내내는 가짜 객체로
+실제 AWS 없이, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해(tests/_log_files.py)
 - eve.json(NDJSON) 이벤트가 구조화되어 반환되는지
 - alert_only 필터로 http 등 비-alert 이벤트가 걸러지는지
 - src_ip(xff로 승격된 실 클라이언트)/dst_ip/dst_port/protocol 필터가 되는지
@@ -27,6 +27,8 @@ import sys
 import types
 from typing import Any, Dict, List
 
+from tests._log_files import install_log_files, uninstall_log_files
+
 # normalizer 벤더 코드가 import 시점에 load_dotenv()를 호출하는 문제 회피
 # (tests/test_fetch_auth_log.py 상단 주석 참고).
 #
@@ -42,45 +44,12 @@ for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_
     os.environ.pop(_env_name, None)
 
 
-class _FakeBody:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
+def _install_log(pieces: Dict[str, Dict[str, bytes]]) -> None:
+    install_log_files(pieces, layer="network")
 
 
-class _FakeS3Client:
-    def __init__(self, objects_by_prefix: Dict[str, Dict[str, bytes]]) -> None:
-        self._objects_by_prefix = objects_by_prefix
-
-    def get_paginator(self, name: str):
-        assert name == "list_objects_v2"
-
-        def _paginate(**kwargs: Any):
-            objects = self._objects_by_prefix.get(kwargs["Prefix"], {})
-            return [{"Contents": [{"Key": k} for k in objects]}]
-
-        paginator = types.SimpleNamespace()
-        paginator.paginate = _paginate
-        return paginator
-
-    def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:
-        for objects in self._objects_by_prefix.values():
-            if Key in objects:
-                return {"Body": _FakeBody(objects[Key])}
-        raise KeyError(Key)
-
-
-def _install_fake_boto3(s3_client: _FakeS3Client) -> None:
-    fake_module = types.ModuleType("boto3")
-    fake_module.client = lambda service_name, **kwargs: s3_client  # type: ignore[attr-defined]
-    sys.modules["boto3"] = fake_module
-
-
-def _uninstall_fake_boto3() -> None:
-    sys.modules.pop("boto3", None)
-    sys.modules.pop("agent.tools.real.fetch_network_log", None)
+def _uninstall_log() -> None:
+    uninstall_log_files(['agent.tools.real.fetch_network_log'])
 
 
 def _sample_network_text() -> bytes:
@@ -108,8 +77,8 @@ def _sample_network_text() -> bytes:
 
 def test_fetch_network_log_parses_structured_event() -> None:
     prefix = "raw/source_type=suricata/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"eve.json": _sample_network_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"eve.json": _sample_network_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_network_log import fetch_network_log
@@ -128,13 +97,13 @@ def test_fetch_network_log_parses_structured_event() -> None:
         assert alert["src_ip"] == "77.239.124.213", "xff로 승격된 실 클라이언트 IP여야 한다"
         print("[PASS] test_fetch_network_log_parses_structured_event")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_network_log_alert_only_and_protocol_filter() -> None:
     prefix = "raw/source_type=suricata/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"eve.json": _sample_network_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"eve.json": _sample_network_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_network_log import fetch_network_log
@@ -160,13 +129,13 @@ def test_fetch_network_log_alert_only_and_protocol_filter() -> None:
         assert result_tcp_lower["count"] == 2, "TCP 프로토콜(대소문자 무관) 2건(alert 2개, http는 UDP라 제외)"
         print("[PASS] test_fetch_network_log_alert_only_and_protocol_filter")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_network_log_filters_by_src_dst_ip() -> None:
     prefix = "raw/source_type=suricata/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"eve.json": _sample_network_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"eve.json": _sample_network_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_network_log import fetch_network_log
@@ -183,13 +152,13 @@ def test_fetch_network_log_filters_by_src_dst_ip() -> None:
         assert result["records"][0]["signature"] == "ET SCAN SSH BruteForce"
         print("[PASS] test_fetch_network_log_filters_by_src_dst_ip")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_network_log_pagination() -> None:
     prefix = "raw/source_type=suricata/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"eve.json": _sample_network_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"eve.json": _sample_network_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_network_log import fetch_network_log
@@ -220,12 +189,12 @@ def test_fetch_network_log_pagination() -> None:
         assert page2["has_more"] is False
         print("[PASS] test_fetch_network_log_pagination")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_network_log_reports_missing_partition() -> None:
-    fake_client = _FakeS3Client({})
-    _install_fake_boto3(fake_client)
+    pieces = ({})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_network_log import fetch_network_log
@@ -241,7 +210,7 @@ def test_fetch_network_log_reports_missing_partition() -> None:
         assert "host 이름" in result["summary"]
         print("[PASS] test_fetch_network_log_reports_missing_partition")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 if __name__ == "__main__":

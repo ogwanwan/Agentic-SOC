@@ -21,8 +21,7 @@ fetch_apache_log.py가 기대하는 포맷과 컬럼 단위로 일치했다. apa
   - method: 대소문자 무시 일치, status_code: 정수 일치
   - exclude_self: 서버 자신의 공인 IP(1차 탐지팀 SERVER_PUBLIC_IP)에서 온 요청 제외
 
-필요 환경변수: WEB_LOG_LOCAL_PATH(apache access.log) 있으면 로컬 파일,
-  없으면 WEB_LOG_BUCKET/S3의 raw/source_type=apache/... 파티션
+필요 환경변수: WEB_LOG_LOCAL_PATH (읽을 apache access.log 경로)
 
 summary 끝의 [조회 구간 전체 집계]는 페이지와 무관하게 조건에 맞는 전체 요청 기준
 메서드·상태코드 계열·서로 다른 경로 수·상위 경로·User-Agent를 준다(원칙 9에 그대로 쓰도록).
@@ -146,7 +145,7 @@ def fetch_web_log(args: Dict[str, Any]) -> Dict[str, Any]:
     elif total_matched == 0:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 web 요청을 찾지 못했습니다. "
-            "host 이름, 기간, 또는 WEB_LOG_LOCAL_PATH/WEB_LOG_BUCKET 설정을 확인하세요."
+            "host 이름, 기간, 또는 WEB_LOG_LOCAL_PATH 설정을 확인하세요."
         ) + filtered_out_hint(len(loaded["events"]), args, ("src_ip", "method", "path", "status_code", "exclude_self"))
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"

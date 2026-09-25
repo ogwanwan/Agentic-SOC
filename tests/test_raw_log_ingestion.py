@@ -1,16 +1,17 @@
 """fetch_recent_raw_logs(agent/raw_log_ingestion.py) 단독 테스트.
 
-실제 AWS 없이, boto3를 흉내내는 가짜 객체로
+실제 AWS 없이, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해(tests/_log_files.py)
 - audit 소스는 primary_detection.normalizer.tools.fetch_audit_log의 fetch_audit_log()로
   정규화된 이벤트가 되는지 (2026-09-22: audit_parser.py 대신 normalizer 기반으로 교체)
 - web 소스는 primary_detection.normalizer.tools.fetch_apache_log의 fetch_apache_log()로
-  정규화된 이벤트가 되는지, 시간 필터까지 적용되는지 (2026-09-22: nginx_json_parser.py
-  대신 apache access.log 정규화로 교체 — 조사 도구 fetch_web_log.py와 동일 코드)
+  정규화된 이벤트가 되는지 (2026-09-22: nginx_json_parser.py 대신 apache access.log
+  정규화로 교체 — 조사 도구 fetch_web_log.py와 동일 코드)
 - network 소스도 primary_detection.normalizer.tools.fetch_network_log의
   fetch_network_log()로 정규화되는지 (2026-09-22: network_parser.py 대신 정규화 함수로 교체
   — 조사 도구 fetch_network_log.py와 동일 코드)
 - 여러 source_type(web/auth/audit/network)을 다 훑는지
-- 데이터 없는 source_type은 에러 없이 조용히 건너뛰는지 (현재 auditd/apache만 연결된 상태 재현)
+- 비어 있는 로그 파일은 에러 없이 0건으로 건너뛰는지
+- 시각과 무관하게 파일 끝 RAW_LOG_LOCAL_MAX_LINES건만 남기는지 (S3 삭제 뒤 수집은 로컬 파일만 읽는다)
 - 각 레코드에 _source_type이 붙는지
 를 검증한다.
 """
@@ -23,6 +24,8 @@ import types
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
+from tests._log_files import install_log_files, uninstall_log_files
+
 # normalizer 벤더 코드가 import 시점에 load_dotenv()를 호출하는 문제 회피
 # (tests/test_fetch_auth_log.py 상단 주석 참고 — 2026-09-22 C 작업으로 이 모듈도
 # normalizer.tools.fetch_auth_log/fetch_audit_log를 직접 import하게 되면서 같은
@@ -32,47 +35,12 @@ for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_
     os.environ.pop(_env_name, None)
 
 
-class _FakeBody:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
+def _install_log(pieces: Dict[str, Dict[str, bytes]]) -> None:
+    install_log_files(pieces, layer=None)
 
 
-class _FakeS3Client:
-    """prefix -> {key: raw text bytes} 매핑으로 list_objects_v2 + get_object를 흉내낸다."""
-
-    def __init__(self, objects_by_prefix: Dict[str, Dict[str, bytes]]) -> None:
-        self._objects_by_prefix = objects_by_prefix
-
-    def get_paginator(self, name: str):
-        assert name == "list_objects_v2"
-
-        def _paginate(**kwargs: Any):
-            objects = self._objects_by_prefix.get(kwargs["Prefix"], {})
-            return [{"Contents": [{"Key": k} for k in objects]}]
-
-        paginator = types.SimpleNamespace()
-        paginator.paginate = _paginate
-        return paginator
-
-    def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:
-        for objects in self._objects_by_prefix.values():
-            if Key in objects:
-                return {"Body": _FakeBody(objects[Key])}
-        raise KeyError(Key)
-
-
-def _install_fake_boto3(s3_client: _FakeS3Client) -> None:
-    fake_module = types.ModuleType("boto3")
-    fake_module.client = lambda service_name, **kwargs: s3_client  # type: ignore[attr-defined]
-    sys.modules["boto3"] = fake_module
-
-
-def _uninstall_fake_boto3() -> None:
-    sys.modules.pop("boto3", None)
-    sys.modules.pop("agent.raw_log_ingestion", None)
+def _uninstall_log() -> None:
+    uninstall_log_files(['agent.raw_log_ingestion'])
 
 
 def now_minus_apache(base: datetime, **kwargs) -> str:
@@ -118,8 +86,10 @@ def test_fetch_recent_raw_logs_merges_multiple_source_types_and_skips_missing() 
         web_prefix: {"access.log": web_text},
     }
 
-    fake_client = _FakeS3Client(objects_by_prefix)
-    _install_fake_boto3(fake_client)
+    pieces = (objects_by_prefix)
+    _install_log(pieces)
+    install_log_files({}, layer="auth")  # auth·network는 빈 로그 파일
+    install_log_files({}, layer="network")
 
     try:
         from agent.raw_log_ingestion import fetch_recent_raw_logs
@@ -129,25 +99,30 @@ def test_fetch_recent_raw_logs_merges_multiple_source_types_and_skips_missing() 
         source_types = {r["_source_type"] for r in records}
         assert source_types == {"audit", "web"}, "데이터가 있는 두 소스만 나와야 한다"
 
+        # 로컬 파일은 시각으로 거르지 않는다 — 5시간 전 이벤트도 파일 끝 N건 안이면 포함
         audit_records = [r for r in records if r["_source_type"] == "audit"]
-        assert len(audit_records) == 1, "시간 범위 밖의 cron(9000) 이벤트는 제외되어야 한다"
-        assert audit_records[0]["pid"] == 3812
+        assert {r["pid"] for r in audit_records} == {3812, 1234}
 
         web_records = [r for r in records if r["_source_type"] == "web"]
-        # web도 시간 필터가 적용됨 -> 5시간 전(old-request)은 제외되고 1건만 남아야 함
-        assert len(web_records) == 1, "시간 범위 밖의 old-request는 제외되어야 한다"
-        assert web_records[0]["src_ip"] == "77.239.124.213"
-        assert web_records[0]["path"] == "/wp-login.php"
+        assert len(web_records) == 2
+        recent = next(r for r in web_records if r["src_ip"] == "77.239.124.213")
+        assert recent["path"] == "/wp-login.php"
+
+        os.environ["RAW_LOG_LOCAL_MAX_LINES"] = "1"
+        try:
+            last_only = fetch_recent_raw_logs(host="web-01", minutes=10, source_types=["web"])
+        finally:
+            os.environ.pop("RAW_LOG_LOCAL_MAX_LINES", None)
+        # 정규화 결과는 시각순이라 "끝 1건"은 가장 최근 요청이다
+        assert [r["path"] for r in last_only] == ["/wp-login.php"], "가장 최근 1건만 남아야 한다"
 
         print("[PASS] test_fetch_recent_raw_logs_merges_multiple_source_types_and_skips_missing")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_recent_raw_logs_structures_network_source() -> None:
-    """network 소스도 audit/web/auth와 동일하게 1차 탐지팀 정규화 함수로 구조화되는지,
-    시간 필터가 적용되는지 확인한다.
-    """
+    """network 소스도 audit/web/auth와 동일하게 1차 탐지팀 정규화 함수로 구조화되는지 확인한다."""
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
@@ -166,22 +141,22 @@ def test_fetch_recent_raw_logs_structures_network_source() -> None:
     ) % (recent_ts, old_ts)
     network_text = network_text.encode("utf-8")
 
-    fake_client = _FakeS3Client({network_prefix: {"eve.json": network_text}})
-    _install_fake_boto3(fake_client)
+    pieces = ({network_prefix: {"eve.json": network_text}})
+    _install_log(pieces)
 
     try:
         from agent.raw_log_ingestion import fetch_recent_raw_logs
 
         records = fetch_recent_raw_logs(host="web-01", minutes=10, source_types=["network"])
 
-        assert len(records) == 1, "시간 범위 밖의 old alert(5시간 전)는 제외되어야 한다"
-        record = records[0]
+        assert len(records) == 2, "로컬 파일은 시각과 무관하게 파일 끝 N건을 모두 넘긴다"
+        record = next(r for r in records if r["signature"] == "ET SCAN SSH BruteForce")
         assert record["_source_type"] == "network"
         assert record["src_ip"] == "77.239.124.213", "xff로 승격된 실 클라이언트 IP여야 한다"
         assert record["signature"] == "ET SCAN SSH BruteForce"
         print("[PASS] test_fetch_recent_raw_logs_structures_network_source")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 if __name__ == "__main__":

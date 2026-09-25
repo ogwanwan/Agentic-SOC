@@ -1,6 +1,6 @@
 ﻿"""fetch_auth_log(agent/tools/real/fetch_auth_log.py) 단독 테스트.
 
-실제 AWS에 붙지 않고, boto3를 흉내내는 가짜 객체를 sys.modules에 주입해서
+실제 AWS에 붙지 않고, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해서(tests/_log_files.py)
 - ssh_failed(root/invalid user)/ssh_accepted/sudo_command 이벤트가 정확히 분류되는지
 - sudo는 rhost가 없으면 src_ip가 None인지
 - src_ip/user/event_type/result 필터가 되는지
@@ -24,58 +24,27 @@ import sys
 import types
 from typing import Any, Dict, List
 
+from tests._log_files import install_log_files, uninstall_log_files
+
 # normalizer 벤더 코드(primary_detection/normalizer/tools/fetch_auth_log.py, 1차 탐지팀
 # 원본 그대로)가 파일 맨 아래에서 무조건 load_dotenv()를 호출한다. 그래서 아래 import가
 # 처음 실행되는 순간, 로컬 .env에 적어둔 AUTH_LOG_LOCAL_PATH 같은 값이 os.environ에
-# 들어와 버릴 수 있다 — 그 값이 남아있으면 이 파일의 테스트들이 주입하는 가짜 S3를
-# 건너뛰고 실제 로컬 파일을 읽어버려서 count가 안 맞는 식으로 깨진다(재현·확인함).
+# 들어와 버릴 수 있다 — 그 값이 남아있으면 이 파일의 테스트들이 만든 임시 로그 파일 대신
+# 실제 로컬 파일을 읽어버려서 count가 안 맞는 식으로 깨진다(재현·확인함).
 # sys.modules 캐시 덕분에 load_dotenv()는 프로세스당 한 번만 실행되므로, 여기서 미리
 # import를 한 번 트리거하고 곧바로 관련 환경변수를 비워서 이후 모든 테스트가 항상
-# 가짜 S3만 타도록 만든다.
+# 테스트가 만든 임시 로그 파일만 읽도록 만든다.
 import agent.tools.real.fetch_auth_log as _load_dotenv_trigger  # noqa: F401
 for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_PATH", "NETWORK_LOG_LOCAL_PATH"):
     os.environ.pop(_env_name, None)
 
 
-class _FakeBody:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
+def _install_log(pieces: Dict[str, Dict[str, bytes]]) -> None:
+    install_log_files(pieces, layer="auth")
 
 
-class _FakeS3Client:
-    def __init__(self, objects_by_prefix: Dict[str, Dict[str, bytes]]) -> None:
-        self._objects_by_prefix = objects_by_prefix
-
-    def get_paginator(self, name: str):
-        assert name == "list_objects_v2"
-
-        def _paginate(**kwargs: Any):
-            objects = self._objects_by_prefix.get(kwargs["Prefix"], {})
-            return [{"Contents": [{"Key": k} for k in objects]}]
-
-        paginator = types.SimpleNamespace()
-        paginator.paginate = _paginate
-        return paginator
-
-    def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:
-        for objects in self._objects_by_prefix.values():
-            if Key in objects:
-                return {"Body": _FakeBody(objects[Key])}
-        raise KeyError(Key)
-
-
-def _install_fake_boto3(s3_client: _FakeS3Client) -> None:
-    fake_module = types.ModuleType("boto3")
-    fake_module.client = lambda service_name, **kwargs: s3_client  # type: ignore[attr-defined]
-    sys.modules["boto3"] = fake_module
-
-
-def _uninstall_fake_boto3() -> None:
-    sys.modules.pop("boto3", None)
-    sys.modules.pop("agent.tools.real.fetch_auth_log", None)
+def _uninstall_log() -> None:
+    uninstall_log_files(['agent.tools.real.fetch_auth_log'])
 
 
 def _sample_auth_text() -> bytes:
@@ -90,8 +59,8 @@ def _sample_auth_text() -> bytes:
 
 def test_fetch_auth_log_classifies_four_event_types() -> None:
     prefix = "raw/source_type=auth/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"auth.log": _sample_auth_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"auth.log": _sample_auth_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_auth_log import fetch_auth_log
@@ -118,13 +87,13 @@ def test_fetch_auth_log_classifies_four_event_types() -> None:
         assert sudo_event["src_ip"] is None, "sudo 줄엔 rhost가 없으니 src_ip는 None이어야 한다"
         print("[PASS] test_fetch_auth_log_classifies_four_event_types")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_auth_log_filters_by_src_ip_user_event_type_result() -> None:
     prefix = "raw/source_type=auth/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"auth.log": _sample_auth_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"auth.log": _sample_auth_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_auth_log import fetch_auth_log
@@ -160,7 +129,7 @@ def test_fetch_auth_log_filters_by_src_ip_user_event_type_result() -> None:
         assert by_event_type["count"] == 1
         print("[PASS] test_fetch_auth_log_filters_by_src_ip_user_event_type_result")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_auth_log_pagination_matches_teammate_design() -> None:
@@ -168,8 +137,8 @@ def test_fetch_auth_log_pagination_matches_teammate_design() -> None:
     2차: 그 next_offset을 그대로 offset에 넣으면 나머지 2건이 나오고 has_more=False.
     """
     prefix = "raw/source_type=auth/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"auth.log": _sample_auth_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"auth.log": _sample_auth_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_auth_log import fetch_auth_log
@@ -202,12 +171,12 @@ def test_fetch_auth_log_pagination_matches_teammate_design() -> None:
         assert page2["next_offset"] is None
         print("[PASS] test_fetch_auth_log_pagination_matches_teammate_design")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_auth_log_reports_missing_partition() -> None:
-    fake_client = _FakeS3Client({})
-    _install_fake_boto3(fake_client)
+    pieces = ({})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_auth_log import fetch_auth_log
@@ -223,7 +192,7 @@ def test_fetch_auth_log_reports_missing_partition() -> None:
         assert "host 이름" in result["summary"]
         print("[PASS] test_fetch_auth_log_reports_missing_partition")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 if __name__ == "__main__":

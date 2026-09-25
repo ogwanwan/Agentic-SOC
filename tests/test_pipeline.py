@@ -1,7 +1,7 @@
 ﻿"""run_investigation_pipeline(agent/pipeline.py) 통합 테스트.
 
-실제 AWS/LLM 없이, raw log ingestion용 가짜 S3 + seed 생성/조사 판단용 가짜 LLM
-클라이언트를 하나로 묶어서 전체 파이프라인(raw log -> seed 후보 -> 우선순위 ->
+실제 로그/LLM 없이, raw log ingestion용 임시 로그 파일(tests/_log_files.py) + seed 생성/조사
+판단용 가짜 LLM 클라이언트를 하나로 묶어서 전체 파이프라인(raw log -> seed 후보 -> 우선순위 ->
 InvestigationAgent 반복 실행)이 끝까지 도는지 확인한다.
 """
 
@@ -9,37 +9,10 @@ from __future__ import annotations
 
 import json
 import sys
-import types
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-
-class _FakeBody:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
-
-
-class _FakeS3Client:
-    def __init__(self, objects_by_prefix: Dict[str, Dict[str, bytes]]) -> None:
-        self._objects_by_prefix = objects_by_prefix
-
-    def get_paginator(self, name: str):
-        def _paginate(**kwargs: Any):
-            objects = self._objects_by_prefix.get(kwargs["Prefix"], {})
-            return [{"Contents": [{"Key": k} for k in objects]}]
-
-        p = types.SimpleNamespace()
-        p.paginate = _paginate
-        return p
-
-    def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:
-        for objects in self._objects_by_prefix.values():
-            if Key in objects:
-                return {"Body": _FakeBody(objects[Key])}
-        raise KeyError(Key)
+from tests._log_files import install_log_files, uninstall_log_files
 
 
 def _ndjson(records: List[Dict[str, Any]]) -> bytes:
@@ -116,10 +89,9 @@ def test_pipeline_runs_seeds_in_priority_order() -> None:
     audit_text = f'type=SYSCALL msg=audit({recent_epoch}.100:9001): pid=3812 uid=33 comm="sh" key="susp_exec"\n'.encode(
         "utf-8"
     )
-    fake_s3 = _FakeS3Client({audit_prefix: {"audit.log": audit_text}})
-    fake_boto3 = types.ModuleType("boto3")
-    fake_boto3.client = lambda service_name, **kwargs: fake_s3  # type: ignore[attr-defined]
-    sys.modules["boto3"] = fake_boto3
+    install_log_files({audit_prefix: {"audit.log": audit_text}})
+    for layer in ("web", "auth", "network"):
+        install_log_files({}, layer=layer)  # 나머지 계층은 빈 로그 파일
     sys.modules.pop("agent.raw_log_ingestion", None)
     sys.modules.pop("agent.pipeline", None)
 
@@ -154,9 +126,7 @@ def test_pipeline_runs_seeds_in_priority_order() -> None:
         assert llm.reason_call_count == 2, "seed 2개 각각에 대해 조사 루프가 최소 1번씩 돌아야 한다"
         print("[PASS] test_pipeline_runs_seeds_in_priority_order")
     finally:
-        sys.modules.pop("boto3", None)
-        sys.modules.pop("agent.raw_log_ingestion", None)
-        sys.modules.pop("agent.pipeline", None)
+        uninstall_log_files(["agent.raw_log_ingestion", "agent.pipeline"])
 
 
 if __name__ == "__main__":

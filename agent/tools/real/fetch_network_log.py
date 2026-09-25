@@ -26,7 +26,7 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
 direction(internal/outbound/inbound)은 계산하지 않는다 — 호스트 IP 사전 등록 단계가
 우리 시스템엔 없고, 공통 정규화 스키마에도 그 필드가 없다.
 
-필요 환경변수: NETWORK_LOG_LOCAL_PATH 있으면 로컬 파일, 없으면 NETWORK_LOG_BUCKET/S3
+필요 환경변수: NETWORK_LOG_LOCAL_PATH (읽을 Suricata eve.json 경로)
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def fetch_network_log(args: Dict[str, Any]) -> Dict[str, Any]:
     elif total_matched == 0:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 네트워크 이벤트를 찾지 못했습니다. "
-            "host 이름, 기간, 또는 NETWORK_LOG_LOCAL_PATH/NETWORK_LOG_BUCKET 설정을 확인하세요."
+            "host 이름, 기간, 또는 NETWORK_LOG_LOCAL_PATH 설정을 확인하세요."
         ) + filtered_out_hint(len(loaded["events"]), args,
                               ("ip", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only"))
     else:

@@ -143,8 +143,7 @@ def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
 
     # timestamp(특정 시점) 또는 start_time/end_time(범위) 중 하나로 조회 구간을 잡는다.
     # 아무것도 안 주면 "이 tool이 fetch_audit_log와 같은 소스를 볼 수 있는 최대
-    # 범위"로 넓게 잡는다 — 로컬 샘플 모드에선 어차피 파일 하나가 전부라 큰 의미
-    # 없고, S3 모드에서 실제로 유효해진다.
+    # 범위"(기준 시각부터 DEFAULT_LOOKBACK_HOURS 전까지)로 넓게 잡는다.
     if "start_time" in args and "end_time" in args:
         start_time, end_time = args["start_time"], args["end_time"]
     elif "timestamp" in args:
@@ -168,7 +167,7 @@ def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
     if not flat_events:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 audit 데이터를 찾지 못했습니다. "
-            "host 이름, 기간, 또는 AUDIT_LOG_LOCAL_PATH/AUDIT_LOG_BUCKET 설정을 확인하세요."
+            "host 이름, 기간, 또는 AUDIT_LOG_LOCAL_PATH 설정을 확인하세요."
         )
         return {"count": 0, "summary": summary, "records": [],
                 **({"error": loaded["error"]} if loaded["error"] else {})}

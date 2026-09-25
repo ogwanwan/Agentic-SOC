@@ -1,6 +1,6 @@
 """fetch_web_log(agent/tools/real/fetch_web_log.py) 단독 테스트.
 
-실제 AWS에 붙지 않고, boto3를 흉내내는 가짜 객체를 sys.modules에 주입해서
+실제 AWS에 붙지 않고, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해서(tests/_log_files.py)
 - 실제 EC2 apache access.log 형식(공백 구분, req_id 포함)이 구조화되어 반환되는지
 - src_ip 필터가 되는지 (client 필드 %a 기준 — apache는 이미 실 클라이언트 IP라 xff 불필요)
 - method/path/status_code 필터가 되는지
@@ -41,46 +41,15 @@ for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_
     os.environ.pop(_env_name, None)
 from typing import Any, Dict
 
-
-class _FakeBody:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
+from tests._log_files import install_log_files, uninstall_log_files
 
 
-class _FakeS3Client:
-    def __init__(self, objects_by_prefix: Dict[str, Dict[str, bytes]]) -> None:
-        self._objects_by_prefix = objects_by_prefix
-
-    def get_paginator(self, name: str):
-        assert name == "list_objects_v2"
-
-        def _paginate(**kwargs: Any):
-            objects = self._objects_by_prefix.get(kwargs["Prefix"], {})
-            return [{"Contents": [{"Key": k} for k in objects]}]
-
-        paginator = types.SimpleNamespace()
-        paginator.paginate = _paginate
-        return paginator
-
-    def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:
-        for objects in self._objects_by_prefix.values():
-            if Key in objects:
-                return {"Body": _FakeBody(objects[Key])}
-        raise KeyError(Key)
+def _install_log(pieces: Dict[str, Dict[str, bytes]]) -> None:
+    install_log_files(pieces, layer="web")
 
 
-def _install_fake_boto3(s3_client: _FakeS3Client) -> None:
-    fake_module = types.ModuleType("boto3")
-    fake_module.client = lambda service_name, **kwargs: s3_client  # type: ignore[attr-defined]
-    sys.modules["boto3"] = fake_module
-
-
-def _uninstall_fake_boto3() -> None:
-    sys.modules.pop("boto3", None)
-    sys.modules.pop("agent.tools.real.fetch_web_log", None)
+def _uninstall_log() -> None:
+    uninstall_log_files(['agent.tools.real.fetch_web_log'])
 
 
 def _sample_web_text() -> bytes:
@@ -98,8 +67,8 @@ def _sample_web_text() -> bytes:
 
 def test_fetch_web_log_parses_real_apache_format() -> None:
     prefix = "raw/source_type=apache/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"access.log": _sample_web_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"access.log": _sample_web_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_web_log import fetch_web_log
@@ -120,13 +89,13 @@ def test_fetch_web_log_parses_real_apache_format() -> None:
         assert webshell["host"] == "ogwanwan.shop"
         print("[PASS] test_fetch_web_log_parses_real_apache_format")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_web_log_filters_by_src_ip() -> None:
     prefix = "raw/source_type=apache/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"access.log": _sample_web_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"access.log": _sample_web_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_web_log import fetch_web_log
@@ -143,13 +112,13 @@ def test_fetch_web_log_filters_by_src_ip() -> None:
         assert result["records"][0]["method"] == "POST"
         print("[PASS] test_fetch_web_log_filters_by_src_ip")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_web_log_filters_by_method_path_status() -> None:
     prefix = "raw/source_type=apache/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"access.log": _sample_web_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"access.log": _sample_web_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_web_log import fetch_web_log
@@ -167,13 +136,13 @@ def test_fetch_web_log_filters_by_method_path_status() -> None:
         assert result["count"] == 1
         print("[PASS] test_fetch_web_log_filters_by_method_path_status")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_web_log_filters_by_time_range() -> None:
     prefix = "raw/source_type=apache/host=web-01/dt=2026-09-13/"
-    fake_client = _FakeS3Client({prefix: {"access.log": _sample_web_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"access.log": _sample_web_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_web_log import fetch_web_log
@@ -189,12 +158,12 @@ def test_fetch_web_log_filters_by_time_range() -> None:
         assert result["records"][0]["method"] == "POST"
         print("[PASS] test_fetch_web_log_filters_by_time_range")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_web_log_reports_missing_partition() -> None:
-    fake_client = _FakeS3Client({})
-    _install_fake_boto3(fake_client)
+    pieces = ({})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_web_log import fetch_web_log
@@ -210,7 +179,7 @@ def test_fetch_web_log_reports_missing_partition() -> None:
         assert "host 이름" in result["summary"]
         print("[PASS] test_fetch_web_log_reports_missing_partition")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 if __name__ == "__main__":

@@ -69,24 +69,6 @@ def test_original_ab_adapter_parity_check():
         _run()
 
 
-def test_split_audit_s3_event_keeps_both_object_locations(monkeypatch):
-    from tests.test_fetch_audit_log import _FakeS3Client
-    epoch = int(datetime(2026, 9, 21, tzinfo=timezone.utc).timestamp())
-    prefix = "raw/source_type=auditd/host=web-01/dt=2026-09-21/"
-    first, second = prefix + "a.log", prefix + "b.log"
-    client = _FakeS3Client({prefix: {
-        first: f'type=SYSCALL msg=audit({epoch}.1:5): pid=1 syscall=59\n'.encode(),
-        second: f'type=EXECVE msg=audit({epoch}.1:5): argc=1 a0="id"\n'.encode(),
-    }})
-    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *a, **kw: client))
-    monkeypatch.setenv("AUDIT_LOG_BUCKET", "test-bucket")
-    result = query(layers=["audit"])
-    assert result["count"] == 1
-    record = result["records"][0]
-    assert record["exec_args"] == "id"
-    assert record["raw_refs"] == [f"s3://test-bucket/{first}:1", f"s3://test-bucket/{second}:1"]
-
-
 def test_gzip_auth_original_name_and_location(tmp_path, monkeypatch):
     path = tmp_path / "auth.log.1.gz"
     with gzip.open(path, "wt", encoding="utf-8") as stream:

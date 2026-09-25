@@ -3,13 +3,13 @@
 2026-09-23 C/D 통합: normalize_log_documents()를 추가했다. 기존 normalize_* 공개
 함수와 벤더 코드는 유지한다. 사건 조회·수집·조사 도구는 새 진입점에서 동일한 벤더
 함수를 호출하고, raw_ref를 보존하면서 raw_refs/raw_ref_locations를 부가 정보로 붙인다.
-S3 임시 파일에는 고유한 디렉터리를 쓰고, 객체별 실제 줄 위치를 따로 매핑한다.
+로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일에서만 읽는다(S3 읽기는 2026-09-25 삭제).
 
 1차 탐지팀(https://github.com/ogwanwan/Agentic-SOC, feature/primary_detection) 저장소의
 정규화 코드는 primary_detection/normalizer/{common,tools}/ 아래에 "있는 그대로"(바이트
 단위 동일, primary_detection/normalizer/vendor_sync_check.py로 검증) 들여와 있다. 이
-파일은 그 코드를 단 한 줄도 고치지 않고, "S3/로컬 어디서 원본 텍스트를 읽어올지"만
-결정해서 임시 파일로 넘기는 얇은 어댑터다 — 우리(에이전트팀) 코드이지 벤더 코드가
+파일은 그 코드를 단 한 줄도 고치지 않고, 원본 텍스트를 임시 파일로 넘겨 호출하는
+얇은 어댑터다 — 우리(에이전트팀) 코드이지 벤더 코드가
 아니라서, 벤더 코드와 달리 agent/ 패키지 안에 그대로 둔다.
 
 *** 2026-09-22 구조 변경: normalizer/ 를 agent/ 밖(primary_detection/)으로 이동 ***
@@ -47,7 +47,6 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -58,18 +57,14 @@ from primary_detection.normalizer.tools.fetch_audit_log import fetch_audit_log a
 from primary_detection.normalizer.tools.fetch_apache_log import fetch_apache_log as _normalize_web_events
 from primary_detection.normalizer.tools.fetch_network_log import fetch_network_log as _normalize_network_events
 
-from .real._s3_common import daterange, list_and_read_text
-from .time_utils import parse_iso
-
-DEFAULT_BUCKET = "ogwanwan-shop-bucket"
-
 
 def normalize_log_documents(layer, documents, start, end):
     """C/D source adapter: call the vendored normalizers without changing them.
 
-    Preserve local vendor raw_ref values; map S3 staging line numbers back to
-    the actual object. raw_ref_locations adds absolute locations without
-    replacing local basename references used by primary detection.
+    Preserve local vendor raw_ref values (basename:line). raw_ref_locations adds the
+    absolute file location without replacing the basename references used by primary
+    detection. Several documents are concatenated into one staging file and each
+    line is mapped back to its own document.
     """
     documents = list(documents)
     if not documents:
@@ -82,7 +77,7 @@ def normalize_log_documents(layer, documents, start, end):
         lines.extend(physical_lines)
         locations.extend(f"{source}:{number}" for number in range(1, len(physical_lines) + 1))
 
-    local = len(documents) == 1 and not documents[0][0].startswith("s3://")
+    local = len(documents) == 1
     name = Path(documents[0][0]).name.removesuffix(".gz") if local else "source.log"
     functions = {"web": _normalize_web_events, "auth": _normalize_auth_events,
                  "audit": _normalize_audit_events, "network": _normalize_network_events}
@@ -116,54 +111,17 @@ def normalize_log_documents(layer, documents, start, end):
     return events
 
 
-def _read_source_text(
-    source_type: str, local_env: str, bucket_env: str, host: str, start: datetime, end: datetime
-) -> "tuple[str, str]":
-    """AUTH_LOG_LOCAL_PATH/AUDIT_LOG_LOCAL_PATH 있으면 로컬, 없으면 S3.
-
-    웰시님 기존 agent/tools/real/*.py 의 소스 선택 관례(local-path 우선, 없으면
-    raw/source_type=<type>/host=<host>/dt=<date>/ S3 prefix)를 그대로 재사용한다.
-    반환값: (원본 텍스트, 어디서 읽었는지 설명용 라벨)
-    """
-    local_path = os.environ.get(local_env)
-    if local_path:
-        if not os.path.exists(local_path):
-            return "", f"local:{local_path} (파일 없음)"
-        with open(local_path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read(), f"local:{local_path}"
-
-    import boto3  # 실제 S3 호출 시에만 필요하므로 지연 import
-
-    bucket = os.environ.get(bucket_env, DEFAULT_BUCKET)
-    s3 = boto3.client("s3", region_name=os.environ.get("AWS_DEFAULT_REGION"))
-
-    chunks: List[str] = []
-    for date_str in daterange(start, end):
-        prefix = f"raw/source_type={source_type}/host={host}/dt={date_str}/"
-        text, _count = list_and_read_text(s3, bucket, prefix)
-        chunks.append(text)
-    return "\n".join(chunks), f"s3://{bucket}/raw/source_type={source_type}/host={host}/"
-
-
-def _to_named_file(text: str, host: str, source_type: str, start: datetime, end: datetime) -> str:
-    """S3 조각을 합친 텍스트를 임시 파일로 쓴다.
-
-    주의(raw_ref 트레이서빌리티): 1차 탐지팀 fetch_auth_log/fetch_audit_log 는
-    raw_ref="<파일명 basename>:<줄번호>" 를 이 파일의 이름으로 만든다. 무작위
-    이름(mkstemp)을 쓰면 raw_ref가 "tmpXXXXXX.log:12" 처럼 추적 불가능한 값이
-    되므로, 대신 host/계층/기간이 드러나는 이름을 직접 짓는다.
-    예: "web-01_auth_20260914_20260915.log:12" — 정확히 어느 S3 오브젝트의 몇 번째
-    줄인지까지는 아니지만(그러려면 1차 탐지팀 파서 자체를 고쳐야 함), 적어도 어느
-    host·계층·기간에서 온 이벤트인지는 raw_ref만 보고 알 수 있다.
-    S3 오브젝트 키 단위까지 정확한 raw_ref가 필요해지면(D: 데이터 추적 담당 검증 시
-    문제가 되면) 1차 탐지팀과 상의해서 fetch_*_log()에 source 이름 오버라이드
-    인자를 추가하는 걸 제안해야 한다 — 지금은 임시 방편이다.
-    """
-    name = f"{host}_{source_type}_{start.date()}_{end.date()}.log"
-    path = os.path.join(tempfile.gettempdir(), name)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
+def _local_path(env_name: str) -> str:
+    path = os.environ.get(env_name)
+    if not path:
+        raise ValueError(f"{env_name}가 설정되지 않았습니다 (.env에 로그 파일 경로 필요)")
     return path
+
+
+# 아래 normalize_* 4개는 계층별로 1차 탐지팀 함수를 필터 인자와 함께 직접 부르는 예전 진입점이다.
+# 조사 도구·수집은 normalize_log_documents()를 쓰고, 이 함수들은 정규화 동일성 검증
+# (tests/test_normalizer_parity.py)과 scripts/verify_all_tools.py만 쓴다. 로컬 파일을 그대로
+# 넘기므로 raw_ref가 실제 로그 파일 이름을 가리킨다.
 
 
 def normalize_auth(
@@ -182,34 +140,10 @@ def normalize_auth(
     time_window/user/src_ip/event/result/year 는 1차 탐지팀 fetch_auth_log()의 필터를
     그대로 전달한다(이름·의미 동일, 새로 정의하지 않음).
     """
-    start = parse_iso(start_time)
-    end = parse_iso(end_time)
-
-    local_path = os.environ.get("AUTH_LOG_LOCAL_PATH")
-    if local_path:
-        # 로컬 모드: 파일이 이미 하나 있으므로 임시 파일 없이 그대로 넘긴다.
-        # raw_ref 가 실제 로컬 파일명을 그대로 가리켜서 트레이서빌리티가 완전하다.
-        return _normalize_auth_events(
-            local_path, time_window=[start_time, end_time],
-            user=user, src_ip=src_ip, event=event, result=result, year=year,
-        )
-
-    text, _label = _read_source_text("auth", "AUTH_LOG_LOCAL_PATH", "AUTH_LOG_BUCKET", host, start, end)
-    if not text:
-        return []
-    tmp_path = _to_named_file(text, host, "auth", start, end)
-    try:
-        return _normalize_auth_events(
-            tmp_path,
-            time_window=[start_time, end_time],
-            user=user,
-            src_ip=src_ip,
-            event=event,
-            result=result,
-            year=year,
-        )
-    finally:
-        os.remove(tmp_path)
+    return _normalize_auth_events(
+        _local_path("AUTH_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        user=user, src_ip=src_ip, event=event, result=result, year=year,
+    )
 
 
 def normalize_audit(
@@ -224,33 +158,11 @@ def normalize_audit(
     exclude_interactive: bool = False,
 ) -> List[Dict[str, Any]]:
     """1차 탐지팀 fetch_audit_log()를 그대로 호출 — 공통스키마(layer=system) 이벤트 리스트 반환."""
-    start = parse_iso(start_time)
-    end = parse_iso(end_time)
-
-    local_path = os.environ.get("AUDIT_LOG_LOCAL_PATH")
-    if local_path:
-        return _normalize_audit_events(
-            local_path, time_window=[start_time, end_time],
-            pid=pid, ppid=ppid, key=key, session_type=session_type,
-            exclude_interactive=exclude_interactive,
-        )
-
-    text, _label = _read_source_text("auditd", "AUDIT_LOG_LOCAL_PATH", "AUDIT_LOG_BUCKET", host, start, end)
-    if not text:
-        return []
-    tmp_path = _to_named_file(text, host, "audit", start, end)
-    try:
-        return _normalize_audit_events(
-            tmp_path,
-            time_window=[start_time, end_time],
-            pid=pid,
-            ppid=ppid,
-            key=key,
-            session_type=session_type,
-            exclude_interactive=exclude_interactive,
-        )
-    finally:
-        os.remove(tmp_path)
+    return _normalize_audit_events(
+        _local_path("AUDIT_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        pid=pid, ppid=ppid, key=key, session_type=session_type,
+        exclude_interactive=exclude_interactive,
+    )
 
 
 def normalize_web(
@@ -266,38 +178,15 @@ def normalize_web(
 ) -> List[Dict[str, Any]]:
     """1차 탐지팀 fetch_apache_log()를 그대로 호출 — 공통스키마(layer=web) 이벤트 리스트 반환.
 
-    source_type="apache" — WEB_LOG_LOCAL_PATH/WEB_LOG_BUCKET은 이제 apache의
-    access.log를 가리켜야 한다(예전 nginx JSON 경로가 아님). time_window/src_ip/
-    path_pattern/status/method/exclude_self 는 1차 탐지팀 fetch_apache_log()의
-    필터를 그대로 전달한다(이름·의미 동일, 새로 정의하지 않음).
+    WEB_LOG_LOCAL_PATH는 apache의 access.log를 가리켜야 한다(nginx JSON 아님).
+    time_window/src_ip/path_pattern/status/method/exclude_self 는 1차 탐지팀
+    fetch_apache_log()의 필터를 그대로 전달한다.
     """
-    start = parse_iso(start_time)
-    end = parse_iso(end_time)
-
-    local_path = os.environ.get("WEB_LOG_LOCAL_PATH")
-    if local_path:
-        return _normalize_web_events(
-            local_path, time_window=[start_time, end_time],
-            src_ip=src_ip, path_pattern=path_pattern, status=status,
-            method=method, exclude_self=exclude_self,
-        )
-
-    text, _label = _read_source_text("apache", "WEB_LOG_LOCAL_PATH", "WEB_LOG_BUCKET", host, start, end)
-    if not text:
-        return []
-    tmp_path = _to_named_file(text, host, "web", start, end)
-    try:
-        return _normalize_web_events(
-            tmp_path,
-            time_window=[start_time, end_time],
-            src_ip=src_ip,
-            path_pattern=path_pattern,
-            status=status,
-            method=method,
-            exclude_self=exclude_self,
-        )
-    finally:
-        os.remove(tmp_path)
+    return _normalize_web_events(
+        _local_path("WEB_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        src_ip=src_ip, path_pattern=path_pattern, status=status,
+        method=method, exclude_self=exclude_self,
+    )
 
 
 def normalize_network(
@@ -312,34 +201,11 @@ def normalize_network(
 ) -> List[Dict[str, Any]]:
     """1차 탐지팀 fetch_network_log()를 그대로 호출 — 공통스키마(layer=network) 이벤트 리스트 반환.
 
-    source_type="suricata" — NETWORK_LOG_LOCAL_PATH/NETWORK_LOG_BUCKET은 Suricata
-    eve.json(JSONL)을 가리킨다. time_window/src_ip/event_type(http|alert)/flow_id/
-    signature 는 1차 탐지팀 fetch_network_log()의 필터를 그대로 전달한다(이름·의미
-    동일, 새로 정의하지 않음). dst_ip/src_port/dst_port/protocol은 이 함수가 지원하지
-    않으므로 호출부(agent/tools/real/fetch_network_log.py)에서 후처리로 거른다.
+    NETWORK_LOG_LOCAL_PATH는 Suricata eve.json(JSONL)을 가리킨다. time_window/src_ip/
+    event_type(http|alert)/flow_id/signature 는 1차 탐지팀 fetch_network_log()의 필터를
+    그대로 전달한다. dst_ip 등 이 함수가 지원하지 않는 필터는 호출부에서 후처리로 거른다.
     """
-    start = parse_iso(start_time)
-    end = parse_iso(end_time)
-
-    local_path = os.environ.get("NETWORK_LOG_LOCAL_PATH")
-    if local_path:
-        return _normalize_network_events(
-            local_path, time_window=[start_time, end_time],
-            src_ip=src_ip, event_type=event_type, flow_id=flow_id, signature=signature,
-        )
-
-    text, _label = _read_source_text("suricata", "NETWORK_LOG_LOCAL_PATH", "NETWORK_LOG_BUCKET", host, start, end)
-    if not text:
-        return []
-    tmp_path = _to_named_file(text, host, "network", start, end)
-    try:
-        return _normalize_network_events(
-            tmp_path,
-            time_window=[start_time, end_time],
-            src_ip=src_ip,
-            event_type=event_type,
-            flow_id=flow_id,
-            signature=signature,
-        )
-    finally:
-        os.remove(tmp_path)
+    return _normalize_network_events(
+        _local_path("NETWORK_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        src_ip=src_ip, event_type=event_type, flow_id=flow_id, signature=signature,
+    )

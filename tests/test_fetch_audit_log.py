@@ -1,6 +1,6 @@
 ﻿"""fetch_audit_log(agent/tools/real/fetch_audit_log.py) 단독 테스트.
 
-실제 AWS에 붙지 않고, boto3를 흉내내는 가짜 객체를 sys.modules에 주입해서
+실제 AWS에 붙지 않고, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해서(tests/_log_files.py)
 - ENRICHED 포맷(0x1d 구분자)의 raw/enriched 필드가 병합되는지
 - 같은 audit ID(serial)로 여러 줄(SYSCALL/EXECVE/CWD)이 하나의 구조화된
   이벤트로 조립되는지 (uid/euid/session_type/exec_args/target_file 등)
@@ -26,6 +26,8 @@ import sys
 import types
 from typing import Any, Dict, List
 
+from tests._log_files import install_log_files, uninstall_log_files
+
 # normalizer 벤더 코드가 import 시점에 load_dotenv()를 호출하는 문제 회피
 # (test_fetch_auth_log.py 상단 주석 참고 — 이 파일도 agent/tools/real/fetch_audit_log.py
 # 를 통해 normalizer.adapter → normalizer.tools.fetch_auth_log를 같이 import하므로
@@ -35,50 +37,12 @@ for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_
     os.environ.pop(_env_name, None)
 
 
-class _FakeBody:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
+def _install_log(pieces: Dict[str, Dict[str, bytes]]) -> None:
+    install_log_files(pieces, layer="audit")
 
 
-class _FakeS3Client:
-    """key -> raw 텍스트 bytes 매핑으로 list_objects_v2 + get_object를 흉내낸다."""
-
-    def __init__(self, objects_by_prefix: Dict[str, Dict[str, bytes]]) -> None:
-        self._objects_by_prefix = objects_by_prefix
-        self.requested_prefixes: List[str] = []
-
-    def get_paginator(self, name: str):
-        assert name == "list_objects_v2"
-
-        def _paginate(**kwargs: Any):
-            prefix = kwargs["Prefix"]
-            self.requested_prefixes.append(prefix)
-            objects = self._objects_by_prefix.get(prefix, {})
-            return [{"Contents": [{"Key": k} for k in objects]}]
-
-        paginator = types.SimpleNamespace()
-        paginator.paginate = _paginate
-        return paginator
-
-    def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:
-        for objects in self._objects_by_prefix.values():
-            if Key in objects:
-                return {"Body": _FakeBody(objects[Key])}
-        raise KeyError(Key)
-
-
-def _install_fake_boto3(s3_client: _FakeS3Client) -> None:
-    fake_module = types.ModuleType("boto3")
-    fake_module.client = lambda service_name, **kwargs: s3_client  # type: ignore[attr-defined]
-    sys.modules["boto3"] = fake_module
-
-
-def _uninstall_fake_boto3() -> None:
-    sys.modules.pop("boto3", None)
-    sys.modules.pop("agent.tools.real.fetch_audit_log", None)
+def _uninstall_log() -> None:
+    uninstall_log_files(['agent.tools.real.fetch_audit_log'])
 
 
 # 2026-09-09 10:05:45 UTC epoch: 1788948345 (실제 값은 중요치 않고, start/end 범위 계산에만 씀)
@@ -106,8 +70,8 @@ def _sample_audit_text() -> bytes:
 
 def test_fetch_audit_log_assembles_structured_event_from_enriched_multiline() -> None:
     prefix = "raw/source_type=auditd/host=web-01/dt=2026-09-09/"
-    fake_client = _FakeS3Client({prefix: {"audit.log": _sample_audit_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"audit.log": _sample_audit_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_audit_log import fetch_audit_log
@@ -130,13 +94,13 @@ def test_fetch_audit_log_assembles_structured_event_from_enriched_multiline() ->
         assert webshell["session_type"] == "non_interactive", "auid=4294967295는 non_interactive"
         print("[PASS] test_fetch_audit_log_assembles_structured_event_from_enriched_multiline")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_audit_log_filters_by_time_range() -> None:
     prefix = "raw/source_type=auditd/host=web-01/dt=2026-09-09/"
-    fake_client = _FakeS3Client({prefix: {"audit.log": _sample_audit_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"audit.log": _sample_audit_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_audit_log import fetch_audit_log
@@ -159,13 +123,13 @@ def test_fetch_audit_log_filters_by_time_range() -> None:
         assert result["records"][0]["pid"] == 3812
         print("[PASS] test_fetch_audit_log_filters_by_time_range")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_audit_log_filters_by_pid_and_user() -> None:
     prefix = "raw/source_type=auditd/host=web-01/dt=2026-09-09/"
-    fake_client = _FakeS3Client({prefix: {"audit.log": _sample_audit_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"audit.log": _sample_audit_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_audit_log import fetch_audit_log
@@ -193,13 +157,13 @@ def test_fetch_audit_log_filters_by_pid_and_user() -> None:
         assert result_user["records"][0]["pid"] == 3812
         print("[PASS] test_fetch_audit_log_filters_by_pid_and_user")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_audit_log_exclude_interactive() -> None:
     prefix = "raw/source_type=auditd/host=web-01/dt=2026-09-09/"
-    fake_client = _FakeS3Client({prefix: {"audit.log": _sample_audit_text()}})
-    _install_fake_boto3(fake_client)
+    pieces = ({prefix: {"audit.log": _sample_audit_text()}})
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_audit_log import fetch_audit_log
@@ -217,13 +181,13 @@ def test_fetch_audit_log_exclude_interactive() -> None:
         assert result["records"][0]["session_type"] == "non_interactive"
         print("[PASS] test_fetch_audit_log_exclude_interactive")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 def test_fetch_audit_log_reports_missing_partition() -> None:
     """해당 host/날짜 파티션에 오브젝트가 하나도 없을 때 안내 메시지가 나오는지 확인."""
-    fake_client = _FakeS3Client({})  # 아무 오브젝트도 없음
-    _install_fake_boto3(fake_client)
+    pieces = ({})  # 아무 오브젝트도 없음
+    _install_log(pieces)
 
     try:
         from agent.tools.real.fetch_audit_log import fetch_audit_log
@@ -240,7 +204,7 @@ def test_fetch_audit_log_reports_missing_partition() -> None:
         assert "host 이름" in result["summary"]
         print("[PASS] test_fetch_audit_log_reports_missing_partition")
     finally:
-        _uninstall_fake_boto3()
+        _uninstall_log()
 
 
 if __name__ == "__main__":

@@ -13,12 +13,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from .normalizer_adapter import normalize_log_documents
-from .real._s3_common import daterange
 from .time_utils import parse_iso
 
 SOURCE_TYPES = {"web": "apache", "auth": "auth", "audit": "auditd", "network": "suricata"}
 LOCAL_PATH_ENV = {key: f"{key.upper()}_LOG_LOCAL_PATH" for key in SOURCE_TYPES}
-DEFAULT_BUCKET = "ogwanwan-shop-bucket"
 IP_FILTER_KEYS = {"ip", "src_ip", "dest_ip"}
 
 
@@ -28,50 +26,30 @@ class LogDocument:
     text: str
 
 
-def read_documents(layer: str, host: str, start: datetime, end: datetime,
-                   bucket: str | None = None) -> List[LogDocument]:
-    """A configured local file belongs to the host running this collector.
+class LogPathNotConfigured(RuntimeError):
+    """`<계층>_LOG_LOCAL_PATH`가 설정되지 않음 — 설정 오류라 0건과 구분해 알린다."""
 
-    Set LOG_LOCAL_HOST to reject queries for a different machine. HOST is not
-    used here: main.py uses it as the ingestion target, and synthetic scenario
-    seeds (host=web-01) must still read the same local files.
-    S3 documents are scoped by the existing host/date partition convention.
+
+def read_documents(layer: str, host: str, start: datetime, end: datetime) -> List[LogDocument]:
+    """`.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2라면 /var/log/...)을 원본 그대로 읽는다.
+
+    LOG_LOCAL_HOST가 있으면 다른 host 조회를 거부한다. HOST는 여기서 쓰지 않는다 — main.py의
+    수집 대상 이름이고, 합성 시나리오 seed(host=web-01)도 같은 로컬 파일을 읽어야 하기 때문이다.
+    S3에서 읽던 분기는 운영이 EC2 로컬 경로로 정해져 2026-09-25에 삭제했다.
     """
     local_path = os.environ.get(LOCAL_PATH_ENV[layer])
-    if local_path:
-        configured_host = os.environ.get("LOG_LOCAL_HOST")
-        if configured_host and configured_host != host:
-            raise ValueError(f"local host mismatch: expected {configured_host}, got {host}")
-        path = Path(local_path).resolve()
-        if path.suffix == ".gz":
-            with gzip.open(path, "rt", encoding="utf-8", errors="replace") as stream:
-                text = stream.read()
-        else:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        return [LogDocument(path.as_posix(), text)]
-
-    import boto3
-
-    bucket = bucket or os.environ.get(f"{layer.upper()}_LOG_BUCKET", DEFAULT_BUCKET)
-    s3 = boto3.client("s3", region_name=os.environ.get("AWS_DEFAULT_REGION"))
-    documents = []
-    # Date partitions are UTC even when callers supply a +09:00 window.
-    for day in daterange(start.astimezone(timezone.utc), end.astimezone(timezone.utc)):
-        prefix = f"raw/source_type={SOURCE_TYPES[layer]}/host={host}/dt={day}/"
-        paginator = s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get("Contents", []):
-                body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"]
-                try:
-                    data = body.read()
-                    if obj["Key"].endswith(".gz"):
-                        data = gzip.decompress(data)
-                    text = data.decode("utf-8", errors="replace")
-                finally:
-                    if hasattr(body, "close"):
-                        body.close()
-                documents.append(LogDocument(f"s3://{bucket}/{obj['Key']}", text))
-    return sorted(documents, key=lambda doc: doc.source)
+    if not local_path:
+        raise LogPathNotConfigured(f"{LOCAL_PATH_ENV[layer]}가 설정되지 않았습니다 (.env에 {layer} 로그 경로 필요)")
+    configured_host = os.environ.get("LOG_LOCAL_HOST")
+    if configured_host and configured_host != host:
+        raise ValueError(f"local host mismatch: expected {configured_host}, got {host}")
+    path = Path(local_path).resolve()
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as stream:
+            text = stream.read()
+    else:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    return [LogDocument(path.as_posix(), text)]
 
 
 def normalize_documents(layer: str, documents: Iterable[LogDocument],
@@ -144,9 +122,10 @@ def load_window_events(layer: str, host: str, start_time: str, end_time: str) ->
     error = None
     try:
         documents = read_documents(layer, host, start, end)
-    except (FileNotFoundError, PermissionError) as exc:
+    except (FileNotFoundError, PermissionError, LogPathNotConfigured) as exc:
         documents = []
-        error = "permission_denied" if isinstance(exc, PermissionError) else "not_found"
+        error = ("permission_denied" if isinstance(exc, PermissionError)
+                 else "not_configured" if isinstance(exc, LogPathNotConfigured) else "not_found")
     events = normalize_documents(layer, documents, start, end)
     invalid_timestamps = sum(event_time(event) is None for event in events)
     in_window = [event for event in events if (ts := event_time(event)) is not None and start <= ts <= end]

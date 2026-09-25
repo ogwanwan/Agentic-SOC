@@ -9,7 +9,7 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
       → primary_detection/normalizer/tools/fetch_auth_log.py (1차 탐지팀 공통 정규화 함수)
     같은 raw 로그에 대해 1차 탐지와 에이전트 도구가 동일한 정규화 결과를 내도록,
     파싱은 에이전트 자체 파서(구 parsers/auth_parser.py)가 아니라 공통 정규화 함수에 맡긴다.
-    raw_ref/raw_refs/raw_ref_locations(S3 객체별 실제 줄 위치)도 그 경로에서 붙는다.
+    raw_ref/raw_refs/raw_ref_locations(원본 파일의 실제 줄 위치)도 그 경로에서 붙는다.
   - 이 파일(에이전트 도구): 도구 인자 해석, 필터, limit/offset 페이지네이션,
     LLM에게 돌려줄 summary/반환 형식.
 
@@ -20,7 +20,7 @@ summary 끝의 [조회 구간 전체 집계]는 페이지와 무관하게 조건
 pam_auth_failure/sudo_command/su_failure 등 세분화된 값)·src_ip·raw_ref를 쓴다.
 도구 인자 event_type은 이 event 값과 비교한다.
 
-필요 환경변수: AUTH_LOG_LOCAL_PATH 있으면 로컬 파일, 없으면 AUTH_LOG_BUCKET/S3
+필요 환경변수: AUTH_LOG_LOCAL_PATH (읽을 auth 로그 파일 경로)
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
     elif total_matched == 0:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 인증 이벤트를 찾지 못했습니다. "
-            "host 이름, 기간, 또는 AUTH_LOG_LOCAL_PATH/AUTH_LOG_BUCKET 설정을 확인하세요."
+            "host 이름, 기간, 또는 AUTH_LOG_LOCAL_PATH 설정을 확인하세요."
         ) + filtered_out_hint(len(loaded["events"]), args, ("user", "src_ip", "result", "event_type"))
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"

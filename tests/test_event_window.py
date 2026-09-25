@@ -1,4 +1,4 @@
-"""Offline C tests: real temporary files + fake S3, no model or AWS credentials."""
+"""Offline C tests: real temporary files, no model or AWS credentials."""
 import json
 import sys
 from datetime import datetime, timezone
@@ -137,16 +137,3 @@ def test_local_host_guard(tmp_path, monkeypatch):
         query()
 
 
-def test_s3_object_paths_utc_partitions_and_stable_order(monkeypatch):
-    from tests.test_fetch_audit_log import _FakeS3Client
-    prefix = "raw/source_type=apache/host=web-01/dt=2026-09-20/"
-    client = _FakeS3Client({prefix: {
-        prefix + "b.json": web_line("2026-09-20T23:59:59Z").encode(),
-        prefix + "a.json": ("\n" + web_line("2026-09-20T23:59:59Z")).encode(),
-    }})
-    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *a, **kw: client))
-    monkeypatch.setenv("WEB_LOG_BUCKET", "test-bucket")
-    result = query(window=["2026-09-21T08:59:58+09:00", "2026-09-21T09:00:01+09:00"])
-    assert result["count"] == 2
-    assert result["records"][0]["raw_ref"] == f"s3://test-bucket/{prefix}a.json:2"
-    assert client.requested_prefixes == [prefix, "raw/source_type=apache/host=web-01/dt=2026-09-21/"]

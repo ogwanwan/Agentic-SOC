@@ -102,52 +102,6 @@ def test_pipeline_rejects_fabricated_seed_before_investigation():
         run_investigation_pipeline("web-01", BadSeedClient(), build_default_registry())
 
 
-def test_s3_pipeline_preserves_object_refs_including_split_audit_and_gzip(monkeypatch):
-    import gzip
-    import sys
-    from datetime import datetime, timezone
-    from types import SimpleNamespace
-    from agent.tools.log_source import LOCAL_PATH_ENV, SOURCE_TYPES
-    from scripts.demo_abcd import SAMPLES
-    from tests.test_fetch_audit_log import _FakeS3Client
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 9, 21, 0, 1, tzinfo=timezone.utc)
-
-    # Freeze the acquisition clock; every other pipeline step runs unchanged.
-    ingestion_globals = run_investigation_pipeline.__globals__["fetch_recent_raw_logs"].__globals__
-    monkeypatch.setitem(ingestion_globals, "datetime", Clock)
-    objects, expected = {}, set()
-    for layer in LAYERS:
-        monkeypatch.delenv(LOCAL_PATH_ENV[layer], raising=False)
-        monkeypatch.setenv(f"{layer.upper()}_LOG_BUCKET", "abcd-test")
-        prefix = f"raw/source_type={SOURCE_TYPES[layer]}/host=web-01/dt=2026-09-21/"
-        raw = (ROOT / "examples" / "cd" / SAMPLES[layer]).read_bytes()
-        if layer == "audit":
-            # A single event spans two objects, each at its own physical line 1.
-            objects[prefix] = {prefix + f"part-{i}.log": line + b"\n"
-                               for i, line in enumerate(raw.splitlines(), start=1)}
-        elif layer == "auth":
-            objects[prefix] = {prefix + "auth.log.gz": gzip.compress(raw)}
-        else:
-            objects[prefix] = {prefix + SAMPLES[layer]: raw}
-        expected.update(f"s3://abcd-test/{key}:1" for key in objects[prefix])
-    monkeypatch.setenv("AUTH_LOG_YEAR", "2026")
-    client = _FakeS3Client(objects)
-    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *args, **kw: client))
-    llm = ScriptedDemoClient()
-    result = run_investigation_pipeline("web-01", llm, build_default_registry(), max_calls=12)[0]
-    assert len(llm.seed_input) == 4
-    assert result["provenance"]["status"] == "passed"
-    assert set(result["raw_refs"]) == expected
-    assert result["raw_ref_locations"] == {ref: [ref] for ref in expected}
-    assert {ref for e in result["evidence_chain"] for ref in e["raw_refs"]} == expected
-    assert [call["result_count"] for call in result["tools_called"]] == [1, 1, 1, 1, 1, 2, 2]
-    assert all("error" not in call for call in result["tools_called"])
-
-
 def test_pipeline_marks_fabricated_evidence_incomplete_without_confidence_increase():
     class BadEvidenceClient(ScriptedDemoClient):
         def reason(self, *args, **kwargs):

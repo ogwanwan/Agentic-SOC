@@ -18,7 +18,7 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
     (관리자 세션뿐 아니라 판정 불가(None)도 제외 — 공통 정규화 함수와 동일한 의미)
   - include_user_cmd=False: USER_CMD 레코드가 포함된 이벤트 제외
 
-필요 환경변수: AUDIT_LOG_LOCAL_PATH 있으면 로컬 파일, 없으면 AUDIT_LOG_BUCKET/S3
+필요 환경변수: AUDIT_LOG_LOCAL_PATH (읽을 auditd 로그 파일 경로)
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ def fetch_audit_log(args: Dict[str, Any]) -> Dict[str, Any]:
     elif total_matched == 0:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 audit 이벤트를 찾지 못했습니다. "
-            "host 이름, 기간, 또는 AUDIT_LOG_LOCAL_PATH/AUDIT_LOG_BUCKET 설정을 확인하세요."
+            "host 이름, 기간, 또는 AUDIT_LOG_LOCAL_PATH 설정을 확인하세요."
         ) + filtered_out_hint(len(loaded["events"]), args, FILTER_KEYS)
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"
