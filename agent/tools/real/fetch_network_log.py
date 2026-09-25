@@ -1,7 +1,15 @@
 """fetch_network_log 실제 구현 - 에이전트(LLM)가 조사 중 호출하는 네트워크(Suricata eve.json) 조회 도구.
 
-파일명 == 함수명 규칙에 따라 agent/tools/registry.py의 build_default_registry()가
-mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/README.md 참고)
+누가 부르나
+  [31] agent/tools/registry.py ToolRegistry.call("fetch_network_log", args) ← agent/loop.py [30]
+       (LLM이 이 도구를 골랐을 때, 또는 network 사전 조회 [19-1])
+  agent/tools/real/fetch_event_logs.py (사건 구간 다계층 조회 때 이 함수를 직접 부른다)
+
+무엇을 부르나
+  [33] agent/tools/log_source.py load_window_events("network", ...)  Suricata eve.json 읽기 + 정규화 + 시간창 필터
+       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_network_log.py
+
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
@@ -15,9 +23,9 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
   - src_ip: 공통 정규화의 src_ip(XFF로 복원한 실 클라이언트) 또는 transport_src_ip(패킷의
     실제 출발지) 중 하나와 일치. 공통 정규화는 XFF가 없는 alert 이벤트의 src_ip를 비워두기
     때문에, src_ip만 보면 공격자 IP로 거른 inbound alert가 0건이 된다(9/18 자체 파서 대비
-    퇴보, 2026-09-24 수정).
+    퇴보, 수정).
   - ip: 방향 무관 — src_ip/transport_src_ip/dest_ip 중 하나와 일치. 공격자 IP가 출발지(inbound
-    공격)인지 목적지(역방향 셸·유출 등 outbound)인지 모를 때 쓴다. 2026-09-24 0918 시나리오
+    공격)인지 목적지(역방향 셸·유출 등 outbound)인지 모를 때 쓴다. 0918 시나리오
     비교에서 src_ip로만 사전 조회하자 outbound 역방향 셸 alert를 놓쳐 추가했다.
   - dst_ip → dest_ip, src_port → transport_src_port, dst_port → transport_dest_port
   - protocol: 대소문자 무시 일치
@@ -46,7 +54,7 @@ def _top(counter: Counter) -> str:
 
 def _network_stats(records: List[Dict[str, Any]]) -> str:
     """조건에 맞는 전체 이벤트(페이지와 무관) 집계. web/auth 도구와 같은 방식으로, records를 다
-    읽지 않아도 규모·경보·목적지를 판단할 수 있게 한다. EC2 xmlrpc 사건(2026-09-24)에서 150건이
+    읽지 않아도 규모·경보·목적지를 판단할 수 있게 한다. EC2 xmlrpc 사건에서 150건이
     records로 통째로 LLM에게 가 응답이 잘린 뒤 추가했다."""
     times = sorted(r["timestamp"] for r in records if r.get("timestamp"))
     alerts = Counter(r.get("signature") or "-" for r in records if r.get("event_type") == "alert")
@@ -82,13 +90,16 @@ def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
     return True
 
 
+# [32] ← registry.call() [31]에서 호출. 반환 dict는 loop.py [37]로 간다.
 def fetch_network_log(args: Dict[str, Any]) -> Dict[str, Any]:
     host = args["host"]
     start_time = args["start_time"]
     end_time = args["end_time"]
     limit, offset = pagination(args)
 
+    # [33] → log_source.load_window_events(): 파일 읽기 → [34] 1차 탐지팀 정규화 → 구간 안 이벤트
     loaded = load_window_events("network", host, start_time, end_time)
+    # [35] 도구 인자로 거르고(_matches), 페이지로 자르고, summary·rule_checks를 만든다
     matched: List[Dict[str, Any]] = [e for e in loaded["events"] if _matches(e, args)]
 
     total_matched = len(matched)

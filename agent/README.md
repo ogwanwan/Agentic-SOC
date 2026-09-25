@@ -27,7 +27,7 @@ Triage가 파이프라인에서 빠지면서 추가된 전(前) 단계:
 그 함수들은 `agent/` 밖의 레포 루트 `primary_detection/normalizer/`에 있고,
 `agent/tools/normalizer_adapter.py`가 그걸 가져다 쓰는 유일한 연결 지점입니다.
 왜 이렇게 나눴는지는 [docs/normalizer-migration.md](../docs/normalizer-migration.md)에
-정리돼 있습니다. (2026-09-23: 자체 파서 폴더 `tools/parsers/`는 완전히 없어졌습니다 —
+정리돼 있습니다. (자체 파서 폴더 `tools/parsers/`는 완전히 없어졌습니다 —
 마지막 남은 헬퍼 `process_tree.py`도 `tools/real/get_process_tree.py` 안으로 합쳤습니다.)
 
 ## 실행

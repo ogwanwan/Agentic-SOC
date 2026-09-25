@@ -27,7 +27,7 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 
 | 파일 | 확인 내용 |
 | --- | --- |
-| `test_abcd_pipeline.py` | 실제 수집 → seed 생성·검증 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 모사 S3, 가짜 참조 거부, 환경변수 복원 |
+| `test_abcd_pipeline.py` | 실제 수집 → seed 생성·검증 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 가짜 참조 거부, 환경변수 복원 |
 | `test_cd_normalizer_integration.py` | A의 벤더 직접 호출과 입력 수집/B 개별 도구/C 사건 조회 결과 비교. audit 분할 객체, gzip, 원본 위치·모호성 |
 | `test_normalizer_parity.py` | 기존 A 어댑터 API와 벤더 결과 비교. `_run()`을 위 통합 테스트에서 호출하므로 전체 pytest에도 포함 |
 | `test_event_window.py` | C의 시간 양끝·시간대·연도 경계·필터·전역 페이지·입력 오류·파일 누락/권한 |
@@ -39,7 +39,7 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 
 `test_abcd_pipeline.py`는 네트워크 연결을 차단한 상태에서 실행합니다. LLM 응답만
 고정해 같은 순서로 조사하도록 하고, 로그 처리 함수나 조사 도구의 결과를 성공값으로
-대체하지 않습니다. S3 테스트는 서비스 응답만 모사하고 객체 읽기 이후 처리는 그대로 실행합니다.
+대체하지 않습니다. 도구 테스트는 `tests/_log_files.py`로 임시 로그 파일을 만들어 `<계층>_LOG_LOCAL_PATH`로 지정합니다(S3 읽기 코드와 S3 모사 테스트는 삭제됨).
 
 ## 실제 LLM 평가와의 차이
 

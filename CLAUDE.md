@@ -46,7 +46,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 
 ### 전체 흐름
 ```
-raw log (S3 또는 로컬 샘플 파일)
+raw log (.env의 <계층>_LOG_LOCAL_PATH 파일 — EC2는 /var/log/..., 로컬은 sample_logs/)
   → agent/raw_log_ingestion.py        4계층(web/auth/audit/network) 정규화 수집
   → agent/seed_generation.py          경량 LLM triage로 "조사할 사건" 후보 + 우선순위 추출 (SeedGenerator)
   → agent/pipeline.py                 우선순위 순서로 각 seed를 조사 루프에 투입 (run_investigation_pipeline)
@@ -54,7 +54,7 @@ raw log (S3 또는 로컬 샘플 파일)
                                        갱신 + 다음 행동(call_tool | terminate) 동시 결정 (InvestigationAgent.run)
   → agent/report.py                   최종 investigation_result JSON + 텍스트 리포트
 ```
-`main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
+코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다. `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
 ### 정규화(A) — `primary_detection/normalizer/`는 우리 코드가 아니다
 1차 탐지팀이 만든 공통 정규화 코드가 이 저장소에 vendor(복사)되어 있다. **내용 수정 금지** — 갱신은 1차 탐지팀 원본을 그대로 다시 복사하는 방식으로만 한다. 조사 에이전트는 이걸 직접 import하지 않고 `agent/tools/normalizer_adapter.py`를 거친다. `primary_detection/normalizer/vendor_sync_check.py`로 원본과의 동일성을 확인한다.
@@ -67,7 +67,7 @@ raw log (S3 또는 로컬 샘플 파일)
 도구 반환값의 약속(LLM과 종료 관문이 의존함):
 - `summary`에 `[조회 구간 전체 집계]`: limit으로 자른 페이지와 무관하게 조건에 맞는 전체 이벤트 기준으로 코드가 센 값(건수, 실제 기록 시각, 상위 항목). LLM이 records를 직접 세지 않게 하기 위한 것이다.
 - `window_total`: 필터 전 조회 구간 전체 건수. 0이면 "활동 없음"이 아니라 로그 미확보다.
-- `rule_checks`: 판정 원칙 기준을 코드가 계산한 결과. web은 `principle_9`(인증·XML-RPC POST 10회 이상, 경로 20개 이상+4xx 과반), audit은 `audit_post_exploitation`(웹 서버 계정의 의심 명령 실행). auth는 `rule_checks` 없이 summary의 SSH 실패 집계(횟수·대상 계정 수)로 원칙 7을 뒷받침한다.
+- `rule_checks`: 판정 원칙 기준을 코드가 계산한 결과. web은 `principle_9`(인증·XML-RPC POST 10회 이상, 경로 20개 이상+4xx 과반), audit은 `audit_post_exploitation`(웹 서버 계정의 셸·의심 명령 실행, cron `sh -c`·EC2 Instance Connect 제외), auth는 `principle_7`(IP 하나로 거르고 로그인 성공이 없을 때: 실패 5회 이상 또는 계정 2개 이상 → 무차별 대입, 1~4회·1계정 → 단발성, 실패 0회·`ssh_probe` 1~4건 → 스캐너 탐침).
 - `fetch_network_log`의 `ip` 필터는 방향 무관(src·dest 모두 매칭)이다. 역방향 셸(서버 → 공격자)을 잡기 위해서다.
 - audit의 `user` 필터는 **실행 계정**이다(sudo 뒤에는 root). 로그인 세션을 따라가려면 `ppid`를 쓴다.
 
@@ -87,34 +87,35 @@ raw log (S3 또는 로컬 샘플 파일)
 - **network 사전 조회** (`network_precheck=True`): seed에 src_ip가 있으면 첫 LLM 턴 전에 코드가 `fetch_network_log(ip=src_ip, seed 구간 ±30분, limit=20)`를 실행해 첫 관측으로 넣는다. LLM 호출 수는 늘지 않는다. 이 호출은 `state.system_call_sequences`에 기록되어 "LLM이 고른 도구 수"에서 빠진다.
 - 종료 사유: `confidence_sufficient`, `no_more_evidence`, `max_call_reached`.
 - **종료 관문** (`_termination_rejections()`, strict 조건은 `strict_termination=True`일 때):
-  - (a) `confidence_sufficient`인데 실제 confidence가 threshold 미만
+  - (a) `confidence_sufficient`인데 실제 confidence가 threshold 미만 — 단, 판정이 도구 기준으로 정해지는 판정(`_rule_determined_verdict()`)과 같으면 면제
   - (b) LLM이 고른 서로 다른 도구가 1종류 이하
   - (c) seed에 src_ip가 있는데 network 조회를 한 번도 시도하지 않음(사전 조회 포함, 실패해도 시도로 인정)
   - (d) strict: `no_more_evidence`인데 도구를 1종류만 시도했고 안 본 로그 도구가 남음
   - (e) strict: seed src_ip의 로그인 성공(`ssh_accepted`)이 보이는데 audit을 시도하지 않음. 거부 사유에 `ppid=<sshd pid>`를 적어준다
-  - 판정-원칙 충돌 (`_verdict_conflicts()`, strict): 조회한 모든 계층의 `window_total`이 0인데 INCONCLUSIVE가 아님 / 원칙 9 기준 충족인데 FALSE_POSITIVE / audit에 웹 서버 계정 의심 명령이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만
+  - 판정-원칙 충돌 (`_verdict_conflicts()`, strict): 조회한 모든 계층의 `window_total`이 0인데 INCONCLUSIVE가 아님 / 원칙 9 기준 충족인데 FALSE_POSITIVE / audit에 웹 서버 계정 의심 명령이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만 / 원칙 7 무차별 대입인데 FALSE_POSITIVE·INCONCLUSIVE / 원칙 7 단발성·탐침이고 다른 위협 기준이 없는데 THREAT_CONFIRMED·INCONCLUSIVE
   - 거부 사유에는 아직 안 본 도구와 확인 목적이 적힌다(`UNTRIED_TOOL_PURPOSE`).
-- **강제 종료**: 같은 사유(숫자 제외 비교)로 연속 2회 거부될 때만 강제 종료 턴으로 전환한다. 거부 사이에 새 도구가 실행되면 횟수를 초기화한다. 강제 종료 후에도 판정-원칙 충돌이 남으면 판정은 바꾸지 않고 notes에 "⚠ 판정-원칙 불일치"를 남긴다.
+- **강제 종료**: 같은 사유(숫자 제외 비교)로 연속 2회 거부될 때만 강제 종료 턴으로 전환한다. 거부 사이에 새 도구가 실행되면 횟수를 초기화한다. 강제 종료 턴에서 LLM이 원칙과 어긋나게 판정을 뒤집으면 앞서 LLM이 낸 원칙에 맞는 판정을 쓴다(`_settle_forced_verdict()`). 그래도 충돌이 남으면 판정은 바꾸지 않고 notes에 "⚠ 판정-원칙 불일치"를 남긴다.
 - `max_call_reached` 시 판정만 요청하는 마무리 턴을 1회 추가하고, 그래도 `final_verdict`가 없으면 `_derive_fallback_verdict()`가 confidence 수치로 폴백 판정을 만든다.
 - LLM 응답 해석 실패(`...DecisionError`)는 `_safe_reason()`이 1회 재시도하고, 또 실패하면 그 사건만 폴백 판정으로 마무리하고 다음 seed를 계속 조사한다. API 키·권한 오류는 그대로 올린다.
 
 ### 원본 추적/Provenance (D) — `agent/provenance.py`
-evidence의 `raw_refs`(예: `auth.log:15`, `s3://bucket/key:20`)는 `references()`/`validate_citations()`로 `state.raw_refs`(seed+도구 결과에서 실제 관측된 참조 집합)와 대조된다. 최종 보고서의 `provenance.status`(`passed`/`incomplete`/`unavailable`)는 "참조가 유효했는가"의 검증이지 "판정이 맞는가"의 검증이 아니다. 텍스트 리포트는 Findings에 `[원본 N줄]`만 적고, 원본 위치는 맨 아래 `Raw References`에 범위로 묶어 보여준다(`compact_refs()`).
+evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations()`로 `state.raw_refs`(seed+도구 결과에서 실제 관측된 참조 집합)와 대조된다. 최종 보고서의 `provenance.status`(`passed`/`incomplete`/`unavailable`)는 "참조가 유효했는가"의 검증이지 "판정이 맞는가"의 검증이 아니다. 텍스트 리포트는 Findings에 `[원본 N줄]`만 적고, 원본 위치는 맨 아래 `Raw References`에 범위로 묶어 보여준다(`compact_refs()`).
 
 ### 프롬프트 — `agent/prompts/` (패키지), `agent/seed_prompts.py`
-조사 루프 시스템 프롬프트는 `agent/prompts/investigation.yaml`에 있고 `agent/prompts/__init__.py`가 조립한다(auth 24시간 조회창 `auth_lookback_window` 자동 주입 포함). 판정 재현성을 위한 원칙 중 코드 관문과 짝을 이루는 것:
+조사 루프 시스템 프롬프트는 `agent/prompts/investigation.yaml`에 있고 `agent/prompts/__init__.py`가 조립한다(계층별 첫 조회 구간 `query_windows`와 auth 24시간 조회창 `auth_lookback_window`를 코드가 계산해 주입). 판정 재현성을 위한 원칙 중 코드 관문과 짝을 이루는 것:
 - 원칙 1: 조회 구간 로그 자체가 0건이면 데이터 공백 → INCONCLUSIVE.
 - 원칙 4: 사전 조회 결과 반영, 새 외부 IP가 나오면 network 재조회, 집계에 경보가 있는데 records에 없으면 `alert_only`로 재조회.
-- 원칙 7: SSH 판정 하한선(실패 5회 이상 또는 계정 2개 이상 → 무차별 대입 시도로 THREAT_CONFIRMED 등), invalid user 1회 후 공개키 로그인은 정상.
+- 원칙 2: 각 계층 첫 조회는 `query_windows` 구간 그대로(web 앞뒤 1시간, audit 30분 전~1시간 후, network 앞뒤 30분, auth 24시간 전~1시간 후). audit 넓은 구간 무필터 조회 금지.
+- 원칙 7: SSH 판정 기준(도구 summary의 `[원칙 7 기준]`을 따름), invalid user 1회 후 공개키 로그인은 정상.
 - 원칙 9: 웹 요청 반복·스캔. User-Agent와 5xx/2xx 응답은 정상 근거가 아니다. 도구 summary의 `[원칙 9 기준]`과 audit `[후속 침해 확인]` 결과를 쓴다.
 
 프롬프트의 판정 기준을 바꿀 때는 `fetch_*_log`의 `rule_checks` 계산과 `_verdict_conflicts()`를 함께 맞출 것 — 한쪽만 바꾸면 관문이 LLM의 판정을 계속 거부한다. Seed 생성용 프롬프트는 `seed_prompts.py`에 따로 있다.
 
 ### LLM 클라이언트 — `agent/gemini_client.py`, `agent/claude_client.py`
-`GeminiClient`(기본값, 무료 티어)와 `ClaudeClient`는 동일 인터페이스(`.reason(state, tool_registry, ...)`, `.complete_json(...)`)라 `LLM_PROVIDER` 환경변수로 교체할 수 있다. Gemini는 `max_output_tokens=8192`이고, 503과 연결 오류(`OSError`, `httpx.TransportError`)를 5·10·15초 간격으로 재시도한다. 무료 티어의 일일 요청 제한(429)과 간헐적 503은 코드 문제가 아니다 — 반복 측정(`test_consistency`)은 한도를 고려해 나눠 돌린다.
+`GeminiClient`(기본값, 무료 티어)와 `ClaudeClient`는 `LLM_PROVIDER` 환경변수로 고른다. 단 `ClaudeClient.reason()`은 아직 loop가 넘기는 `confidence_threshold`·`force_terminate`·`gate_rejection_reason`을 받지 않아 그대로 전환하면 첫 턴에 TypeError가 난다(max_tokens 2000도 Gemini 8192와 다름). Gemini는 `max_output_tokens=8192`이고, 503과 연결 오류(`OSError`, `httpx.TransportError`)를 5·10·15초 간격으로 재시도한다. 무료 티어의 일일 요청 제한(429)과 간헐적 503은 코드 문제가 아니다 — 반복 측정(`test_consistency`)은 한도를 고려해 나눠 돌린다.
 
 ### 로컬 개발용 우회
-`.env`에 `<계층>_LOG_LOCAL_PATH`를 지정하면 S3 대신 `sample_logs/*.log`를 읽는다(값을 지우면 S3 모드). 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다. `sample_logs/`는 EC2 실제 트래픽이 들어 있어 **git으로 추적하지 않는다**(`.gitignore`) — 실험 전에 `sample_logs_orig/`로 백업해 두고 실험 후 그 백업으로 원복한다(`scenarios/README.md`). 새로 clone한 저장소에는 샘플이 없으니 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받는다.
+로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일에서만 읽는다(S3 읽기 코드는 삭제됨, 경로가 없으면 설정 오류). 로컬 개발은 이 경로를 `sample_logs/*.log`로 둔다. 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다. `sample_logs/`는 EC2 실제 트래픽이 들어 있어 **git으로 추적하지 않는다**(`.gitignore`) — 실험 전에 `sample_logs_orig/`로 백업해 두고 실험 후 그 백업으로 원복한다(`scenarios/README.md`). 새로 clone한 저장소에는 샘플이 없으니 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받는다.
 
 ### 건드리지 않는 영역
 - `primary_detection/normalizer/` — 1차 탐지팀 산출물 (위 참조)

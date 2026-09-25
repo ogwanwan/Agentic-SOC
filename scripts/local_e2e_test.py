@@ -1,6 +1,10 @@
-"""EC2에서 가져온 실제 raw log 샘플(4계층)로 전체 흐름을 검증하는 스크립트.
+"""(구버전) EC2에서 가져온 실제 raw log 샘플(4계층)로 전체 흐름을 검증하던 초기 스크립트.
 
-S3/AWS 자격 증명 없이, 로컬 파일 + 실제 Gemini API 키만으로:
+지금은 실제 조사 도구(agent/tools/real/)가 로컬 로그 파일을 직접 읽으므로 `python main.py`나
+`python -m scripts.verify_all_tools`를 쓴다. 이 파일은 최종 정리 때 삭제 후보다. 아래 설명의 "S3"는
+S3 읽기 코드가 있던 시절 기준이다(지금은 삭제됨).
+
+로컬 파일 + 실제 Gemini API 키만으로:
 1. EC2에서 받아온 web/auth/audit/network raw 로그(정규화 안 된 원본)를 전부 로드
 2. 진짜 Gemini(SeedGenerator)에게 "여기서 수상한 거 있어?"라고 물어봐서 seed 후보 + 우선순위 확보
 3. 가장 우선순위 높은 seed 하나를 골라, "로컬 파일에서 근거를 찾는 검증 도구" 4개

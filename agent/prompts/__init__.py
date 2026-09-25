@@ -1,24 +1,20 @@
-﻿"""Agent 판단·Prompt 담당 모듈 (패키지로 분리됨).
+"""조사 루프용 LLM 프롬프트 조립.
 
-*** 2026-09-17 리팩터링: 프롬프트 본문을 yaml로 분리 ***
-기존에는 이 모듈(agent/prompts.py) 안에 시스템 프롬프트 전체(역할, 원칙 1~7,
-출력 스키마, 규칙)가 파이썬 문자열(SYSTEM_PROMPT_TEMPLATE)로 하드코딩되어 있었다.
-오늘 하루 동안 이 프롬프트를 여러 차례 수정하면서(원칙 6/7 재설계, confidence
-산정 기준 추가 등), 내용 변경마다 파이썬 코드 전체를 다시 봐야 하는 불편함이
-있었다. 내용이 어느 정도 안정된 지금, 프롬프트 "내용"(investigation.yaml)과
-"조립 로직"(이 파일)을 분리했다.
+역할
+  시스템 프롬프트: investigation.yaml(역할·판정 원칙·출력 형식·규칙) + 등록된 도구 설명을 이어 붙인다.
+  사용자 프롬프트: 지금까지의 조사 상태(AgentState)를 JSON으로 만들고, 코드가 계산한 조회 구간
+  (auth_lookback_window, query_windows)과 직전 종료 거부 사유·강제 종료 지시를 덧붙인다.
 
-*** agent/seed_prompts.py는 이 리팩터링 대상이 아니다 ***
-seed 생성(경량 LLM triage) 관련 프롬프트는 1차 탐지 단계가 확정되면 조사
-에이전트 코드베이스에서 완전히 빠져나갈 예정이라, 지금 같이 yaml로 옮기면
-나중에 다시 분리해야 하는 이중 작업이 된다. 그래서 agent/seed_prompts.py는
-기존 그대로 별도 파일로 유지한다.
+누가 부르나
+  [21] agent/gemini_client.py / claude_client.py reason()  → build_system_prompt(), build_user_prompt()
 
-이 패키지의 공개 함수(build_system_prompt, build_user_prompt)는 기존
-agent/prompts.py와 이름/시그니처가 동일하므로, 이 함수들을 가져다 쓰던
-gemini_client.py 등의 코드는 수정할 필요가 없다 (agent.prompts가 모듈에서
-패키지로 바뀌어도 `from .prompts import ...` 형태의 import 경로는 동일하게
-동작한다).
+무엇을 부르나
+  investigation.yaml (같은 폴더)                 프롬프트 본문 — 판정 원칙을 바꿀 때는 이 파일을 고친다
+  agent/tools/registry.py schema_text()          도구 설명
+  agent/provenance.py strip_trace_fields()       LLM에게 보여줄 사본에서 추적용 필드 제거
+
+프롬프트 "내용"(yaml)과 "조립 로직"(이 파일)을 나눠 두어 원칙을 고칠 때 코드를 건드리지 않게 했다.
+seed 생성 프롬프트는 1차 탐지 연동 뒤 빠질 예정이라 agent/seed_prompts.py에 따로 둔다.
 """
 
 from __future__ import annotations
@@ -34,7 +30,7 @@ from ..provenance import strip_trace_fields
 from ..tools.time_utils import parse_iso
 
 # 원칙 7 Q1(시도 범위) 조회 구간. LLM에게 "trigger_time 기준 24시간 전"을 계산하라고 하면
-# 1~2시간만 조회하는 경우가 반복돼(2026-09-24 재현성 테스트), 코드가 계산한 값을 그대로 준다.
+# 1~2시간만 조회하는 경우가 반복돼(재현성 테스트), 코드가 계산한 값을 그대로 준다.
 AUTH_LOOKBACK_BEFORE = timedelta(hours=24)
 AUTH_LOOKBACK_AFTER = timedelta(hours=1)
 
@@ -52,7 +48,7 @@ def auth_lookback_window(seed: Dict[str, Any]) -> Optional[list]:
 
 
 # 계층별 첫 조회 구간 (seed 사건 구간 기준, 앞/뒤). auth만 정하고 나머지를 LLM에게 맡겼더니 같은 seed에서도
-# audit을 24시간 무필터로 보거나(EC2 2026-09-25, 3728건) web을 seed 구간 11초만 보는 등 실행마다 달랐다.
+# audit을 24시간 무필터로 보거나(EC2 3728건) web을 seed 구간 11초만 보는 등 실행마다 달랐다.
 # web: 같은 IP의 앞뒤 요청까지 봐야 반복 횟수(원칙 9)가 사건 경계에 덜 흔들린다.
 # audit: 공격 뒤 후속 행위(명령 실행)를 보려고 뒤쪽을 더 넓힌다.
 # network: 시스템 사전 조회(loop.NETWORK_PRECHECK_PAD)와 같은 구간.
@@ -141,10 +137,12 @@ def _build_investigation_system_prompt_template() -> str:
 SYSTEM_PROMPT_TEMPLATE = _build_investigation_system_prompt_template()
 
 
+# [21] ← gemini_client.py / claude_client.py reason()에서 매 턴 호출 — 원칙·도구 목록·출력 형식
 def build_system_prompt(tool_registry: Any) -> str:
     return SYSTEM_PROMPT_TEMPLATE.replace("{tool_schema}", tool_registry.schema_text())
 
 
+# [21] ← reason()에서 매 턴 호출 — 현재 조사 상태 + 코드가 계산한 조회 구간 + 직전 거부 사유
 def build_user_prompt(
     state: Any,
     confidence_threshold: Optional[float] = None,

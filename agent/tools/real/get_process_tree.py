@@ -1,22 +1,17 @@
 """get_process_tree 실제 구현 - audit 이벤트의 pid/ppid로 조상 체인을 추적한다.
 
-파일명 == 함수명 규칙에 따라 agent/tools/real/get_process_tree.py 안의
-get_process_tree 함수만 있으면 agent/tools/registry.py의 build_default_registry()가
-자동으로 이 함수를 mock_tools.py 대신 사용한다.
+누가 부르나
+  [31] agent/tools/registry.py ToolRegistry.call("get_process_tree", args) ← agent/loop.py [30]
 
-*** 2026-09-22 업데이트 (마지막 남은 audit_parser.py 사용처도 공통 정규화 함수로 교체) ***
-자체 파서(parsers/audit_parser.py)를 버리고 1차 탐지팀 공통 정규화 함수
-(agent/tools/normalizer_adapter.py → normalizer/tools/fetch_audit_log.py)를 쓰도록
-교체했다 — fetch_audit_log.py(B)와 완전히 같은 소스를 본다. 이걸로 parsers/audit_parser.py
-는 진짜로 아무도 안 부르게 됐다(이제 삭제해도 된다).
+무엇을 부르나
+  [33] agent/tools/log_source.py load_window_events("audit", ...)  fetch_audit_log와 같은 audit 소스
+       → normalizer_adapter → primary_detection/normalizer/tools/fetch_audit_log.py
+  build_ancestry_chain() (이 파일)  pid → ppid를 시간 역순으로 따라가 조상 체인 구성
 
-*** 2026-09-23 업데이트: build_ancestry_chain()을 parsers/process_tree.py에서 이 파일로 합침 ***
-그 함수를 쓰는 곳이 여기 하나뿐이라 별도 폴더(parsers/)로 분리해둘 이유가 없어져서
-(parsers/에 남은 게 이 파일 하나였음 — agent/tools/parsers/README.md 참고) 그대로
-이 파일 안으로 옮겼다. build_ancestry_chain()이 기대하는 필드(pid/ppid/timestamp/
-exe/comm/user/syscall/session_type/raw_ref)는 1차 탐지팀 공통스키마를 펼친(log_source.normalize_documents)
-결과에도 전부 그대로 있어서(exe/comm/user/syscall/session_type은 layer_data 안에
-있다가 top-level로 펼쳐짐), 로직 자체는 옮기면서도 손댈 필요가 없었다.
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
+예전 자체 파서(parsers/)에 있던 조상 추적 로직을 이 파일로 합쳤다 — 쓰는 곳이 여기뿐이다.
+build_ancestry_chain()이 쓰는 필드(pid/ppid/timestamp/exe/comm/user/syscall/session_type/raw_ref)는
+공통 정규화 결과를 펼친(log_source.normalize_documents) 이벤트에 그대로 있다.
 
 *** 주의: "확정된 프로세스 생성 트리"가 아니라 "관측 기반 후보"다 ***
 audit 로그에 그 pid의 syscall이 안 찍혀 있으면(로그 보관 기간 밖이거나, 아직 조회
@@ -30,8 +25,7 @@ warnings에 이런 한계를 항상 명시한다.
 구현한다 — 조사 목적(웹셸이 어떤 프로세스에서 실행됐는지 등)엔 이 정도로도
 충분하고, boot_id 같은 정보는 공통스키마에 애초에 없다.
 
-필요 환경변수: fetch_audit_log.py와 동일 (agent/tools/normalizer_adapter.py 문서 참고)
-로컬 테스트: .env에 AUDIT_LOG_LOCAL_PATH=sample_audit.log (fetch_audit_log.py와 공유)
+필요 환경변수: AUDIT_LOG_LOCAL_PATH (fetch_audit_log.py와 공유)
 """
 
 from __future__ import annotations
@@ -57,7 +51,7 @@ def build_ancestry_chain(
     이벤트가 이미 timestamp 오름차순 정렬돼 있다고 가정한다. target_pid가
     하나도 관측 안 됐으면 None을 반환한다.
 
-    (2026-09-23: agent/tools/parsers/process_tree.py에서 이 파일로 이동 — 여기서만
+    (예전 agent/tools/parsers/process_tree.py에서 이 파일로 이동 — 여기서만
     쓰이는 함수라 별도 폴더로 분리해둘 이유가 없어졌다.)
     """
     # pid별로 관측된 이벤트들을 시간순으로 모아둔다 (부모 찾을 때 "그 시점 이전의
@@ -137,6 +131,7 @@ def build_ancestry_chain(
     }
 
 
+# [32] ← registry.call() [31]에서 호출. 반환 dict는 loop.py [37]로 간다.
 def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
     host = args["host"]
     pid = int(args["pid"])
@@ -156,7 +151,7 @@ def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
         start_time = start.isoformat().replace("+00:00", "Z")
         end_time = end.isoformat().replace("+00:00", "Z")
 
-    # fetch_audit_log와 같은 경로(log_source → primary_detection 공통 정규화)로 읽는다.
+    # [33] → log_source.load_window_events(): fetch_audit_log와 같은 경로(→ [34] 공통 정규화)로 읽는다.
     # 정규화 결과는 이미 layer_data가 top-level로 펼쳐져 있어 build_ancestry_chain()에 바로 넘긴다.
     loaded = load_window_events("audit", host, start_time, end_time)
     flat_events = loaded["events"]

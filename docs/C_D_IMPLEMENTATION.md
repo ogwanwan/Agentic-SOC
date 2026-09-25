@@ -1,5 +1,7 @@
 # C·D 구현 및 팀 연동 안내
 
+> **S3 읽기 코드는 삭제됐다.** 로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2는 `/var/log/...`)에서만 읽는다. 아래의 S3 객체·`s3://` 참조·S3 모사 테스트 설명은 기록으로만 남아 있고 현재 코드에는 해당하지 않는다. 현재 동작 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md).
+
 처음 테스트하는 팀원은 [A·B·C·D 통합 테스트와 쉬운 설명](ABCD_TEST_GUIDE.md)을 먼저 본다.
 전체 연결 데모는 `python -m scripts.demo_abcd`이며, 수집 → seed → 실제 B/C 도구 → D 보고서까지 실행한다.
 
@@ -75,7 +77,7 @@ HTTP 로그의 `host`는 웹 도메인일 수 있으므로 수집 서버 `host`�
 내부 흐름은 다음과 같다.
 
 1. 구간·페이지 인자를 검증하고 ISO 시각을 UTC로 변환한다. 시간대 없는 시각은 기존 정책대로 UTC다.
-2. `log_source.read_documents()`가 로컬 파일 또는 해당 host/UTC 날짜의 S3 객체를 읽는다.
+2. `log_source.read_documents()`가 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일을 읽는다.
 3. `normalizer_adapter.normalize_log_documents()`가 1차 탐지팀의 공통 정규화 함수를 호출한다.
    정규화된 필드를 펼치고 원본 위치를 붙인 뒤, 시간과 계층별 조건으로 필터링한다.
 4. 계층별 결과를 시간순으로 합쳐 전역 페이지를 반환한다. 계층마다 offset을 적용하지 않는다.

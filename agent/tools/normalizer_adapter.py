@@ -1,46 +1,29 @@
-"""agent/tools/normalizer_adapter.py — 공통 정규화 함수 어댑터 (A: 공통 모듈 담당)
+"""1차 탐지팀 공통 정규화 어댑터 — 에이전트 코드와 primary_detection/normalizer/ 사이의 유일한 연결 지점.
 
-2026-09-23 C/D 통합: normalize_log_documents()를 추가했다. 기존 normalize_* 공개
-함수와 벤더 코드는 유지한다. 사건 조회·수집·조사 도구는 새 진입점에서 동일한 벤더
-함수를 호출하고, raw_ref를 보존하면서 raw_refs/raw_ref_locations를 부가 정보로 붙인다.
-로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일에서만 읽는다(S3 읽기는 2026-09-25 삭제).
+역할
+  원본 로그 텍스트를 임시 파일로 써서 1차 탐지팀 정규화 함수(fetch_apache_log/fetch_auth_log/
+  fetch_audit_log/fetch_network_log)에 그대로 넘기고, 결과 이벤트에 원본 추적 정보를 붙인다.
+    - raw_ref: 1차 탐지와 같은 "<파일명>:<줄 번호>" (예: auth.log:9190)
+    - raw_refs: audit처럼 여러 줄이 한 이벤트면 그 줄 전부
+    - raw_ref_locations: 실제 전체 경로
+  "같은 raw 로그에 대해 1차 탐지와 조사 도구가 같은 정규화 결과를 낸다"가 완료 기준이라,
+  이 파일은 파싱 로직을 갖지 않는다. 1차 탐지팀 코드는 수정하지 않는다.
 
-1차 탐지팀(https://github.com/ogwanwan/Agentic-SOC, feature/primary_detection) 저장소의
-정규화 코드는 primary_detection/normalizer/{common,tools}/ 아래에 "있는 그대로"(바이트
-단위 동일, primary_detection/normalizer/vendor_sync_check.py로 검증) 들여와 있다. 이
-파일은 그 코드를 단 한 줄도 고치지 않고, 원본 텍스트를 임시 파일로 넘겨 호출하는
-얇은 어댑터다 — 우리(에이전트팀) 코드이지 벤더 코드가
-아니라서, 벤더 코드와 달리 agent/ 패키지 안에 그대로 둔다.
+누가 부르나
+  [9]·[34] agent/tools/log_source.py normalize_documents()   → normalize_log_documents()
+  tests/test_normalizer_parity.py, scripts/verify_all_tools.py → normalize_auth/audit/web/network()
 
-*** 2026-09-22 구조 변경: normalizer/ 를 agent/ 밖(primary_detection/)으로 이동 ***
-원래 agent/tools/normalizer/{common,tools}/ 에 벤더 코드와 이 adapter.py가 같이
-있었는데, 벤더 코드는 "우리 에이전트 코드"가 아니라 "1차 탐지팀 산출물"이라는 게
-명확하지 않아 보여서, agent/와 같은 레벨의 primary_detection/normalizer/로 분리했다
-(웰시님 지적). 이 파일(우리 팀이 짠 어댑터)만 agent/tools/ 밑에 남기고
-normalizer_adapter.py로 이름을 바꿨다. primary_detection/은 파이썬 패키지 이름 규칙상
-하이픈을 쓸 수 없어서(import primary_detection 불가) 그 자체를 패키지로 import하지
-않는다 — 대신 agent/__init__.py 맨 위에서 primary_detection/ 를 sys.path에 추가해서,
-그 밑의 normalizer 패키지를 최상위 패키지처럼(`from normalizer.tools... import ...`)
-바로 쓸 수 있게 했다. (벤더 코드 자체도 원래 내부적으로 자기 부모 폴더를 sys.path에
-넣어서 common/tools를 최상위 패키지로 찾는 방식이라, 폴더를 어디로 옮기든 벤더 코드
-내부 import는 안 깨진다 — 이번 이동으로 실제로 확인됨.)
+무엇을 부르나
+  primary_detection/normalizer/tools/fetch_apache_log.py, fetch_auth_log.py, fetch_audit_log.py,
+  fetch_network_log.py (1차 탐지팀 코드 — vendor_sync_check.py로 원본과 동일성 확인)
 
-완료 기준(같은 raw 로그에 대해 1차 탐지와 에이전트 도구가 동일한 정규화 결과를 반환해야 한다)을
-지키려면 파싱 로직 자체를 절대 건드리면 안 된다 — 그래서 이 파일은 "소스 선택 + 임시파일 변환"
-외에는 아무 로직도 갖지 않는다.
-
-2026-09-22 업데이트: web(apache) 어댑터 추가. EC2 실측(웰시님이 직접 SSH로 확인)으로
-nginx(리버스 프록시, 80/443)와 apache(백엔드, 127.0.0.1:8080)가 같이 떠 있고, apache의
-access.log가 1차 탐지팀 fetch_apache_log.py가 기대하는 포맷과 컬럼 단위로 정확히
-일치하는 것을 확인했다. 그래서 web 계층은 (기존에 쓰던 nginx JSON 로그가 아니라)
-apache의 access.log를 정규화 대상으로 삼는다 — auth/audit과 같은 패턴.
-
-2026-09-22 추가 업데이트: network(suricata) 어댑터도 추가했다. 포맷은 이미 호환
-확인됨(Suricata eve.json, 우리 팀 network_parser.py와 동일 소스) — auth/audit/web과
-같은 패턴. 단, 1차 탐지팀 fetch_network_log() 순수 함수는 src_ip/event_type/flow_id/
-signature만 필터로 지원해서(우리 tool 스키마의 dst_ip/src_port/dst_port/protocol은
-없음), 그 4개는 agent/tools/real/fetch_network_log.py에서 결과를 받은 뒤 후처리로
-거른다(audit의 user/serial 후처리와 동일한 방식).
+참고
+  - web은 nginx가 아니라 apache access.log를 쓴다. EC2에서 nginx(리버스 프록시)와 apache(백엔드,
+    127.0.0.1:8080)가 같이 떠 있고, apache 로그가 1차 탐지팀 형식과 컬럼 단위로 일치했다.
+  - network(suricata) 정규화 함수는 src_ip/event_type/flow_id/signature만 필터로 지원해서, dst_ip·포트·
+    프로토콜 필터는 agent/tools/real/fetch_network_log.py가 결과를 받은 뒤 거른다.
+  - primary_detection/은 agent/ 밖(저장소 루트)에 두어 "우리 코드가 아님"을 분명히 했다.
+  - 로그는 .env의 <계층>_LOG_LOCAL_PATH 파일에서만 읽는다(S3 읽기는 삭제).
 """
 from __future__ import annotations
 
@@ -50,14 +33,14 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# sys.path에 추가해준다 — 그래서 여기선 그 밑의 normalizer 패키지를 최상위
-# 패키지처럼 바로 import한다.
+# 1차 탐지팀 정규화 함수 (agent/__init__.py가 import 경로를 준비한다)
 from primary_detection.normalizer.tools.fetch_auth_log import fetch_auth_log as _normalize_auth_events
 from primary_detection.normalizer.tools.fetch_audit_log import fetch_audit_log as _normalize_audit_events
 from primary_detection.normalizer.tools.fetch_apache_log import fetch_apache_log as _normalize_web_events
 from primary_detection.normalizer.tools.fetch_network_log import fetch_network_log as _normalize_network_events
 
 
+# [34] ← log_source.normalize_documents()에서 호출: 원본 텍스트 → 1차 탐지팀 정규화 → 원본 추적 정보 부착
 def normalize_log_documents(layer, documents, start, end):
     """C/D source adapter: call the vendored normalizers without changing them.
 

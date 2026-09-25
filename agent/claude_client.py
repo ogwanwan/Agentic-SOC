@@ -1,9 +1,21 @@
-"""LLM 호출 및 JSON 파싱 담당 모듈.
+"""Claude(Anthropic API) LLM 클라이언트 — LLM_PROVIDER=anthropic일 때 GeminiClient 대신 쓴다.
 
-실제 Anthropic API를 호출해 조사 판단(JSON)을 받아온다.
-loop.py는 이 클래스의 .reason(state, tool_registry) 인터페이스에만 의존하므로,
-테스트 시에는 동일한 인터페이스를 가진 FakeLLMClient로 자유롭게 교체할 수 있다.
-(tests/test_loop.py 참고)
+역할
+  프롬프트를 받아 Claude를 호출하고 응답을 JSON(dict)으로 파싱해 돌려준다.
+
+누가 부르나
+  main.py build_llm_client()                 → ClaudeClient()    생성 (LLM_PROVIDER=anthropic)
+  [20] agent/loop.py _safe_reason()          → reason()
+  [13-1] agent/seed_generation.py generate() → complete_json()
+
+무엇을 부르나
+  [21] agent/prompts/__init__.py  build_system_prompt(), build_user_prompt()
+  [22] anthropic  messages.create()          필요 환경변수: ANTHROPIC_API_KEY
+
+주의: 아직 GeminiClient와 인터페이스가 완전히 같지 않다. reason()이 confidence_threshold·
+force_terminate·gate_rejection_reason 인자를 받지 않아 지금 조사 루프에서는 첫 턴에 TypeError가 나고,
+max_tokens(2000)·temperature도 Gemini 쪽 설정(8192·0.0)과 다르다 — Claude로 전환하기 전에 맞춰야 한다.
+테스트에서는 같은 인터페이스의 가짜 클라이언트로 바꿔 쓴다(tests/test_loop.py).
 """
 
 from __future__ import annotations

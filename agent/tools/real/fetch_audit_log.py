@@ -1,7 +1,15 @@
 """fetch_audit_log 실제 구현 - 에이전트(LLM)가 조사 중 호출하는 auditd 로그 조회 도구.
 
-파일명 == 함수명 규칙에 따라 agent/tools/registry.py의 build_default_registry()가
-mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/README.md 참고)
+누가 부르나
+  [31] agent/tools/registry.py ToolRegistry.call("fetch_audit_log", args) ← agent/loop.py [30]
+       (LLM이 이 도구를 골랐을 때)
+  agent/tools/real/fetch_event_logs.py (사건 구간 다계층 조회 때 이 함수를 직접 부른다)
+
+무엇을 부르나
+  [33] agent/tools/log_source.py load_window_events("audit", ...)  auditd audit.log 읽기 + 정규화 + 시간창 필터
+       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_audit_log.py
+
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
@@ -40,7 +48,7 @@ SUSPICIOUS_CMD_RE = re.compile(
 )
 # 웹 서버 계정은 셸을 띄우는 것 자체가 의심 신호다(root의 cron `sh -c`와 달리).
 SHELL_CMD_RE = re.compile(r"(^|/)(ba|da|z)?sh\b|\bsh -c\b")
-# 정상 운영 서버에서 늘 도는 시스템 명령. EC2 실측(2026-09-25): 24시간 audit 3728건 중 "의심 명령" 245건이
+# 정상 운영 서버에서 늘 도는 시스템 명령. EC2 실측: 24시간 audit 3728건 중 "의심 명령" 245건이
 # 대부분 cron의 `sh -c`와 EC2 Instance Connect(sshd -o AuthorizedKeysCommand .../eic_run_authorized_keys)였다.
 BENIGN_CMD_RE = re.compile(r"/usr/share/ec2-instance-connect/|AuthorizedKeysCommand")
 
@@ -56,7 +64,7 @@ def _command(record: Dict[str, Any]) -> str:
 def audit_rule_check(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """조건에 맞는 전체 이벤트(페이지와 무관) 기준 웹 서버 계정 실행·의심 명령 집계.
 
-    로컬 재현(2026-09-24): audit 307건 중 첫 200건만 받은 실행이 뒤쪽의 www-data `curl | sh`를
+    로컬 재현: audit 307건 중 첫 200건만 받은 실행이 뒤쪽의 www-data `curl | sh`를
     못 보고 "침해 없음"으로 끝냈다(1/3). 전체 기준으로 코드가 세서 summary와 rule_checks로 준다.
     """
     web_exec = [r for r in records if r.get("user") in WEB_SERVER_USERS and _command(r)]
@@ -92,7 +100,7 @@ def _audit_stats(records: List[Dict[str, Any]], check: Dict[str, Any]) -> str:
 
 def _event_type_matches(record: Dict[str, Any], wanted: Any) -> bool:
     """event_type은 룰 key(exec 등)가 원래 의미지만, LLM이 레코드 종류(EXECVE/SYSCALL/PATH…)나
-    syscall 이름(execve)을 넣는 경우도 받아준다. 0918 지속성 시나리오 재검증(2026-09-24)에서
+    syscall 이름(execve)을 넣는 경우도 받아준다. 0918 지속성 시나리오 재검증에서
     event_type="EXECVE"로 0건이 나오자 LLM이 "명령 실행 없음"으로 INCONCLUSIVE 판정한 사례가 있었다.
     """
     wanted = str(wanted).lower()
@@ -113,13 +121,16 @@ def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
     return True
 
 
+# [32] ← registry.call() [31]에서 호출. 반환 dict는 loop.py [37]로 간다.
 def fetch_audit_log(args: Dict[str, Any]) -> Dict[str, Any]:
     host = args["host"]
     start_time = args["start_time"]
     end_time = args["end_time"]
     limit, offset = pagination(args)
 
+    # [33] → log_source.load_window_events(): 파일 읽기 → [34] 1차 탐지팀 정규화 → 구간 안 이벤트
     loaded = load_window_events("audit", host, start_time, end_time)
+    # [35] 도구 인자로 거르고(_matches), 페이지로 자르고, summary·rule_checks를 만든다
     matched: List[Dict[str, Any]] = [e for e in loaded["events"] if _matches(e, args)]
 
     total_matched = len(matched)

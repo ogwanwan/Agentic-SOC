@@ -1,27 +1,21 @@
-"""Gemini API를 사용하는 LLM 클라이언트.
+"""Gemini API LLM 클라이언트 (기본값).
 
-claude_client.py의 ClaudeClient(Anthropic)와 동일하게 .reason(state, tool_registry) 인터페이스를
-제공하므로, agent/loop.py의 InvestigationAgent(llm_client=...)에 이 클래스를 그대로
-넣어 쓸 수 있다. 즉 Claude ↔ Gemini는 이 클라이언트만 교체하면 된다.
+역할
+  조사 루프와 seed 생성에서 LLM을 부르는 창구. 프롬프트를 받아 Gemini를 호출하고,
+  응답을 JSON(dict)으로 파싱해 돌려준다. temperature 0.0 — 같은 증거에 같은 판정이 나오도록
+  창의성보다 결정성을 우선한다. 일시적 오류(429 한도, 503 과부하, 연결 끊김)는 기다렸다 재시도한다.
 
-사전 준비:
-    pip install google-genai
-    export GEMINI_API_KEY=...   (Google AI Studio에서 발급한 무료 티어 키도 가능)
+누가 부르나
+  [20] agent/loop.py _safe_reason()         → reason()          조사 루프 매 턴
+  [13-1] agent/seed_generation.py generate() → complete_json()   seed 후보 뽑기
+  main.py build_llm_client()                 → GeminiClient()    생성 (LLM_PROVIDER=gemini, 기본)
 
-*** 2026-09-17 업데이트: confidence_threshold/force_terminate 전달 + temperature 0.0 ***
-reason()이 loop.py로부터 confidence_threshold(LLM이 종료 조건을 스스로 검증하도록)와
-force_terminate(max_call 도달 시 도구 호출 없이 판정만 요청하는 마무리 턴 여부)를
-받아 prompts.build_user_prompt()에 그대로 전달하도록 확장했다.
+무엇을 부르나
+  [21] agent/prompts/__init__.py  build_system_prompt(), build_user_prompt()   조사 프롬프트 조립
+  [22] google-genai  models.generate_content()                                 실제 API 호출
 
-temperature는 0.2 -> 0.0으로 낮췄다 — 같은 증거를 두고 실행마다 판정이 갈리는
-재현성 이슈가 발견되어, 조사 판정처럼 일관성이 중요한 영역에서는 창의성보다
-결정성을 우선하기로 했다.
-
-*** 2026-09-17 추가 업데이트: gate_rejection_reason 전달 ***
-loop.py의 종료 관문이 거부한 사유를 다음 턴 프롬프트에 노출하기 위해
-gate_rejection_reason 파라미터를 추가로 받아 build_user_prompt()에 전달한다.
-(종료 관문이 같은 사유로 계속 거부되는데 LLM이 그 사실을 몰라 동일 요청을
-반복하며 사이클을 낭비하던 버그의 수정 일부.)
+claude_client.py의 ClaudeClient와 인터페이스(.reason / .complete_json)가 같아서
+LLM_PROVIDER 환경변수로 서로 바꿔 쓸 수 있다. 필요 환경변수: GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -43,7 +37,7 @@ class GeminiClient:
         self,
         api_key: Optional[str] = None,
         model: str = "gemini-3.5-flash-lite",  # 무료 티어 실습에서 지정한 모델
-        # [2026-09-24] 2000 → 8192. EC2 main.py에서 LLM이 raw_ref 109개를 evidence에 옮겨 적다
+        # 2000이던 값을 8192로 올렸다. EC2에서 LLM이 raw_ref 109개를 evidence에 옮겨 적다
         # 2000 토큰에서 응답이 잘려 JSON 파싱이 실패했고, 그 예외로 main.py 전체가 멈췄다.
         max_output_tokens: int = 8192,
         temperature: float = 0.0,
@@ -64,7 +58,7 @@ class GeminiClient:
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
 
-    # [21] agent/prompts.py 실행하여 프롬포트 호출
+    # [21] ← agent/loop.py [20] _safe_reason()에서 매 턴 호출
     def reason(
         self,
         state: Any,
@@ -73,14 +67,13 @@ class GeminiClient:
         force_terminate: bool = False,
         gate_rejection_reason: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """조사 루프(agent/loop.py) 전용: prompts.py의 investigation 프롬프트로 호출.
+        """조사 루프 전용: agent/prompts/의 조사 프롬프트를 만들어 호출한다.
 
-        confidence_threshold: 시스템의 종료 임계값을 프롬프트에 노출하기 위해 전달.
-        force_terminate: max_call 도달 시 도구 호출 없이 판정만 받는 마무리 턴에서
-        True로 호출됨.
-        gate_rejection_reason: [2026-09-17 추가] 직전 턴에 종료 관문이 거부한 사유가
-        있으면 전달 — LLM이 거부당한 사실을 인지하고 새 행동을 취하게 함.
+        confidence_threshold: 시스템의 종료 임계값을 프롬프트에 노출해 LLM이 스스로 확인하게 한다.
+        force_terminate: 강제 종료·max_call 마무리 턴에서 True — 도구 없이 판정만 요청한다.
+        gate_rejection_reason: 직전 턴에 종료 관문이 거부한 사유 — LLM이 같은 종료를 반복하지 않게 한다.
         """
+        # [21] → agent/prompts/__init__.py: 시스템 프롬프트(원칙·도구 목록·출력 형식) + 사용자 프롬프트(현재 State)
         system_prompt = build_system_prompt(tool_registry)
         user_prompt = build_user_prompt(
             state,
@@ -88,9 +81,10 @@ class GeminiClient:
             force_terminate=force_terminate,
             gate_rejection_reason=gate_rejection_reason,
         )
+        # [22] → complete_json()으로 실제 호출 / [23] ← 파싱된 결정 dict를 loop.py로 돌려준다
         return self.complete_json(system_prompt, user_prompt)
 
-    # [22] 만들어진 프롬포트로 진짜 Gemini 호출
+    # [22] 실제 Gemini 호출 — 조사 루프와 seed 생성([13-1]) 둘 다 여기로 온다
     def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         """범용 호출: 어떤 system/user 프롬프트든 받아서 JSON으로 파싱해 돌려준다.
         seed_generation.py(경량 LLM triage)처럼 조사 루프가 아닌 다른 용도에서도 재사용한다.
@@ -111,7 +105,7 @@ class GeminiClient:
             )
         return self._parse_json(text)
 
-    # [2026-09-24] 503(서버 과부하)/429(분당 한도)는 일시적인 오류인데, 예전엔 한 번만 나도
+    # 503(서버 과부하)/429(분당 한도)는 일시적인 오류인데, 예전엔 한 번만 나도
     # main.py 전체가 예외로 끝났다(seed 생성 단계에서 연속 발생 확인). 이 두 코드만
     # 기다렸다가 다시 시도하고, 그 외 오류는 바로 올려 보낸다.
     _RETRYABLE_STATUS = {429, 503}
@@ -125,7 +119,7 @@ class GeminiClient:
         from google.genai import errors
 
         # 연결이 중간에 끊기는 오류(SSL EOF, WinError 10053 등)도 일시적이라 재시도한다.
-        # 2026-09-24 재현성 실행 중 두 번 발생해 그 조사 1건이 통째로 실패했다.
+        # 재현성 실행 중 두 번 발생해 그 조사 1건이 통째로 실패했다.
         # google-genai는 httpx를 쓰므로 httpx.TransportError도 함께 잡는다.
         try:
             import httpx
@@ -154,7 +148,7 @@ class GeminiClient:
                 time.sleep(delay)
         raise AssertionError("unreachable")
 
-    # [2026-09-18 추가] LLM이 가끔 JSON 응답 중간에 markdown 리스트 문법
+    # LLM이 가끔 JSON 응답 중간에 markdown 리스트 문법
     # (`- key: value`처럼 키 앞에 하이픈이 붙고 따옴표가 빠진 형태)을 섞어 넣어
     # json.loads()가 실패하는 사례가 발견됐다. 기존 trailing comma 보정으로는
     # 못 잡는 새로운 유형이라, 이 패턴을 정규식으로 감지해 정상 JSON 키 형태로

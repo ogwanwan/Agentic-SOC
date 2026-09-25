@@ -1,13 +1,17 @@
-"""보고서 출력 담당 모듈.
+"""조사 결과 보고서 — 최종 investigation_result JSON 조립과 사람이 읽는 텍스트 보고서.
 
-문서 7번 "조사 에이전트의 최종 산출물 구조"와 동일한 필드 구성으로
-investigation_result JSON을 조립한다.
+역할
+  build_investigation_result(): 조사 상태(AgentState)와 최종 판정으로 결과 JSON을 만든다
+    (판정, 증거 체인, 반박 증거, 타임라인, 호출한 도구, 신뢰도 변화, 원본 참조·검증 상태, 통계).
+  format_text_report(): 그 JSON을 콘솔·대시보드에 붙일 텍스트로 바꾼다. 증거 설명 아래에는
+    [원본 N줄]만 적고, 원본 위치는 맨 아래 Raw References에 범위로 묶어 보여 준다(compact_refs).
 
-*** 2026-09-17 업데이트: final_verdict.reasoning 필드 기본값 처리 ***
-prompts.py가 LLM에게 final_verdict.reasoning(판단에 사용한 구체적 신호)을 요구하도록
-바뀌면서, 이 필드가 없는 경우(폴백 verdict 또는 예상치 못한 응답)에 대비한 기본값
-처리를 추가했다. loop.py의 _derive_fallback_verdict()는 이미 자체적으로 reasoning을
-채워 넣으므로, 여기서는 그마저도 없는 극단적인 경우(빈 dict 등)만 방어한다.
+누가 부르나
+  [41] agent/loop.py InvestigationAgent.run()  → build_investigation_result()
+  [45] main.py main()                          → format_text_report()
+
+무엇을 부르나
+  agent/provenance.py provenance_report()      원본 참조 검증 결과(passed/incomplete/unavailable)
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# [41] ← agent/loop.py run() 끝에서 호출. 반환한 JSON이 [42]~[44]를 거쳐 main.py로 간다.
 def build_investigation_result(
     state: Any,
     termination_reason: str,
@@ -103,7 +108,7 @@ def build_investigation_result(
         f"{verdict.get('attack_type', '알 수 없는 공격')} 가능성이 있으며, "
         f"신뢰도는 {verdict.get('confidence', state.current_confidence):.2f}입니다.",
     )
-    # [2026-09-17 추가] LLM 응답에 reasoning이 빠져 있는 극단적인 경우(폴백도 아니고
+    # LLM 응답에 reasoning이 빠져 있는 극단적인 경우(폴백도 아니고
     # LLM이 스키마를 안 지킨 경우)를 방어. loop.py의 _derive_fallback_verdict()는
     # 이미 reasoning을 채워서 넘기므로 이 setdefault는 사실상 안전망 역할이다.
     verdict.setdefault("reasoning", "판단 근거가 명시적으로 제공되지 않았습니다.")
@@ -132,7 +137,7 @@ def build_investigation_result(
             "tool_calls_count": len(state.tool_calls),
             "tool_calls_max": None,  # InvestigationAgent.run()에서 채워 넣음
             "confidence_increase": round(state.current_confidence - initial_confidence, 3),
-            # [2026-09-24] 증거 누적 신뢰도(루프가 계산). final_verdict.confidence는 LLM이 적은
+            # 증거 누적 신뢰도(루프가 계산). final_verdict.confidence는 LLM이 적은
             # "판정에 대한 확신도"라 둘이 다를 수 있다 — 리포트에서 따로 보여준다.
             "investigation_confidence": round(state.current_confidence, 3),
             "evidence_count": len(state.evidence),
@@ -180,6 +185,7 @@ def _hhmm(time_str: Optional[str]) -> str:
         return time_str
 
 
+# [45] ← main.py에서 결과 JSON마다 호출
 def format_text_report(result: Dict[str, Any]) -> str:
     """investigation_result(JSON)를 대시보드/Discord 등에 바로 붙여넣을 텍스트 리포트로 변환한다."""
     lines = []
@@ -197,7 +203,7 @@ def format_text_report(result: Dict[str, Any]) -> str:
         result["evidence_chain"] + result["contradicting_evidence"],
         key=lambda e: e.get("sequence", 0),
     )
-    # [2026-09-24] 증거마다 원본 줄 번호 수십 개를 바로 아래 찍으니 읽기 힘들어, Findings에는
+    # 증거마다 원본 줄 번호 수십 개를 바로 아래 찍으니 읽기 힘들어, Findings에는
     # 줄 수만 적고 원본 위치는 맨 아래 Raw References에 범위로 압축해 모았다(전체 목록은 JSON).
     if all_evidence:
         lines.append("Investigation Findings")
@@ -230,7 +236,7 @@ def format_text_report(result: Dict[str, Any]) -> str:
         lines.append("           " + extra)
     lines.append("")
 
-    # [2026-09-24] 예전엔 LLM의 판정 확신도만 "Investigation Confidence"로 찍어, 증거 누적
+    # 예전엔 LLM의 판정 확신도만 "Investigation Confidence"로 찍어, 증거 누적
     # 신뢰도(0.45)와 판정 확신도(0.75)가 섞여 보였다. 둘을 이름을 나눠 함께 보여준다.
     lines.append(f"Verdict Confidence {verdict.get('confidence', 0):.2f} (판정 확신도, LLM 산정)")
     investigation_confidence = result.get("statistics", {}).get("investigation_confidence")

@@ -1,48 +1,33 @@
-"""Agent Loop 총괄 + Agent 제어 담당 모듈.
+"""조사 루프(ReAct) — seed 하나를 끝까지 조사해 판정과 보고서 JSON을 만든다.
 
-Seed -> LLM 판단 -> Tool 선택/실행 -> 결과 관찰 -> 재판단 -> 종료 흐름을
-구현하고, 그 안에서 아래 제어 로직을 함께 수행한다.
-  - 중복 호출 방지 (동일 tool+args 재호출 차단)
-  - max_call 도달 시 강제 종료
-  - 도구 호출 실패 시에도 조사 전체를 중단하지 않고 계속 진행
-  - 3가지 종료 조건(confidence_sufficient / no_more_evidence / max_call) 판단
+역할
+  seed → (network 사전 조회) → [LLM 판단 → 도구 실행 → 결과 관찰]을 반복 → 종료 → 결과 JSON.
+  매 사이클 LLM 호출 1회로 facts/가설/증거를 갱신하고 다음 행동(도구 호출 | 종료)을 정한다.
+  루프는 LLM이 정한 것을 그대로 따르지 않고 아래를 코드로 통제한다.
+    - 같은 도구+인자 재호출 차단, 도구 실패해도 조사 계속(오류를 다음 턴 관측으로 전달)
+    - 증거의 원본 참조(raw_ref) 검증과 신뢰도 누적 (_apply_decision)
+    - 종료 관문: 신뢰도·도구 수·network 확인·판정-원칙 일치를 확인해 조기 종료를 거부
+      (_termination_rejections, _verdict_conflicts). 같은 사유로 연속 2회 거부되면 강제 종료 턴.
+    - max_calls 도달 시 판정만 요청하는 마무리 턴, 그래도 판정이 없으면 수치 기반 폴백 판정
 
-*** 2026-09-17 업데이트 (멘토링 2.2 조사 규율 강화 반영) ***
-1. 종료 관문 도입: termination_reason이 "confidence_sufficient"인 경우에 한해,
-   실제 current_confidence가 threshold 미만이거나 서로 다른 tool_name이 1종류
-   이하면 종료를 거부하고 추가 조사를 강제한다.
-2. confidence_threshold를 prompts.py/gemini_client.py를 통해 매 턴 LLM에게 노출한다.
-3. max_call 도달 시, 도구 호출 없이 판정만 요청하는 마무리 턴(force_terminate=True)을
-   1회 추가로 호출한다. 그래도 final_verdict가 없으면 _derive_fallback_verdict()로
-   자체 계산한 verdict를 최후 안전망으로 사용한다.
-4. 도구 호출 실패 시에도 성공 케이스와 동일하게 pending_observations에 error를
-   담아 다음 턴 프롬프트(raw_observations_since_last_turn)에 실리도록 한다.
+누가 부르나
+  [16] agent/pipeline.py run_investigation_pipeline()  → InvestigationAgent(...).run(seed)
+  tests/test_consistency.py(재현성 측정), 여러 오프라인 테스트
 
-*** 2026-09-17 추가 업데이트 (종료 관문 무한 거부 루프 버그 수정) ***
-게이트 거부 시 그 사유(gate_rejection_reason)를 다음 llm_client.reason() 호출에
-실어 보내서 LLM이 거부당한 사실을 알게 했다. 동일 사유로 연속 2회 거부되면
-사이클을 낭비하지 않고 즉시 강제 종료 턴으로 전환한다.
+무엇을 부르나
+  [18] agent/models.py         AgentState                 조사 상태 컨테이너
+  [19-1] 사전 조회              _run_network_precheck()     → [28] _execute_tool_call()
+  [20] llm_client.reason()      gemini_client.py / claude_client.py (프롬프트는 agent/prompts/)
+  [30] agent/tools/registry.py ToolRegistry.call()         → agent/tools/real/*.py 도구
+  agent/provenance.py          validate_citations() 등     원본 참조 검증
+  [41] agent/report.py         build_investigation_result() 최종 JSON
 
-*** 2026-09-17 추가 업데이트 (조사 고도화: src_ip 계층 강제 + 판단 근거 명시) ***
-seed에 src_ip가 있는데 fetch_network_log를 한 번도 호출하지 않은 채
-confidence_sufficient로 종료하려 하면 게이트가 거부한다. _derive_fallback_verdict()에
-reasoning 필드를 추가했다.
-
-*** 2026-09-17 추가 업데이트 (no_more_evidence의 게이트 우회 구멍 보완) ***
-위 src_ip 강제 조건은 termination_reason == "confidence_sufficient"일 때만
-적용되는데, LLM이 termination_reason을 "no_more_evidence"로 고르면 이 게이트를
-아예 안 거치고 종료가 가능하다는 허점이 실제 재현성 테스트에서 발견됐다
-(seed에 src_ip가 있는데 도구 1개, network 미확인 상태로 no_more_evidence 종료된
-사례 확인). 완전히 차단하면 "정말 더 볼 게 없다"는 정당한 조기 종료까지 막을
-위험이 있어, 일단은 state.notes에 경고성 기록만 남기도록 했다 (완전 차단 아님).
-
-*** 2026-09-24 업데이트 (network 사전 조회) ***
-경고만으로는 부족했다 — EC2 main.py(INC-xmlrpc-flood)에서도 LLM이 web 1회만 보고
-no_more_evidence로 끝내 network를 한 번도 안 봤다. network_precheck=True면 seed에
-src_ip가 있을 때 첫 LLM 턴 전에 코드가 fetch_network_log(src_ip, 사건 구간 ±30분)를
-직접 한 번 실행해 결과를 첫 턴 관측으로 넣는다. LLM 호출 수는 그대로이고, 매번 같은
-조회를 하므로 재현성에도 유리하다. 게이트 조건 (c)는 "network 조회를 시도했는가"로
-완화했다 — 데이터 소스 장애로 실패한 경우까지 막으면 종료가 불가능해진다.
+설계 이유(요약 — 자세한 경위는 docs/CHANGES_0918_TO_0924.md)
+  - network 사전 조회: 프롬프트로 "network를 보라"고 해도 LLM이 web 1회만 보고 끝내는 일이
+    EC2에서 반복돼, src_ip가 있으면 첫 턴 전에 코드가 직접 조회한다. LLM 호출 수는 늘지 않는다.
+  - no_more_evidence에도 관문 적용(strict): 경고만 남기던 시절 도구 1개로 끝나는 조사가 계속 나왔다.
+  - 판정-원칙 일치 검사: 도구가 계산한 기준(원칙 7·9, 로그 미확보 등)과 다른 판정은 거부하고,
+    기준과 같은 판정은 신뢰도 숫자 미달로는 거부하지 않는다(숫자를 채우려는 조사가 판정을 흔들었다).
 """
 
 from __future__ import annotations
@@ -85,7 +70,7 @@ def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     # ip = 방향 무관(출발지·목적지 양쪽). src_ip로만 조회하면 서버→공격자 outbound(역방향 셸,
     # 유출)가 0건으로 나오고, LLM은 network를 "이미 확인함"으로 여겨 다시 보지 않았다
-    # (2026-09-24 CONSISTENCY-TEST-03 비교에서 Metasploit alert 누락).
+    # (0918 시나리오 03 비교에서 Metasploit alert 누락).
     # limit: 사전 조회는 규모 파악용이라 대표 레코드만 받는다. 전체 규모·경보·목적지는 도구 summary의
     # [조회 구간 전체 집계]가 페이지와 무관하게 준다. 150건을 통째로 넘기다 LLM 응답이 잘린 적이 있다.
     return {
@@ -96,7 +81,8 @@ def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "limit": NETWORK_PRECHECK_LIMIT,
     }
 
-# [17] seed 하나당 이 루프가 "충분하다" 판단이 나올 때까지 반복됨
+# [17] ← agent/pipeline.py [16]이 seed마다 하나씩 만들어 run(seed)을 부른다.
+#      "충분하다"는 판단(종료 관문 통과)이 나올 때까지 LLM 판단 → 도구 실행을 반복한다.
 class InvestigationAgent:
     def __init__(
         self,
@@ -121,10 +107,10 @@ class InvestigationAgent:
     LLM_RESPONSE_RETRIES = 1
 
     def _safe_reason(self, state: AgentState, **kwargs: Any) -> Optional[Dict[str, Any]]:
-        """llm_client.reason() 호출. 응답 해석 실패는 1회 재시도하고, 그래도 실패하면 None.
+        """[20] → llm_client.reason() 호출. 응답 해석 실패는 1회 재시도하고, 그래도 실패하면 None.
 
-        [2026-09-24] EC2 main.py에서 LLM 응답이 출력 한도에서 잘려 JSON 파싱이 실패했고, 그 예외
-        하나로 main.py 전체(다른 seed 조사 포함)가 멈췄다. 이제는 그 사건만 폴백 판정으로 마무리한다.
+        EC2에서 LLM 응답이 출력 한도에서 잘려 JSON 파싱이 실패했을 때, 그 예외 하나로 main.py 전체
+        (다른 seed 조사 포함)가 멈췄다. 이제는 그 사건만 폴백 판정으로 마무리한다.
         API 키·권한 같은 설정 오류는 그대로 올려 보내 원인이 가려지지 않게 한다.
         """
         for attempt in range(self.LLM_RESPONSE_RETRIES + 1):
@@ -139,6 +125,11 @@ class InvestigationAgent:
         return None
 
     def _run_network_precheck(self, state: AgentState) -> None:
+        """[19-1] seed에 src_ip가 있으면 첫 LLM 턴 전에 fetch_network_log를 코드가 직접 한 번 실행한다.
+
+        결과는 [28] _execute_tool_call()을 거쳐 첫 턴 관측(pending_observations)으로 들어간다.
+        LLM이 고른 도구가 아니므로 system_call_sequences에 기록해 "도구 종류 수" 관문에서 뺀다.
+        """
         args = network_precheck_args(state.seed)
         if args is None or "fetch_network_log" not in {s.name for s in self.tool_registry.list_tools()}:
             return
@@ -151,12 +142,12 @@ class InvestigationAgent:
         )
 
     def run(self, seed: Dict[str, Any]) -> Dict[str, Any]:
-        # [18] agent/models.py 에서 AgentState 실행하여 state 객체 생성
-        #      state = 지금까지의 조사 결과 기록하는 곳
+        # [18] → agent/models.py AgentState: 이 사건의 조사 상태(사실·가설·증거·도구 호출·신뢰도)를 담는 그릇
         state = AgentState(incident_id=seed["incident_id"], seed=seed)
-        state.raw_refs = references(seed, seed=True)
+        state.raw_refs = references(seed, seed=True)   # seed가 인용한 원본 참조도 "관측됨"으로 등록
         state.current_confidence = float(seed.get("confidence_initial", 0.5))
         state.record_confidence("initial", seed.get("trigger_description", "Triage 판정"))
+        # [19-1] → _run_network_precheck(): src_ip가 있으면 첫 LLM 턴 전에 network를 코드가 먼저 조회
         if self.network_precheck:
             self._run_network_precheck(state)
 
@@ -164,27 +155,26 @@ class InvestigationAgent:
         final_verdict = None
         max_cycles = self.max_calls + 3  # LLM이 종료 판단을 안 내려도 무한루프에 빠지지 않도록 하는 안전장치
 
-        # [2026-09-17 추가] 직전 턴에 종료 관문이 거부한 사유. 다음 reason() 호출에
-        # 실어 보내서 LLM이 "왜 거부당했는지"를 알게 한다. 한 번 전달하면 초기화한다.
+        # 직전 턴에 종료 관문이 거부한 사유. 다음 reason() 호출에 실어 보내 LLM이 "왜 거부당했는지"를
+        # 알게 한다. 한 번 전달하면 초기화한다.
         gate_rejection_reason = None
-        # [2026-09-17 추가] 같은 사유로 연속 거부되는 걸 감지해 사이클 낭비 없이
-        # 조기에 강제 종료 턴으로 넘어가기 위한 카운터.
+        # 같은 사유로 연속 거부되면 사이클 낭비 없이 강제 종료 턴으로 넘어가기 위한 카운터.
         consecutive_rejections = 0
         MAX_CONSECUTIVE_REJECTIONS = 2
-        # [2026-09-24] "같은 사유"로 연속 거부될 때만 센다(숫자는 빼고 비교 — 신뢰도 값만 바뀐 건 같은
-        # 사유). 예전엔 사유가 달라도 세서, 0918 시나리오 01에서 (d) 도구 1종류 no_more_evidence →
-        # (b) 도구 1종류 confidence_sufficient 두 번 만에 강제 종료돼 seed의 audit을 한 번도 안 봤다.
+        # "같은 사유"로 연속 거부될 때만 센다(숫자는 빼고 비교 — 신뢰도 값만 바뀐 건 같은 사유).
+        # 사유가 달라도 세던 때는 0918 시나리오 01이 (d) → (b) 두 번 만에 강제 종료돼 audit을 못 봤다.
         # 사유가 계속 바뀌며 끝나지 않는 경우는 max_cycles가 막는다.
         last_rejection_kind = None
-        # [2026-09-25] 거부된 종료 요청 중 판정 자체는 원칙 기준과 맞았던 마지막 판정. 강제 종료 턴에서
-        # LLM이 판정을 새로 내며 원칙과 어긋나게 뒤집으면 이 판정을 쓴다 (_settle_forced_verdict).
+        # 거부된 종료 요청 중 판정 자체는 원칙 기준과 맞았던 마지막 판정. 강제 종료 턴에서 LLM이 판정을
+        # 새로 내며 원칙과 어긋나게 뒤집으면 이 판정을 쓴다 (_settle_forced_verdict).
         last_consistent_verdict = None
 
-        # [20] 루프 시작! LLM한테 판단 맡김 agent/gemini_client.py 실행
+        # [20] 조사 루프 시작 — 한 바퀴 = LLM 판단 1회 (+ 필요하면 도구 1회)
         for _ in range(max_cycles):
-            # [23] agent/gemini_client.py 통해 Gemini가 분석한 결과 반환
-            # [2026-09-17 수정] confidence_threshold와 gate_rejection_reason을 매 턴 함께
-            # 전달 — LLM이 신뢰도 임계값 도달 여부와 직전 거부 사실을 스스로 확인할 수 있게 함
+            # [20] → _safe_reason() → llm_client.reason() (gemini_client.py / claude_client.py)
+            #        → [21] agent/prompts/ 로 프롬프트 조립 → [22] LLM API 호출
+            # [23] ← LLM 결정(JSON dict): facts/가설/새 증거 + next_action(call_tool | terminate)
+            #        신뢰도 임계값과 직전 거부 사유를 매 턴 함께 보내 LLM이 스스로 확인하게 한다.
             decision = self._safe_reason(
                 state,
                 confidence_threshold=self.confidence_threshold,
@@ -197,18 +187,18 @@ class InvestigationAgent:
                 final_verdict = self._derive_fallback_verdict(state, cause="LLM 응답을 해석하지 못해 조사를 중단함")
                 break
 
-            # [24] 방금 받은 분석 결과를 state에 기록
+            # [24] → _apply_decision(): LLM 결정을 state에 반영 (증거의 원본 참조 검증 + 신뢰도 누적)
             self._apply_decision(state, decision)
             state.pending_observations = []
 
-            # [25] 종료 조건 1 : LLM이 "이제 끝내자"고 했는가?
+            # [25] 종료 조건 1: LLM이 "이제 끝내자(terminate)"고 했는가?
             if decision.get("next_action") == "terminate":
                 termination_reason = (
                     decision.get("termination_reason") or TerminationReason.NO_MORE_EVIDENCE.value
                 )
 
-                # 종료 관문 (_termination_rejections 참고). 2026-09-24부터 no_more_evidence에도
-                # "도구 1종류만 보고 끝내기"를 막는 조건을 적용한다.
+                # [25-1] → _termination_rejections(): 종료 관문. 거부 사유가 있으면 종료하지 않고 계속 조사.
+                #        (strict면 [25-2] _verdict_conflicts()로 판정-원칙 일치도 확인)
                 reasons = self._termination_rejections(state, termination_reason, decision.get("final_verdict"))
                 if reasons:
                     reason_text = ", ".join(reasons)
@@ -221,6 +211,7 @@ class InvestigationAgent:
                     consecutive_rejections = consecutive_rejections + 1 if rejection_kind == last_rejection_kind else 1
                     last_rejection_kind = rejection_kind
                     if consecutive_rejections >= MAX_CONSECUTIVE_REJECTIONS:
+                        # [25-3] 강제 종료 턴: 도구 없이 판정만 요청 → _settle_forced_verdict()
                         state.notes.append(
                             f"연속 {consecutive_rejections}회 종료 거부 후에도 진전이 없어 "
                             "강제 종료 턴으로 전환합니다."
@@ -238,9 +229,8 @@ class InvestigationAgent:
                     gate_rejection_reason = reason_text  # 다음 턴 프롬프트에 실어 보냄
                     continue  # 종료 거부 — 다음 사이클로 넘어가 계속 조사
 
-                # [2026-09-17 추가] no_more_evidence는 network 확인을 강제하지 않으므로
-                # (network_precheck=False일 때) src_ip가 있는데 network 계층을 한 번도 안 쓴
-                # 채 종료되는 경우를 기록으로 남긴다.
+                # 관문 통과 — 정상 종료. network_precheck=False일 때는 src_ip가 있는데 network를 한 번도
+                # 안 본 채 no_more_evidence로 끝날 수 있어 기록으로 남긴다.
                 if (
                     termination_reason == TerminationReason.NO_MORE_EVIDENCE.value
                     and state.seed.get("src_ip")
@@ -255,13 +245,12 @@ class InvestigationAgent:
                 final_verdict = decision.get("final_verdict") or self._derive_fallback_verdict(state)
                 break
 
-            # [26] 종료 조건 2 : 벌써 8번(max_calls) 다 썼는가?
+            # [26] 종료 조건 2: 도구 호출 횟수 상한(max_calls, 기본 8)에 도달했는가?
             if len(state.tool_calls) >= self.max_calls:
                 termination_reason = TerminationReason.MAX_CALL_REACHED.value
 
-                # [2026-09-17 수정] max_call 도달 시, 도구 호출 없이 판정만 요청하는
-                # 마무리 턴을 1회 추가로 호출한다 (기존엔 이 시점 decision에
-                # final_verdict가 없어 항상 자체 폴백만 썼음).
+                # 도구 호출 없이 판정만 요청하는 마무리 턴을 1회 추가한다. 이 시점 decision은 도구 호출
+                # 요청이라 final_verdict가 없기 때문이다. 그래도 없으면 수치 기반 폴백 판정.
                 final_decision = self._safe_reason(
                     state, confidence_threshold=self.confidence_threshold, force_terminate=True
                 ) or {}
@@ -271,24 +260,22 @@ class InvestigationAgent:
                     last_consistent_verdict)
                 break
 
-            # [27] 종료 조건 1,2로 안 끝났으면 = LLM이 "도구를 더 부르자"고 한 것 -> 진짜 tool 실행
-            # [39] 결과 반환해서 돌아옴
+            # [27] 종료가 아니면 = LLM이 "이 도구를 부르자"고 한 것 → [28] _execute_tool_call()로 실제 실행
+            # [39] ← 도구 결과는 state.pending_observations에 담겨 다음 턴 프롬프트로 LLM에게 간다
             calls_before = len(state.tool_calls)
             self._execute_tool_call(state, decision.get("tool_call") or {})
             if len(state.tool_calls) > calls_before:
-                # 새 도구를 실행했으면 진전이 있는 것 — 연속 거부 횟수를 다시 센다. EC2 xmlrpc
-                # 사건(2026-09-24)에서 거부 → web 조회 → 거부가 "연속 2회"로 세어져 강제 종료됐다.
+                # 새 도구를 실행했으면 진전이 있는 것 — 연속 거부 횟수를 다시 센다. EC2 xmlrpc 사건에서
+                # 거부 → web 조회 → 거부가 "연속 2회"로 세어져 강제 종료된 적이 있다.
                 consecutive_rejections = 0
                 last_rejection_kind = None
-            # [40] confidence 체크
-            # confidence가 충분해도(0.85 넘어도) 여기선 그냥 메모만 하나 남기고 끝
-            # break 없기 때문에, 다시 llm_client.reason() 부르러 감 루프!
+            # [40] 신뢰도 확인 — 임계값을 넘어도 여기서 끝내지 않는다. 종료는 LLM이 terminate를 요청하고
+            #      [25-1] 관문을 통과할 때만 한다. 메모만 남기고 다시 [20]으로 돌아간다.
             if state.current_confidence >= self.confidence_threshold:
                 state.notes.append("신뢰도 임계값 도달 — 다음 사이클에서 종료 여부 재확인 필요")
         else:
             termination_reason = TerminationReason.MAX_CALL_REACHED.value
-            # [2026-09-17 추가] 안전장치(max_cycles 전부 소진)로 빠진 경우도 동일하게
-            # 마무리 턴을 한 번 시도한다.
+            # 안전장치(max_cycles 전부 소진)로 빠진 경우도 마무리 턴을 한 번 시도한다.
             final_decision = self._safe_reason(
                 state, confidence_threshold=self.confidence_threshold, force_terminate=True
             ) or {}
@@ -302,19 +289,20 @@ class InvestigationAgent:
             for conflict in self._verdict_conflicts(state, final_verdict):
                 state.notes.append("⚠ 판정-원칙 불일치: " + conflict + " (최종 판정은 LLM 결과 그대로 둠)")
 
-        # [41] state 안에 쌓은 조사 결과를 agent/report.py의 build_investigation_result() 넘겨서 최종 JSON 생성
+        # [41] → agent/report.py build_investigation_result(): state에 쌓인 조사 내용으로 최종 JSON 생성
         result = build_investigation_result(state, termination_reason, final_verdict)
         result["statistics"]["tool_calls_max"] = self.max_calls
-        # [42] 조사 결과를 반환 agent/pipeline.py로 돌아감
+        # [42] → agent/pipeline.py [16]으로 조사 결과를 돌려준다
         return result
 
     def _termination_rejections(self, state: AgentState, termination_reason: str,
                                 final_verdict: Optional[Dict[str, Any]] = None) -> list:
-        """종료 요청을 거부할 사유 목록 (비어 있으면 승인).
+        """[25-1] 종료 관문 — 종료 요청을 거부할 사유 목록 (비어 있으면 승인). run() [25]에서 호출.
 
-        confidence_sufficient: (a) 실제 신뢰도 < threshold, (b) 서로 다른 도구 1종류 이하,
-          (c) seed에 src_ip가 있는데 network 조회를 시도하지 않음.
-        strict_termination=True일 때 두 종료 사유 모두에 추가 [2026-09-24]:
+        confidence_sufficient: (a) 실제 신뢰도 < threshold (단, 판정이 도구 계산 기준과 같으면 면제),
+          (b) 서로 다른 도구 1종류 이하, (c) seed에 src_ip가 있는데 network 조회를 시도하지 않음.
+        strict_termination=True일 때 두 종료 사유 모두에 추가:
+          [25-2] _verdict_conflicts(): 판정이 도구가 계산한 원칙 기준과 어긋남
           (d) no_more_evidence인데 도구를 1종류 이하만 시도했고, 아직 시도하지 않은 로그 조회
               도구가 남아 있음. 경고만 남기던 방식으로는 EC2 main.py에서도 도구 1개로 끝나는
               사건이 계속 나왔다. 등록된 도구를 다 써봤다면 "정말 더 볼 게 없음"이므로 승인한다.
@@ -353,8 +341,8 @@ class InvestigationAgent:
         if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
             successful = {t.tool_name for t in chosen if t.success}
             distinct = max(len(successful), len(chosen_layers))
-            # 판정이 도구가 계산한 원칙 기준과 같으면 신뢰도 숫자 미달로는 거부하지 않는다. EC2 탐침 사건
-            # (2026-09-25)에서 FALSE_POSITIVE가 0.80으로 5회 거부되자 도구를 더 부르다 강제 종료 턴에서
+            # 판정이 도구가 계산한 원칙 기준과 같으면 신뢰도 숫자 미달로는 거부하지 않는다. EC2 SSH 탐침
+            # 사건에서 FALSE_POSITIVE가 0.80으로 5회 거부되자 도구를 더 부르다 강제 종료 턴에서
             # THREAT_CONFIRMED로 뒤집혔다. 사실이 다 확인된 사건에 0.05를 채우는 조사는 판정을 흔들기만 한다.
             determined = self.strict_termination and self._rule_determined_verdict(state) == (
                 (final_verdict or {}).get("verdict"))
@@ -382,7 +370,7 @@ class InvestigationAgent:
         return reasons
 
     # 거부 사유에 붙이는 "다음에 볼 도구" 안내. 예전 문구("도구 1종류만 사용됨")만으로는 LLM이
-    # 무엇을 더 봐야 할지 몰라 같은 종료를 반복했다(EC2 xmlrpc 사건, 2026-09-24).
+    # 무엇을 더 봐야 할지 몰라 같은 종료를 반복했다(EC2 xmlrpc 사건).
     UNTRIED_TOOL_PURPOSE = {
         "fetch_audit_log": "서버에서 실행된 명령·파일 변경(웹 서버 프로세스 www-data/apache2의 셸·다운로드 실행, "
                            "로그인 세션의 명령) — 공격이 서버 안까지 이어졌는지 확인",
@@ -393,10 +381,10 @@ class InvestigationAgent:
 
     def _settle_forced_verdict(self, state: AgentState, verdict: Dict[str, Any],
                                last_consistent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """강제 종료 턴 판정이 원칙과 어긋나면, 앞서 LLM이 낸 원칙에 맞는 판정을 쓴다.
+        """[25-3] 강제 종료 턴 판정이 원칙과 어긋나면, 앞서 LLM이 낸 원칙에 맞는 판정을 쓴다.
 
         강제 종료 턴은 LLM이 판정을 처음부터 다시 쓰는 호출이라, 거부 전까지 유지하던 판정이
-        뒤집힐 수 있다(EC2 2026-09-25 탐침 사건: FALSE_POSITIVE로 5회 종료 요청 → 강제 종료 턴에서
+        뒤집힐 수 있다(EC2 SSH 탐침 사건: FALSE_POSITIVE로 5회 종료 요청 → 강제 종료 턴에서
         THREAT_CONFIRMED). 코드가 판정을 새로 만들지는 않고, LLM 자신의 앞선 판정 중에서만 고른다.
         """
         if not (self.strict_termination and last_consistent and self._verdict_conflicts(state, verdict)):
@@ -426,7 +414,9 @@ class InvestigationAgent:
 
     @staticmethod
     def _verdict_conflicts(state: AgentState, final_verdict: Optional[Dict[str, Any]]) -> list:
-        """도구가 계산한 사실(rule_floors, window_totals)과 어긋나는 판정 사유 목록.
+        """[25-2] 도구가 계산한 사실(rule_floors, window_totals)과 어긋나는 판정 사유 목록.
+
+        [25-1] 종료 관문과 run() 끝의 "⚠ 판정-원칙 불일치" 기록, [25-3] 강제 종료 판정 확인에서 쓴다.
 
         - 조회한 모든 로그가 구간 전체 0건(로그 미확보)인데 INCONCLUSIVE가 아님
         - 원칙 9 기준 충족(seed src_ip)인데 FALSE_POSITIVE
@@ -494,8 +484,8 @@ class InvestigationAgent:
         return "아직 확인하지 않은 도구 중 사건과 관련된 것을 최소 1회 호출하십시오 — " + " / ".join(options)
 
     # ------------------------------------------------------------------
-    # [2026-09-17 추가] LLM이 강제 종료 턴(force_terminate=True)에서도
-    # final_verdict를 못 준 경우를 대비한 최후 안전망.
+    # 폴백 판정 — LLM이 강제 종료 턴(force_terminate=True)에서도 final_verdict를 못 주거나
+    # 응답을 연속으로 해석하지 못한 경우의 최후 안전망. 누적 신뢰도 수치만으로 판정한다.
     # ------------------------------------------------------------------
     def _derive_fallback_verdict(self, state: AgentState, cause: Optional[str] = None) -> Dict[str, Any]:
         if state.current_confidence >= self.confidence_threshold:
@@ -539,7 +529,9 @@ class InvestigationAgent:
         }
 
     # ------------------------------------------------------------------
-    # LLM 판단 결과를 State에 반영 (State / Evidence 관리 영역과 맞닿는 지점)
+    # [24] LLM 판단 결과를 State에 반영 — run() [24]에서 매 턴 호출
+    #   facts/unknowns/가설을 덮어쓰고, 새 증거마다 원본 참조를 검증한 뒤 신뢰도에 더한다(반박이면 뺀다).
+    #   → agent/provenance.py validate_citations(), agent/models.py AgentState.update_confidence()
     # ------------------------------------------------------------------
     def _apply_decision(self, state: AgentState, decision: Dict[str, Any]) -> None:
         if "facts" in decision:
@@ -560,10 +552,10 @@ class InvestigationAgent:
             contradicting = bool(ev.get("contradicting", False))
             contribution = float(ev.get("confidence_contribution", 0.0))
             sequence = len(state.evidence) + len(state.contradicting_evidence) + 1
-            # [2026-09-24] raw_ref를 빠뜨리거나 형식이 틀린 것은 LLM의 복사 실수라서,
-            # 기여를 0으로 만들면 같은 증거라도 실행마다 confidence가 달라져 재현성이
-            # 무너졌다. 그 경우엔 기여를 그대로 반영하고 provenance에만 기록한다.
-            # 관측되지 않은 참조를 지어낸 경우(unknown)와 위치가 모호한 경우만 0으로 막는다.
+            # raw_ref를 빠뜨리거나 형식이 틀린 것은 LLM의 복사 실수라서, 기여를 0으로 만들면 같은
+            # 증거라도 실행마다 confidence가 달라져 재현성이 무너졌다. 그 경우엔 기여를 그대로 반영하고
+            # provenance에만 기록한다. 관측되지 않은 참조를 지어낸 경우(unknown)와 위치가 모호한
+            # 경우만 0으로 막는다.
             try:
                 raw_refs, unknown_refs = validate_citations(ev, state.raw_refs)
             except ValueError as exc:
@@ -578,9 +570,9 @@ class InvestigationAgent:
                 contribution = 0.0
             if not raw_refs and not unknown_refs and state.raw_refs:
                 state.notes.append(f"증거 {sequence}: raw_ref 인용이 없습니다(신뢰도 기여는 반영, provenance 미완료).")
-            # [2026-09-24] 같은 로그를 다시 인용한 증거는 신뢰도에 두 번 반영하지 않는다.
-            # 종료 관문이 거부된 뒤 LLM이 이미 기록한 사실을 새 evidence로 다시 만들어
-            # 임계값을 채우는 사례가 main.py 실행에서 확인됐다(원칙: 한 관찰 사실은 한 번만).
+            # 같은 로그를 다시 인용한 증거는 신뢰도에 두 번 반영하지 않는다. 종료 관문이 거부된 뒤 LLM이
+            # 이미 기록한 사실을 새 evidence로 다시 만들어 임계값을 채우는 사례가 main.py 실행에서
+            # 확인됐다(원칙: 한 관찰 사실은 한 번만).
             cited = {ref for e in state.evidence + state.contradicting_evidence for ref in e.raw_refs}
             if raw_refs and set(raw_refs) <= cited and contribution:
                 contribution = 0.0
@@ -610,9 +602,10 @@ class InvestigationAgent:
             state.attack_timeline = decision["attack_timeline"]
 
     # ------------------------------------------------------------------
-    # Tool 연결·실행 계층 호출 + 제어(중복 방지, 실패 처리)
+    # [28] 도구 실행 — run() [27]과 network 사전 조회 [19-1]에서 호출
+    #   중복 호출 차단 → [29] 인자 검사 → [30] registry.call() → [37] 결과 수집 → [38]·[39] 기록.
+    #   도구가 실패해도 예외를 올리지 않고 오류를 다음 턴 관측으로 넘겨 조사를 계속한다.
     # ------------------------------------------------------------------
-    # [28] tool 호출
     def _execute_tool_call(self, state: AgentState, tool_call: Dict[str, Any]) -> None:
         name = tool_call.get("tool_name")
         args = tool_call.get("args") or {}
@@ -631,11 +624,13 @@ class InvestigationAgent:
             return
 
         try:
-            # [29] 인자 형식 맞는지 검사
+            # [29] → agent/tools/registry.py validate_args(): 필수 인자·형식 검사
             self.tool_registry.validate_args(name, args)
-            # [30] ★진짜 tool 함수 실행 agent/tools/registry.py의 call 함수 실행
-            # [37] agent/tools/registry.py로부터 조사 결과 반환
+            # [30] → agent/tools/registry.py ToolRegistry.call(): 실제 도구 함수 실행
+            #        → [31]~[36] agent/tools/real/<도구>.py → log_source → normalizer_adapter → 1차 탐지팀 정규화
+            # [37] ← 도구 결과 dict (count, summary, records, window_total, rule_checks ...)
             result = self.tool_registry.call(name, args)
+            # 도구 결과에서 관측된 원본 참조를 모은다 — 이후 LLM이 증거에 인용한 raw_ref를 이 집합과 대조한다
             raw_refs = observed_references(result)
             state.raw_refs = list(dict.fromkeys(state.raw_refs + raw_refs))
             for ref, group in observed_reference_groups(result).items():
@@ -644,7 +639,7 @@ class InvestigationAgent:
                 state.raw_ref_locations[ref] = list(dict.fromkeys(state.raw_ref_locations.get(ref, []) + sources))
             queried_layers = [layer for layer in result.get("layer_counts", {})
                               if layer not in result.get("errors", {})]
-            # 종료 관문 (f)용: 도구가 계산한 원칙 기준 중 seed src_ip가 위협 기준을 충족한 것
+            # [37-1] 종료 관문 [25-2]용: 도구가 계산한 원칙 기준(rule_checks) 중 seed src_ip에 해당하는 것
             src_ip = state.seed.get("src_ip")
             for check in result.get("rule_checks") or []:
                 principle9_met = (check.get("rule") == "principle_9" and src_ip and check.get("src_ip") == src_ip
@@ -654,6 +649,7 @@ class InvestigationAgent:
                 principle7_seen = check.get("rule") == "principle_7" and src_ip and check.get("src_ip") == src_ip
                 if (principle9_met or web_exec_met or principle7_seen) and check not in state.rule_floors:
                     state.rule_floors.append(check)
+            # 필터 전 구간 전체 건수 — 모두 0이면 로그 미확보로 보고 [25-2]가 INCONCLUSIVE만 허용한다
             if "window_total" in result:
                 state.window_totals.append(result["window_total"])
             # 종료 관문 (e)용: seed src_ip의 로그인 성공이 결과에 있었는지 기록
@@ -663,7 +659,8 @@ class InvestigationAgent:
                         and record.get("src_ip") == src_ip and record.get("raw_ref") not in seen):
                     state.login_successes.append({key: record.get(key) for key in ("raw_ref", "pid", "user", "timestamp")})
                     seen.add(record.get("raw_ref"))
-            # [38] 이 도구 + 이 조건 조합은 이미 썼다고 표시 (중복 방지)
+            # [38] 이 도구 + 이 조건 조합은 이미 썼다고 표시(중복 방지)하고, 호출 기록을 남긴다
+            #      (최종 JSON의 tools_called[]에 그대로 나오는 부분)
             state.mark_called(name, args)
             state.tool_calls.append(
                 ToolCallRecord(
@@ -679,7 +676,7 @@ class InvestigationAgent:
                 )
             )
 
-            # [39] 이번 호출을 "기록"으로 남김 - 최종 JSON의 tools_called[] 배열에 그대로 나오는 부분
+            # [39] 결과를 다음 턴 LLM 관측(raw_observations_since_last_turn)으로 넘긴다 → run() [27] 뒤로 복귀
             state.pending_observations.append({"tool_name": name, "args": args, "result": result})
         except (ToolValidationError, KeyError, NotImplementedError) as exc:
             state.mark_called(name, args)

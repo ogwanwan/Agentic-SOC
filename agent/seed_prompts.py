@@ -1,13 +1,17 @@
 ﻿"""seed 생성(경량 LLM triage) 전용 프롬프트.
 
-agent/prompts.py는 "이미 seed가 있다"는 전제로 심층 조사를 위한 프롬프트를 만들지만,
-여기는 그 앞 단계 — raw log 더미를 보고 "조사할 가치가 있는 후보가 있는가?"를
-LLM이 스스로 판단해서 seed 리스트(+우선순위)를 만들어내는 프롬프트다.
+역할
+  로그 더미를 보고 "조사할 가치가 있는 후보가 있는가?"를 판단시키는 시스템 프롬프트
+  (SEED_SYSTEM_PROMPT)와 사용자 프롬프트(build_seed_user_prompt)를 만든다.
 
-agent/prompts.py의 investigation 프롬프트와 별개로 관리하는 이유:
-- 여기는 "가설을 세우고 검증"하는 게 아니라 "이상해 보이는 걸 넓게 훑어서 후보를 뽑는" 단계라
-  요구하는 사고방식과 출력 schema가 완전히 다르다.
-- 나중에 이 단계만 따로 더 가벼운 모델/다른 프롬프트로 튜닝하기 쉽게 분리해둔다.
+누가 부르나
+  [12] agent/seed_generation.py SeedGenerator.generate()
+
+무엇을 부르나
+  agent/provenance.py strip_trace_fields()   LLM에게 보여줄 사본에서 추적용 필드 제거
+
+조사 프롬프트(agent/prompts/)와 따로 두는 이유: 여기는 가설 검증이 아니라 "넓게 훑어 후보를
+뽑는" 단계라 사고방식과 출력 스키마가 다르고, 이 단계만 가벼운 모델로 튜닝하기 쉽게 하려는 것이다.
 """
 
 from __future__ import annotations
@@ -63,17 +67,12 @@ SEED_SYSTEM_PROMPT = """\
 }
 """
 
-# [13] agent/seed_generation.py [12]에서 build_seed_user_prompt 실행
-#      raw_log_ingestion.py [7]~[9]가 4계층별로 최근 N건(RAW_LOG_LOCAL_MAX_LINES,
-#      기본 30건)씩 정규화해서 넘긴 이벤트를 통째로 Gemini에게 보여주고
-#      "여기서 조사할 가치가 있는 후보가 있나?" 물어봄
-#      → 위 SEED_SYSTEM_PROMPT의 원칙 6("evidence_refs는 입력 로그의 raw_ref를
-#      원문 그대로, 새 참조를 만들지 말 것")을 LLM에게 지시하고, 그 지시를 실제로
-#      지켰는지는 seed_generation.py [2026-09-23 추가] 검증 블록이 코드로 재확인함
-#      (agent/provenance.py: references() — known 집합과 대조)
-#      [2026-09-24] 추적용 필드(raw_ref_locations 등)는 LLM에게 보여주는 사본에서 빼고,
-#      이벤트는 한 줄 JSON으로 넣는다 — 원본 raw_logs는 그대로라 seed_generation.py의
-#      raw_ref 검증은 영향 없음.
+# [13] ← agent/seed_generation.py [12]에서 호출됨
+#      raw_log_ingestion.py [7]~[9]가 계층별로 파일 끝 N건씩 정규화한 이벤트를 통째로 LLM에게 보여 준다.
+#      SEED_SYSTEM_PROMPT 원칙 6("evidence_refs는 입력 로그의 raw_ref를 원문 그대로")을 지켰는지는
+#      seed_generation.py [13-2]가 코드로 다시 확인한다.
+#      추적용 필드(raw_ref_locations 등)는 LLM에게 보여줄 사본에서만 빼고 한 줄 JSON으로 넣는다
+#      (원본 raw_logs는 그대로라 [13-2] 검증에는 영향 없음).
 def build_seed_user_prompt(raw_logs: List[Dict[str, Any]], host: str) -> str:
     payload = {
         "host": host,

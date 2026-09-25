@@ -1,7 +1,15 @@
 """fetch_web_log 실제 구현 - 에이전트(LLM)가 조사 중 호출하는 웹(apache access) 로그 조회 도구.
 
-파일명 == 함수명 규칙에 따라 agent/tools/registry.py의 build_default_registry()가
-mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/README.md 참고)
+누가 부르나
+  [31] agent/tools/registry.py ToolRegistry.call("fetch_web_log", args) ← agent/loop.py [30]
+       (LLM이 이 도구를 골랐을 때)
+  agent/tools/real/fetch_event_logs.py (사건 구간 다계층 조회 때 이 함수를 직접 부른다)
+
+무엇을 부르나
+  [33] agent/tools/log_source.py load_window_events("web", ...)  apache access.log 읽기 + 정규화 + 시간창 필터
+       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_apache_log.py
+
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
@@ -11,7 +19,7 @@ mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/
   - 이 파일(에이전트 도구): 도구 인자 해석, 필터, limit/offset 페이지네이션,
     LLM에게 돌려줄 summary/반환 형식.
 
-왜 nginx가 아니라 apache인가: EC2 실측(2026-09-22)으로 nginx(리버스 프록시)와
+왜 nginx가 아니라 apache인가: EC2 실측으로 nginx(리버스 프록시)와
 apache(백엔드, 127.0.0.1:8080)가 같이 떠 있고, apache access.log가 1차 탐지팀
 fetch_apache_log.py가 기대하는 포맷과 컬럼 단위로 일치했다. apache 스키마는 "path"
 필드를 쓰고 client IP(%a)가 이미 실제 클라이언트라 xff 보정이 필요 없다.
@@ -25,7 +33,7 @@ fetch_apache_log.py가 기대하는 포맷과 컬럼 단위로 일치했다. apa
 
 summary 끝의 [조회 구간 전체 집계]는 페이지와 무관하게 조건에 맞는 전체 요청 기준
 메서드·상태코드 계열·서로 다른 경로 수·상위 경로·User-Agent를 준다(원칙 9에 그대로 쓰도록).
-EC2 main.py(2026-09-24 INC-xmlrpc-flood)에서 LLM이 records를 직접 세고 해석하다 판정이
+EC2 main.py(INC-xmlrpc-flood)에서 LLM이 records를 직접 세고 해석하다 판정이
 흔들려, auth와 같은 방식으로 세는 기준을 코드로 고정했다.
 """
 
@@ -40,7 +48,7 @@ from ..log_source import filtered_out_hint, load_window_events, pagination
 TOP_N = 5
 MAX_UA_CHARS = 80
 # 원칙 9 판정 기준(investigation.yaml과 같은 값). LLM이 기준을 알고도 User-Agent·2xx를 근거로
-# 판정을 바꾸는 사례가 로컬 xmlrpc 재현(2026-09-24)에서 반복돼, SSH 실패 횟수처럼 충족 여부를
+# 판정을 바꾸는 사례가 로컬 xmlrpc 재현에서 반복돼, SSH 실패 횟수처럼 충족 여부를
 # 코드가 계산해 summary에 적는다.
 AUTH_ENDPOINT_RE = re.compile(r"(xmlrpc\.php|wp-login\.php|/login|/signin|/user/login|/admin/login)", re.IGNORECASE)
 AUTH_POST_THRESHOLD = 10
@@ -126,13 +134,16 @@ def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
     return True
 
 
+# [32] ← registry.call() [31]에서 호출. 반환 dict는 loop.py [37]로 간다.
 def fetch_web_log(args: Dict[str, Any]) -> Dict[str, Any]:
     host = args["host"]
     start_time = args["start_time"]
     end_time = args["end_time"]
     limit, offset = pagination(args)
 
+    # [33] → log_source.load_window_events(): 파일 읽기 → [34] 1차 탐지팀 정규화 → 구간 안 이벤트
     loaded = load_window_events("web", host, start_time, end_time)
+    # [35] 도구 인자로 거르고(_matches), 페이지로 자르고, summary·rule_checks를 만든다
     matched: List[Dict[str, Any]] = [e for e in loaded["events"] if _matches(e, args)]
 
     total_matched = len(matched)

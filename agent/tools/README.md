@@ -12,7 +12,7 @@ Tool 연결·실행 계층입니다. `registry.py`가 LLM이 고른 도구 이�
 - **`real/`** — 실제 조사 도구 구현 5개(파일명 = 도구 이름, 자동 탐색 대상).
   자세한 규칙은 [real/README.md](real/README.md).
 - **`log_source.py`** — `.env`의 `<계층>_LOG_LOCAL_PATH` 파일을 읽고(`read_documents`), 정규화·시간창
-  필터(`load_window_events`), 페이지네이션, 0건 안내를 제공하는 공용 계층. S3 읽기는 2026-09-25 삭제.
+  필터(`load_window_events`), 페이지네이션, 0건 안내를 제공하는 공용 계층. S3 읽기는 삭제됨(EC2 로컬 경로만 사용).
 - **`normalizer_adapter.py`** — 우리(에이전트팀)가 짠 얇은 어댑터. 원본 텍스트를
   `primary_detection/normalizer/`(1차 탐지팀 벤더 코드, 레포 루트에 있음)의 정규화 함수에
   그대로 넘깁니다. `real/*.py`와 `raw_log_ingestion.py`가 `log_source.py`를 통해 여기를 거칩니다.
@@ -20,7 +20,7 @@ Tool 연결·실행 계층입니다. `registry.py`가 LLM이 고른 도구 이�
 - **`mock_tools.py`** — `real/`에 아직 구현이 없는 도구용 목업. 개발 초기 단계에서
   전체 파이프라인을 끊김 없이 돌리기 위한 폴백입니다.
 
-## 2026-09-23 업데이트: `parsers/` 폴더 삭제됨
+## `parsers/` 폴더는 삭제됨
 
 자체 파싱 로직 모음이던 `parsers/`는 완전히 없어졌습니다. 원래 남아있던 마지막 파일
 `process_tree.py`(pid/ppid로 조상 체인을 엮는 헬퍼)까지 쓰는 곳이

@@ -1,4 +1,18 @@
-"""C: resolve an incident event/window and query raw logs in that time range."""
+"""fetch_event_logs (C: 사건 구간 조회) — 사건 시각/구간을 정해 여러 계층 로그를 한 번에 시간순으로 조회한다.
+
+역할
+  seed(event)의 window 또는 timestamp±before/after_seconds로 조회 구간을 정하고, 고른 계층마다
+  해당 조회 도구를 불러 결과를 합쳐 시간순으로 정렬·페이지 처리한다.
+
+누가 부르나
+  [31] agent/tools/registry.py ToolRegistry.call("fetch_event_logs", args) ← agent/loop.py [30]
+       (loop.py가 host와 event=seed를 기본값으로 채워 준다)
+  scripts/demo_event_window.py, scripts/demo_abcd.py
+
+무엇을 부르나
+  agent/tools/real/fetch_web_log.py·fetch_auth_log.py·fetch_audit_log.py·fetch_network_log.py
+  → 각자 [33] log_source.load_window_events() → 정규화
+"""
 from __future__ import annotations
 
 from datetime import timedelta

@@ -1,12 +1,12 @@
-"""실제 팀원 구현 전 로컬 테스트용 목업 도구 핸들러.
+"""목업 도구 핸들러 — agent/tools/real/에 실제 구현이 없는 도구의 대체품.
 
-fetch_web_log / fetch_auth_log 담당,
-fetch_audit_log / fetch_network_log / get_process_tree 담당의
-구현이 완성되면, build_default_registry(handlers={...})로 실제 함수를 넘겨
-아래 목업을 교체하면 된다. 반환 형식(count/summary/records)은 그대로 유지해야
-loop.py / prompts.py가 수정 없이 동작한다.
+누가 부르나
+  agent/tools/registry.py build_default_registry()  실제 구현을 못 찾으면 여기로 폴백
+  오프라인 테스트(tests/)                          가짜 도구 결과가 필요할 때
 
-문서 7번(최종 산출물 예시)의 웹셸 업로드 시나리오 값을 기본 목업 데이터로 사용한다.
+지금은 resolve_ip_geo를 뺀 모든 도구에 실제 구현이 있어 운영(main.py)에서는 쓰이지 않는다.
+반환 형식(count/summary/records)은 실제 도구와 같아야 loop.py·prompts가 수정 없이 동작한다.
+값은 웹셸 업로드 시나리오 예시 데이터다.
 """
 
 from __future__ import annotations

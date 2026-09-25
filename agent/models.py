@@ -1,8 +1,18 @@
-"""State / Evidence 관리 담당 모듈.
+"""조사 상태·증거 데이터 구조 — AgentState, Evidence, Hypothesis, ToolCallRecord, 판정/종료 사유 상수.
 
-조사 과정에서 쌓이는 facts / hypothesis / unknowns / evidence / 조사 이력을
-하나의 AgentState 객체로 관리한다. Agent Loop(loop.py)는 매 사이클마다
-이 State를 읽고, LLM 판단 결과로 갱신한다.
+역할
+  한 사건을 조사하는 동안 쌓이는 facts / 가설 / unknowns / 증거 / 도구 호출 이력 / 신뢰도 변화를
+  AgentState 하나에 담는다. 조사 루프는 매 사이클 이 State를 프롬프트로 LLM에게 보여 주고,
+  LLM 판단 결과로 갱신한다.
+
+누가 부르나
+  [18] agent/loop.py InvestigationAgent.run()   → AgentState(...) 생성
+  agent/loop.py _apply_decision()/_execute_tool_call()  → add_evidence, update_confidence, mark_called
+  agent/prompts/__init__.py build_user_prompt() → State를 LLM용 JSON으로 변환
+  agent/report.py build_investigation_result()  → State를 최종 JSON으로 변환
+
+무엇을 부르나
+  표준 라이브러리만 쓴다.
 """
 
 from __future__ import annotations
@@ -84,7 +94,7 @@ class ConfidenceStep:
     confidence: float
     reason: str
 
-# [19] agent/loop.py에서 실행함. 조사 진행 상태 담는 컨테이너 생성하고 반환
+# [19] ← agent/loop.py [18]에서 사건마다 하나 생성된다
 @dataclass
 class AgentState:
     """조사 진행 상태 전체를 담는 컨테이너.
@@ -120,22 +130,21 @@ class AgentState:
     provenance_issues: List[Dict[str, Any]] = field(default_factory=list)
     raw_ref_groups: Dict[str, List[str]] = field(default_factory=dict)
     raw_ref_locations: Dict[str, List[str]] = field(default_factory=dict)
-    # [2026-09-24] 도구 결과에서 관측된 seed src_ip의 로그인 성공(ssh_accepted) 레코드
+    # 도구 결과에서 관측된 seed src_ip의 로그인 성공(ssh_accepted) 레코드
     # ({raw_ref, pid, user, timestamp}). 있으면 종료 관문이 후속 행위(audit) 확인을 요구하고,
     # 거부 사유에 ppid=<pid>를 그대로 적어준다 (loop.py strict_termination).
     login_successes: List[Dict[str, Any]] = field(default_factory=list)
-    # [2026-09-24] 시스템이 LLM 대신 실행한 도구 호출(network 사전 조회)의 sequence.
+    # 시스템이 LLM 대신 실행한 도구 호출(network 사전 조회)의 sequence.
     # 종료 관문의 "서로 다른 도구 2종류" 계산에서는 빼서, LLM이 스스로 2개 계층을 고르게 한다.
     system_call_sequences: List[int] = field(default_factory=list)
-    # [2026-09-24] 도구가 계산한 판정 원칙 기준 중 seed src_ip에 대해 "위협 기준 충족"인 것
+    # 도구가 계산한 판정 원칙 기준 중 seed src_ip에 대해 "위협 기준 충족"인 것
     # (예: 원칙 9 인증 대입 POST 10회 이상). 충족인데 FALSE_POSITIVE로 끝내려 하면 관문이 거부한다.
     # 원칙 7(성공 없는 SSH 실패)은 충족·미충족 결과를 모두 담는다(미충족인데 THREAT_CONFIRMED도 거부).
     rule_floors: List[Dict[str, Any]] = field(default_factory=list)
-    # [2026-09-24] 로그 조회 도구가 돌려준 "필터 전 구간 전체 건수"(window_total). 모두 0이면 그 시간대
+    # 로그 조회 도구가 돌려준 "필터 전 구간 전체 건수"(window_total). 모두 0이면 그 시간대
     # 로그 자체가 없는 것(수집 누락·교체)이라, 관문이 INCONCLUSIVE 외 판정을 거부한다.
     window_totals: List[int] = field(default_factory=list)
 
-    # [0917 희진] _to_hashable 메소드 추가
     @staticmethod
     def _to_hashable(value: Any) -> Any:
         """dict/list처럼 해싱 불가능한 인자 값도 시그니처에 넣을 수 있도록 변환.
@@ -151,9 +160,7 @@ class AgentState:
     # ------------------------------------------------------------------
     # 중복 조사 방지
     # ------------------------------------------------------------------
-    # [0917 희진] _signature 메소드 교체
-    # 문제 : tool 인자에 리스트 오면 해싱 예외
-    # 해결 : state.already_called()(models.py) 쪽 해싱 로직에 방어 코드 추가
+    # 같은 (도구, 인자) 조합이면 같은 서명. 인자에 리스트·딕셔너리가 와도 _to_hashable로 바꿔 해싱한다.
     @staticmethod
     def _signature(tool_name: str, args: Dict[str, Any]) -> Tuple[str, Tuple[Tuple[str, Any], ...]]:
         return (
@@ -184,6 +191,6 @@ class AgentState:
 
     def update_confidence(self, delta: float, stage: str, reason: str) -> None:
         # round: 0.6+0.25 같은 덧셈이 0.8499999…가 되어 임계값 0.85 비교에서 "미달"로 거부되던
-        # 부동소수점 오차를 없앤다 (2026-09-24 로컬 xmlrpc 재현에서 3회 연속 거부).
+        # 부동소수점 오차를 없앤다 (로컬 xmlrpc 재현에서 3회 연속 거부).
         self.current_confidence = round(max(0.0, min(1.0, self.current_confidence + delta)), 6)
         self.record_confidence(stage, reason)

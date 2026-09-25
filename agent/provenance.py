@@ -1,7 +1,19 @@
-"""D: explicit, lossless raw-reference transport and citation validation.
+"""원본 추적(D) — raw_ref(원본 파일:줄)를 잃지 않고 전달하고, 증거가 인용한 참조를 검증한다.
 
-References are opaque strings: never rewrite an upstream raw_ref, infer a
-reference from prose, or attach every observed log to an uncited claim.
+역할
+  seed·도구 결과에서 "실제로 관측된" 원본 참조를 모으고(observed_*), LLM이 증거에 인용한 참조가
+  그 안에 있는지 확인한다(validate_citations). 최종 보고서의 provenance.status를 계산한다.
+  참조는 불투명한 문자열로 다룬다 — 1차 탐지가 만든 raw_ref를 고쳐 쓰거나, 문장에서 참조를
+  추측하거나, 인용하지 않은 주장에 로그를 몰래 붙이지 않는다.
+
+누가 부르나
+  [13-2] agent/seed_generation.py      references()                 seed의 evidence_refs 검증
+  [18]·[24]·[37] agent/loop.py         references(), validate_citations(), observed_*()
+  [41] agent/report.py                 provenance_report()
+  agent/prompts/, agent/seed_prompts.py strip_trace_fields()        LLM에게 보여줄 사본 정리
+
+무엇을 부르나
+  없음 (표준 라이브러리만)
 """
 from __future__ import annotations
 
@@ -24,7 +36,7 @@ def references(value: Dict[str, Any], *, seed: bool = False) -> List[str]:
 
 # LLM 판단에는 쓰이지 않는 추적용 필드. 코드(loop/report)는 도구 결과 원본에서 이 값을
 # 읽으므로, LLM에게 보여주는 사본에서만 뺀다 — 절대 경로가 이벤트마다 반복돼 프롬프트가
-# 수 배로 커지고(seed 생성 12만 자 이상) 응답이 느려지는 문제가 있었다(2026-09-24).
+# 수 배로 커지고(seed 생성 12만 자 이상) 응답이 느려지는 문제가 있었다.
 LLM_HIDDEN_KEYS = frozenset({"raw_ref_locations", "raw_lines"})
 
 

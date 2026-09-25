@@ -1,22 +1,29 @@
-"""조사 에이전트 실행 예시.
+"""조사 에이전트 실행 진입점 — `python main.py`.
 
-실제로 돌려보려면:
-1. `pip install -r requirements.txt`
-2. Gemini(기본값, 무료 티어 가능): Google AI Studio(aistudio.google.com)에서 API 키 발급 후
-   `export GEMINI_API_KEY=...`
-   Claude로 돌리고 싶으면 `export LLM_PROVIDER=anthropic` + `export ANTHROPIC_API_KEY=...`
-3. .env에 계층별 로그 파일 경로(WEB/AUTH/AUDIT/NETWORK_LOG_LOCAL_PATH)와 HOST(수집 서버 이름)를 채운다
-   (EC2라면 /var/log/... 경로 — .env.example 참고)
+역할
+  .env 설정을 읽고, 도구 레지스트리와 LLM 클라이언트를 만든 뒤 전체 조사 파이프라인
+  (로그 수집 → 조사할 사건(seed) 고르기 → 사건별 조사 → 보고서)을 한 번 실행한다.
+  결과는 콘솔에 텍스트 보고서로 보여 주고, 원본 JSON은 results/에 저장한다.
 
-Triage/감지 에이전트가 파이프라인에서 빠졌기 때문에, seed를 직접 만들어 넣던 예전 방식
-대신 raw log부터 시작하는 전체 파이프라인(agent.pipeline.run_investigation_pipeline)을 쓴다.
+누가 부르나
+  사람이 직접 실행한다 (EC2: `python3 main.py`).
 
-*** 2026-09-18 추가: 조사 결과 JSON 파일 저장 ***
-지금까지는 investigation_result가 콘솔에 출력만 되고 사라졌다. results/ 디렉터리에
-investigation_id + 저장 시각을 파일명으로 삼아 JSON 그대로 저장하도록 추가했다.
-텍스트 리포트는 따로 저장하지 않는다 — agent/report.py의 format_text_report()가
-이 JSON을 입력받아 언제든 재생성할 수 있으므로, JSON을 "원본"으로 보관해두면
-텍스트 리포트는 필요할 때마다 다시 뽑아 쓰면 된다.
+무엇을 부르나
+  [2] agent/tools/registry.py   build_default_registry()   조사 도구 목록 만들기
+  [3] agent/gemini_client.py    GeminiClient()             LLM 클라이언트 (LLM_PROVIDER=anthropic이면 claude_client.py)
+  [4] agent/pipeline.py         run_investigation_pipeline() 전체 파이프라인 실행
+  [45] agent/report.py          format_text_report()       JSON → 사람이 읽는 텍스트 보고서
+
+실행 준비
+  1. `pip install -r requirements.txt`
+  2. .env에 GEMINI_API_KEY(또는 LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY)
+  3. .env에 계층별 로그 파일 경로(WEB/AUTH/AUDIT/NETWORK_LOG_LOCAL_PATH)와 HOST(수집 서버 이름)
+     — EC2라면 /var/log/... 경로 (.env.example 참고)
+
+결과 저장
+  텍스트 보고서는 따로 저장하지 않는다. format_text_report()가 JSON으로 언제든 다시 만들 수
+  있어서 JSON만 "원본"으로 results/<investigation_id>_<UTC시각>.json에 보관한다.
+  전체 동작 흐름은 docs/AGENT_FLOW.md 참고.
 """
 
 import json
@@ -68,34 +75,32 @@ def main() -> None:
     # 조사 결과·seed에 기록되는 수집 서버 이름 (EC2: `hostname` 결과)
     host = os.environ.get("HOST") or "web-01"  # .env에 HOST= 로 비워 둔 경우도 기본값 사용
 
-    # resolve_ip_geo는 실제 구현은 있지만 지금 우선순위가 아니라서 제외해둔다.
-    # get_process_tree는 2026-09-14에 실제 구현 완성돼서 제외 목록에서 뺐다.
-
-    # [2] agent/tools/registry.py가 agent/tools/real/ 폴더를 훑어서
-    #     파일명 == 함수명인 것들을 자동으로 찾아 연결함
+    # [2] → agent/tools/registry.py build_default_registry()
+    #     agent/tools/real/ 폴더에서 "파일명 == 함수명"인 도구를 자동으로 찾아 등록한다.
+    #     resolve_ip_geo는 구현은 있지만 지금 우선순위가 아니라서 뺀다.
     tool_registry = build_default_registry(exclude=["resolve_ip_geo"])
-    # [3] GeminiClient 생성
+    # [3] → LLM 클라이언트 생성 (위 build_llm_client: 기본 Gemini, LLM_PROVIDER=anthropic이면 Claude)
     llm_client = build_llm_client()
 
-    # [4] 조사 pipline 실행 agent/pipelin.py 의 run_investigation_pipeline() 실행
-    # [44] agent/pipeline.py로부터 조사 결과를 result에 반환
+    # [4] → agent/pipeline.py run_investigation_pipeline() — 수집·seed 생성·조사를 모두 여기서 한다
+    # [44] ← 사건별 조사 결과(JSON dict) 리스트를 돌려받는다
     results = run_investigation_pipeline(
         host=host,
         llm_client=llm_client,
         tool_registry=tool_registry,
         max_calls=8,
         confidence_threshold=0.85,
-        # [2026-09-24] 도구 1개만 보고 끝나는 조사 방지 (agent/loop.py 참고)
+        # 도구 1개만 보고 끝나는 조사를 막는 설정 (agent/loop.py 참고)
         network_precheck=True,      # seed에 src_ip가 있으면 network를 코드가 먼저 조회
-        strict_termination=True,    # 도구 1종류로 no_more_evidence 종료, 로그인 성공 후 audit 미확인 종료 거부
+        strict_termination=True,    # 종료 관문 강화 + 판정이 도구 계산 기준과 어긋나면 종료 거부
     )
 
     if not results:
         print(f"{host}의 최근 로그에서 조사할 만한 seed 후보가 없었습니다.")
         return
 
-    # [45] 조사 결과 프롬포트에 출력 + JSON 파일로 저장
-    # 원본 JSON은 results/에 저장되므로 콘솔에는 보고서와 저장 파일명만 띄운다 (2026-09-24 팀 의견).
+    # [45] 결과 출력·저장 → agent/report.py format_text_report()로 텍스트 보고서를 만들어 출력하고,
+    #      원본 JSON은 results/에 저장해 콘솔에는 파일명만 참고 자료로 보여 준다.
     saved_paths = []
     for i, result in enumerate(results, start=1):
         saved_path = save_investigation_result(result)
@@ -109,6 +114,6 @@ def main() -> None:
         print(f"  {path}")
 
 
-# [1] main() 함수 실행
+# [1] 시작점 — `python main.py`로 실행하면 main()이 불린다
 if __name__ == "__main__":
     main()

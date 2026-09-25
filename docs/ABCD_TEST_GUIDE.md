@@ -1,5 +1,7 @@
 # A·B·C·D 통합 테스트와 쉬운 설명
 
+> **S3 읽기 코드는 삭제됐다.** 로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2는 `/var/log/...`)에서만 읽는다. 아래의 S3 객체·`s3://` 참조·S3 모사 테스트 설명은 기록으로만 남아 있고 현재 코드에는 해당하지 않는다. 현재 동작 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md).
+
 이 문서는 `codex/merge-cd-investigation` 브랜치의 코드 기준이다.
 먼저 아래 명령으로 실행해 보고, 동작 원리가 궁금하면 뒤의 설명을 읽으면 된다.
 
@@ -229,13 +231,13 @@ Windows의 복사 명령은 `Copy-Item .env.example .env`, macOS/Linux는 `cp .e
 | `AUTH_LOG_LOCAL_PATH`, `AUDIT_LOG_LOCAL_PATH`, `NETWORK_LOG_LOCAL_PATH` | 해당 원본 로그 파일 경로 |
 | `AUTH_LOG_YEAR` | 연도 없는 인증 로그 해석에 사용할 실제 연도 |
 | `RAW_LOG_LOCAL_MAX_LINES` | 계층별 마지막 완성 이벤트 수. audit 여러 줄을 중간에서 자르지 않음 |
-| `RAW_LOG_WINDOW_MINUTES` | S3에서 최근 몇 분을 seed 입력으로 수집할지 지정 |
+| `RAW_LOG_LOCAL_MAX_LINES` | seed 입력으로 계층별 로그 파일 끝에서 볼 이벤트 수 |
 
 로컬 수집은 과거 샘플도 재생하도록 현재 시각 기준 필터를 생략한다. B/C 조회에는 사건 시간이
 적용되므로 내 샘플의 날짜에 맞는 seed/window가 필요하다. 직접 Python에서 도구를 호출할 때는
 `.env`를 자동으로 읽지 않으므로 환경변수를 지정하거나 `load_dotenv()`를 호출한다.
 
-S3를 쓸 때는 해당 `*_LOG_LOCAL_PATH`를 비우고 AWS 자격 증명·리전·계층별 버킷을 지정한다.
+`*_LOG_LOCAL_PATH`는 필수다(S3 읽기는 삭제됨). 경로가 비어 있으면 설정 오류로 알린다.
 객체 경로는 `raw/source_type=<apache|auth|auditd|suricata>/host=<서버>/dt=<UTC 날짜>/...`다.
 상세 호출 예시는 [C/D 구현 안내](C_D_IMPLEMENTATION.md)에 있다.
 

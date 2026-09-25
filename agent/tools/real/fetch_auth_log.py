@@ -1,7 +1,15 @@
 """fetch_auth_log 실제 구현 - 에이전트(LLM)가 조사 중 호출하는 인증 로그 조회 도구.
 
-파일명 == 함수명 규칙에 따라 agent/tools/registry.py의 build_default_registry()가
-mock_tools.py 대신 이 함수를 자동으로 사용한다. (agent/tools/real/README.md 참고)
+누가 부르나
+  [31] agent/tools/registry.py ToolRegistry.call("fetch_auth_log", args) ← agent/loop.py [30]
+       (LLM이 이 도구를 골랐을 때)
+  agent/tools/real/fetch_event_logs.py (사건 구간 다계층 조회 때 이 함수를 직접 부른다)
+
+무엇을 부르나
+  [33] agent/tools/log_source.py load_window_events("auth", ...)  auth.log 읽기 + 정규화 + 시간창 필터
+       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_auth_log.py
+
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
@@ -31,7 +39,7 @@ from typing import Any, Dict, List
 from ..log_source import filtered_out_hint, load_window_events, pagination
 
 # 로그인 "시도" 1회로 세는 event. 실패 1회는 보통 PAM 인증 실패·Failed password·연결 종료
-# 3줄로 남는데, LLM이 이를 1회/3회로 제각각 세서 판정이 갈렸다(2026-09-24). 그래서
+# 3줄로 남는데, LLM이 이를 1회/3회로 제각각 세서 판정이 갈렸다. 그래서
 # 세는 기준을 코드로 고정하고 summary에 숫자로 준다.
 FAILED_LOGIN_EVENTS = ("ssh_failed", "ssh_invalid_user")
 SUCCESS_LOGIN_EVENTS = ("ssh_accepted",)
@@ -40,7 +48,7 @@ SUCCESS_LOGIN_EVENTS = ("ssh_accepted",)
 PROBE_EVENTS = ("ssh_probe", "ssh_disconnect")
 AUTH_ATTEMPT_WITHOUT_FAILED = ("ssh_auth_fail_close", "ssh_max_auth")
 # 실패 대상 계정 이름은 이만큼만 나열한다. EC2 24시간 조회에서 325개 계정이 전부 summary에
-# 들어가 프롬프트가 불필요하게 커졌다(2026-09-24). 개수는 항상 전체 기준이다.
+# 들어가 프롬프트가 불필요하게 커졌다. 개수는 항상 전체 기준이다.
 MAX_LISTED_USERS = 20
 EMPTY_USER = "(빈 계정명)"
 # 원칙 7(로그인 성공 없이 실패만 있는 경우) 기준. investigation.yaml 원칙 7과 같은 값이다.
@@ -51,7 +59,7 @@ BRUTEFORCE_ACCOUNTS = 2
 def principle7_check(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
     """출발지 IP 하나로 좁혀진 조회에서, 로그인 성공이 없을 때 원칙 7 판정 기준을 코드로 계산한다.
 
-    EC2(2026-09-25): root 실패 2회·성공 0회인데 LLM이 원칙 7(1~4회·계정 1개 → FALSE_POSITIVE)을
+    EC2: root 실패 2회·성공 0회인데 LLM이 원칙 7(1~4회·계정 1개 → FALSE_POSITIVE)을
     어기고 THREAT_CONFIRMED로 판정했다. 원칙 9처럼 기준 충족 여부를 summary와 rule_checks로 준다.
     성공이 있으면 Q2/Q3(인증 방식·후속 행위) 판단이 필요해 코드 기준을 내지 않는다.
     """
@@ -61,7 +69,7 @@ def principle7_check(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
     failed = [r for r in records if r.get("event") in FAILED_LOGIN_EVENTS]
     successes = sum(1 for r in records if r.get("event") in SUCCESS_LOGIN_EVENTS)
     # 실패 0회라도 접속 흔적(스캐너 탐침: 계정 없이 끊긴 연결 등)이 있으면 "시도 없음 = 단발성 이하"로 판정한다.
-    # EC2(2026-09-25): ssh_probe 2건뿐인 사건을 규칙이 없어 INCONCLUSIVE로 판정했다.
+    # EC2: ssh_probe 2건뿐인 사건을 규칙이 없어 INCONCLUSIVE로 판정했다.
     probes = [r for r in records if r.get("event") in PROBE_EVENTS]
     if successes or not (failed or probes):
         return None
@@ -101,7 +109,7 @@ def _login_stats(records: List[Dict[str, Any]]) -> str:
     counts = Counter(r.get("event") for r in records)
     failed = [r for r in records if r.get("event") in FAILED_LOGIN_EVENTS]
     # 스캐너는 "Invalid user  from ..."처럼 빈 계정명으로 시도하기도 한다. 공통 정규화는 이때
-    # user 필드를 아예 빼므로, 계정명 없는 실패도 계정 1개로 센다 (EC2 2026-09-24: 실패 1회인데
+    # user 필드를 아예 빼므로, 계정명 없는 실패도 계정 1개로 센다 (EC2 실패 1회인데
     # "계정 0개"로 나와 앞뒤가 안 맞았다).
     failed_users = sorted({r.get("user") or EMPTY_USER for r in failed})
     listed = ", ".join(failed_users[:MAX_LISTED_USERS]) or "-"
@@ -124,13 +132,16 @@ def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
     return True
 
 
+# [32] ← registry.call() [31]에서 호출. 반환 dict는 loop.py [37]로 간다.
 def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
     host = args["host"]
     start_time = args["start_time"]
     end_time = args["end_time"]
     limit, offset = pagination(args)
 
+    # [33] → log_source.load_window_events(): 파일 읽기 → [34] 1차 탐지팀 정규화 → 구간 안 이벤트
     loaded = load_window_events("auth", host, start_time, end_time)
+    # [35] 도구 인자로 거르고(_matches), 페이지로 자르고, summary·rule_checks를 만든다
     matched: List[Dict[str, Any]] = [e for e in loaded["events"] if _matches(e, args)]
 
     total_matched = len(matched)

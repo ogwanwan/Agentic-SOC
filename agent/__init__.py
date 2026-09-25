@@ -1,26 +1,20 @@
-"""조사 에이전트(Investigation Agent) 패키지.
+"""조사 에이전트(Investigation Agent) 패키지 — main.py 등이 `from agent import ...`로 쓰는 공개 목록.
 
-역할 분담 문서의 5개 항목을 각각 아래 모듈이 담당한다.
+파일별 역할 (실행 순서, 번호는 docs/AGENT_FLOW.md와 각 파일 주석의 [N])
+  pipeline.py           [5]~[16]  전체 파이프라인: 수집 → seed 생성 → 사건별 조사
+  raw_log_ingestion.py  [7]~[9]   seed 생성용 로그 수집 (파일 끝 N건씩)
+  seed_generation.py    [11]~[14] LLM triage로 seed 후보 + 우선순위 (seed_prompts.py = 그 프롬프트)
+  loop.py               [17]~[42] 조사 루프(ReAct) + 종료 관문 + 원본 참조 검증
+  models.py             [19]      조사 상태(AgentState)·증거 데이터 구조
+  gemini_client.py      [20]~[23] LLM 호출 (claude_client.py = Claude 버전)
+  prompts/              [21]      조사 프롬프트 (내용은 prompts/investigation.yaml)
+  tools/                [29]~[36] 조사 도구 레지스트리와 실제 도구(tools/real/)
+  provenance.py                   원본 참조(raw_ref) 전달·검증
+  report.py             [41]·[45] 결과 JSON 조립·텍스트 보고서
 
-- Agent Loop 총괄            -> loop.py (InvestigationAgent)
-- State / Evidence 관리      -> models.py (AgentState, Evidence, Hypothesis)
-- Tool 연결·실행 계층         -> tools/ (ToolRegistry, ToolSpec, build_default_registry)
-- Agent 판단·Prompt          -> prompts.py, claude_client.py (Claude), gemini_client.py (Gemini)
-- Agent 제어 + 최종 산출물    -> loop.py 내 종료/중복/실패 처리 + report.py
-- 보고서 출력                -> report.py (build_investigation_result)
-
-Triage가 파이프라인에서 빠지면서 추가된 전(前) 단계:
-- raw log 수집         -> raw_log_ingestion.py (fetch_recent_raw_logs)
-- seed 생성(경량 triage) -> seed_prompts.py, seed_generation.py (SeedGenerator)
-- 전체 파이프라인 연결   -> pipeline.py (run_investigation_pipeline)
-
-*** 2026-09-22: primary-detection/ 을 sys.path에 추가 ***
-1차 탐지팀 벤더 코드(primary-detection/normalizer/)는 agent/ 밖, 레포 루트에 있다
-(agent/tools/normalizer_adapter.py 상단 설명 참고). primary-detection은 하이픈 때문에
-파이썬 패키지로 import할 수 없어서, 여기서 그 폴더 자체를 sys.path에 추가해 그 밑의
-normalizer 패키지를 최상위 패키지처럼(`from normalizer.tools... import ...`) 쓸 수 있게
-한다. agent 패키지가 import될 때 제일 먼저 실행되는 곳이라 여기 둬야, 아래
-raw_log_ingestion을 포함해 normalizer를 쓰는 모든 하위 모듈이 문제없이 import된다.
+아래 sys.path 추가는 1차 탐지 코드가 "primary-detection"(하이픈) 폴더에 있던 시절의 것이다. 지금은
+폴더가 primary_detection(밑줄)이라 저장소 루트에서 실행하면 그대로 패키지로 import되고, 이 경로는
+존재하지 않아 효과가 없다(남아 있어도 무해).
 """
 
 import os as _os
