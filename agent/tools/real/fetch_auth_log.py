@@ -39,6 +39,47 @@ SUCCESS_LOGIN_EVENTS = ("ssh_accepted",)
 # 들어가 프롬프트가 불필요하게 커졌다(2026-09-24). 개수는 항상 전체 기준이다.
 MAX_LISTED_USERS = 20
 EMPTY_USER = "(빈 계정명)"
+# 원칙 7(로그인 성공 없이 실패만 있는 경우) 기준. investigation.yaml 원칙 7과 같은 값이다.
+BRUTEFORCE_FAILURES = 5
+BRUTEFORCE_ACCOUNTS = 2
+
+
+def principle7_check(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    """출발지 IP 하나로 좁혀진 조회에서, 로그인 성공이 없을 때 원칙 7 판정 기준을 코드로 계산한다.
+
+    EC2(2026-09-25): root 실패 2회·성공 0회인데 LLM이 원칙 7(1~4회·계정 1개 → FALSE_POSITIVE)을
+    어기고 THREAT_CONFIRMED로 판정했다. 원칙 9처럼 기준 충족 여부를 summary와 rule_checks로 준다.
+    성공이 있으면 Q2/Q3(인증 방식·후속 행위) 판단이 필요해 코드 기준을 내지 않는다.
+    """
+    src_ips = {r.get("src_ip") for r in records if r.get("src_ip")}
+    if len(src_ips) != 1:
+        return None
+    failed = [r for r in records if r.get("event") in FAILED_LOGIN_EVENTS]
+    successes = sum(1 for r in records if r.get("event") in SUCCESS_LOGIN_EVENTS)
+    if successes or not failed:
+        return None
+    accounts = len({r.get("user") or EMPTY_USER for r in failed})
+    bruteforce = len(failed) >= BRUTEFORCE_FAILURES or accounts >= BRUTEFORCE_ACCOUNTS
+    return {
+        "rule": "principle_7",
+        "src_ip": next(iter(src_ips)),
+        "failures": len(failed),
+        "accounts": accounts,
+        "successes": 0,
+        "bruteforce": bruteforce,
+        "sporadic": not bruteforce,
+    }
+
+
+def _principle7_text(check: Dict[str, Any] | None) -> str:
+    if not check:
+        return ""
+    if check["bruteforce"]:
+        verdict = "충족 → THREAT_CONFIRMED(SSH 무차별 대입 시도, 로그인 성공 없음)"
+    else:
+        verdict = "미충족(단발성 실패) → 다른 계층에 공격 정황이 없으면 FALSE_POSITIVE"
+    return (f" [원칙 7 기준] {check['src_ip']}: 로그인 성공 0회, 실패 {check['failures']}회·계정 {check['accounts']}개 "
+            f"(기준: 실패 {BRUTEFORCE_FAILURES}회 이상 또는 계정 {BRUTEFORCE_ACCOUNTS}개 이상) — {verdict}.")
 
 
 def _login_stats(records: List[Dict[str, Any]]) -> str:
@@ -78,6 +119,7 @@ def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
     matched: List[Dict[str, Any]] = [e for e in loaded["events"] if _matches(e, args)]
 
     total_matched = len(matched)
+    check = principle7_check(matched)
     page = matched[offset : offset + limit]
     has_more = offset + len(page) < total_matched
     next_offset = offset + len(page) if has_more else None
@@ -97,6 +139,7 @@ def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
             f"{page_desc} {len(page)}건 반환. ({more_desc}, event/result까지 구조화, "
             "1차 탐지팀 공통 정규화 함수 사용) "
             f"[조회 구간 전체 집계] {_login_stats(matched)}"
+            f"{_principle7_text(check)}"
         )
 
     return {
@@ -109,5 +152,6 @@ def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
         "scanned_objects": loaded["scanned_objects"],
         "invalid_timestamps": loaded["invalid_timestamps"],
         "window_total": len(loaded["events"]),  # 필터 전 구간 전체 건수 — 0이면 로그 미확보
+        **({"rule_checks": [check]} if check else {}),
         **({"error": loaded["error"]} if loaded["error"] else {}),
     }

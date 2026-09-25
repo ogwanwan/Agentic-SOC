@@ -129,6 +129,7 @@ class AgentState:
     system_call_sequences: List[int] = field(default_factory=list)
     # [2026-09-24] 도구가 계산한 판정 원칙 기준 중 seed src_ip에 대해 "위협 기준 충족"인 것
     # (예: 원칙 9 인증 대입 POST 10회 이상). 충족인데 FALSE_POSITIVE로 끝내려 하면 관문이 거부한다.
+    # 원칙 7(성공 없는 SSH 실패)은 충족·미충족 결과를 모두 담는다(미충족인데 THREAT_CONFIRMED도 거부).
     rule_floors: List[Dict[str, Any]] = field(default_factory=list)
     # [2026-09-24] 로그 조회 도구가 돌려준 "필터 전 구간 전체 건수"(window_total). 모두 0이면 그 시간대
     # 로그 자체가 없는 것(수집 누락·교체)이라, 관문이 INCONCLUSIVE 외 판정을 거부한다.

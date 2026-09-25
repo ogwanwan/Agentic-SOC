@@ -19,6 +19,7 @@ from .time_utils import parse_iso
 SOURCE_TYPES = {"web": "apache", "auth": "auth", "audit": "auditd", "network": "suricata"}
 LOCAL_PATH_ENV = {key: f"{key.upper()}_LOG_LOCAL_PATH" for key in SOURCE_TYPES}
 DEFAULT_BUCKET = "ogwanwan-shop-bucket"
+IP_FILTER_KEYS = {"ip", "src_ip", "dest_ip"}
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,11 @@ def filtered_out_hint(window_total: int, args: Dict[str, Any], filter_keys: Iter
     used = [key for key in filter_keys if args.get(key) is not None]
     if not used:
         return ""
+    if set(used) <= IP_FILTER_KEYS:
+        # IP로만 거른 0건은 "그 IP의 활동이 이 계층에 없다"는 사실이다. 필터를 빼라고 하면 LLM이
+        # 다른 IP의 이벤트까지 뒤지거나 "재확인 필요"로 남겼다(EC2 2026-09-25 SSH 사건 network 사전 조회).
+        return (f" 이 구간 전체 {window_total}건은 다른 대상의 이벤트이며, {', '.join(used)} 조건에 해당하는 "
+                "이벤트는 없습니다 — '이 계층에서 해당 IP의 활동 없음'으로 기록하면 됩니다.")
     return (f" 단, 같은 구간에 필터 없이 보면 이벤트가 {window_total}건 있습니다 — 사용한 필터({', '.join(used)})가 "
             "맞지 않았을 수 있으니, 필터를 빼거나 바꿔서 다시 조회한 뒤 판단하십시오.")
 

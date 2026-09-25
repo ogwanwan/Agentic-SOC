@@ -34,10 +34,15 @@ TOP_N = 5
 # 웹 서버 프로세스 계정. 이 계정이 셸·다운로드를 실행하면 웹셸/원격 코드 실행 신호다(원칙 9 [침해 신호]).
 WEB_SERVER_USERS = ("www-data", "apache", "nginx", "http")
 SUSPICIOUS_CMD_RE = re.compile(
-    r"(\bcurl\b|\bwget\b|\bnc\b|\bncat\b|/dev/tcp|bash -i|sh -c|base64|chmod \+x|python[0-9.]* -c|perl -e|"
+    r"(\bcurl\b|\bwget\b|\bnc\b|\bncat\b|/dev/tcp|bash -i|base64|chmod \+x|python[0-9.]* -c|perl -e|"
     r"crontab|authorized_keys|useradd|/etc/shadow)",
     re.IGNORECASE,
 )
+# 웹 서버 계정은 셸을 띄우는 것 자체가 의심 신호다(root의 cron `sh -c`와 달리).
+SHELL_CMD_RE = re.compile(r"(^|/)(ba|da|z)?sh\b|\bsh -c\b")
+# 정상 운영 서버에서 늘 도는 시스템 명령. EC2 실측(2026-09-25): 24시간 audit 3728건 중 "의심 명령" 245건이
+# 대부분 cron의 `sh -c`와 EC2 Instance Connect(sshd -o AuthorizedKeysCommand .../eic_run_authorized_keys)였다.
+BENIGN_CMD_RE = re.compile(r"/usr/share/ec2-instance-connect/|AuthorizedKeysCommand")
 
 
 def _top(counter: Counter) -> str:
@@ -55,8 +60,10 @@ def audit_rule_check(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     못 보고 "침해 없음"으로 끝냈다(1/3). 전체 기준으로 코드가 세서 summary와 rule_checks로 준다.
     """
     web_exec = [r for r in records if r.get("user") in WEB_SERVER_USERS and _command(r)]
-    suspicious = [r for r in records if SUSPICIOUS_CMD_RE.search(_command(r))]
-    web_suspicious = [r for r in web_exec if SUSPICIOUS_CMD_RE.search(_command(r))]
+    suspicious = [r for r in records
+                  if SUSPICIOUS_CMD_RE.search(_command(r)) and not BENIGN_CMD_RE.search(_command(r))]
+    web_suspicious = [r for r in web_exec
+                      if SUSPICIOUS_CMD_RE.search(_command(r)) or SHELL_CMD_RE.search(_command(r))]
     return {
         "rule": "audit_post_exploitation",
         "web_server_exec": len(web_exec),
@@ -75,7 +82,8 @@ def _audit_stats(records: List[Dict[str, Any]], check: Dict[str, Any]) -> str:
         f"이벤트 {len(records)}건(실제 기록 시각 {times[0] if times else '-'}~{times[-1] if times else '-'}), "
         f"실행 계정별: {_top(users)}, 명령별: {_top(comms)}. "
         f"[후속 침해 확인] 웹 서버 계정({'/'.join(WEB_SERVER_USERS)}) 실행 {check['web_server_exec']}건 중 "
-        f"의심 명령 {check['web_server_suspicious']}건, 전체 의심 명령(curl/wget/sh -c//dev/tcp/crontab 등) "
+        f"셸·의심 명령 {check['web_server_suspicious']}건, 전체 의심 명령(curl/wget//dev/tcp/crontab 등, "
+        "EC2 Instance Connect 제외) "
         f"{check['suspicious']}건"
         + (f" — 예: {' / '.join(check['examples'])}" if check["examples"] else "")
         + ". (페이지와 무관한 전체 기준. 0건이 아니면 user나 pid로 다시 조회해 원본을 확인하십시오)"

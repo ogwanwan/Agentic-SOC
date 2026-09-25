@@ -350,8 +350,79 @@ def test_audit_rule_check_counts_whole_result_not_page():
     assert check["web_server_exec"] == 1 and check["web_server_suspicious"] == 1
     assert "www-data: sh -c curl" in check["examples"][0]
     text = _audit_stats(noise + shell, check)
-    assert "웹 서버 계정(www-data/apache/nginx/http) 실행 1건 중 의심 명령 1건" in text
+    assert "웹 서버 계정(www-data/apache/nginx/http) 실행 1건 중 셸·의심 명령 1건" in text
     assert audit_rule_check(noise)["web_server_suspicious"] == 0
+
+
+def test_audit_rule_check_ignores_routine_system_commands():
+    """EC2 실측: cron의 sh -c와 EC2 Instance Connect가 '의심 명령' 245건으로 잡혔다. 둘 다 제외한다."""
+    from agent.tools.real.fetch_audit_log import audit_rule_check
+
+    routine = [
+        {"user": "root", "comm": "sh", "exec_args": "/bin/sh -c command -v debian-sa1 > /dev/null && debian-sa1 1 1"},
+        {"user": "root", "comm": "sshd", "exec_args": "/usr/sbin/sshd -D -o AuthorizedKeysCommand "
+                                                      "/usr/share/ec2-instance-connect/eic_run_authorized_keys %u %f"},
+    ]
+    check = audit_rule_check(routine)
+    assert check["suspicious"] == 0 and check["web_server_suspicious"] == 0
+    # 웹 서버 계정이 셸을 띄우면 명령 내용과 무관하게 의심으로 센다
+    assert audit_rule_check([{"user": "www-data", "comm": "sh", "exec_args": "sh -c id"}])["web_server_suspicious"] == 1
+    # 백도어 키 추가는 여전히 잡는다
+    assert audit_rule_check([{"user": "root", "comm": "bash",
+                              "exec_args": "bash -c echo ssh-rsa AAA >> /root/.ssh/authorized_keys"}])["suspicious"] == 1
+
+
+def test_ip_filter_zero_hint_says_no_activity():
+    from agent.tools.log_source import filtered_out_hint
+
+    hint = filtered_out_hint(7, {"ip": "92.118.39.50"}, ("ip", "event_type"))
+    assert "해당 IP의 활동 없음" in hint and "필터를 빼거나" not in hint
+    assert "필터를 빼거나" in filtered_out_hint(7, {"ip": "1.2.3.4", "event_type": "alert"}, ("ip", "event_type"))
+
+
+def _ssh_failures(ip: str, count: int, users=("root",)):
+    return [{"event": "ssh_failed", "src_ip": ip, "user": users[i % len(users)], "raw_ref": f"auth.log:{i}"}
+            for i in range(count)]
+
+
+def test_principle7_check():
+    from agent.tools.real.fetch_auth_log import principle7_check, _principle7_text
+
+    sporadic = principle7_check(_ssh_failures("92.118.39.50", 2))
+    assert sporadic["sporadic"] and not sporadic["bruteforce"]
+    assert "미충족(단발성 실패)" in _principle7_text(sporadic)
+    assert principle7_check(_ssh_failures("92.118.39.50", 5))["bruteforce"]
+    assert principle7_check(_ssh_failures("92.118.39.50", 2, users=("root", "admin")))["bruteforce"]
+    # 성공이 있거나 IP가 섞이면 코드 기준을 내지 않는다(Q2/Q3 판단 필요)
+    assert principle7_check(_ssh_failures("92.118.39.50", 6) + [{"event": "ssh_accepted", "src_ip": "92.118.39.50"}]) is None
+    assert principle7_check(_ssh_failures("1.1.1.1", 3) + _ssh_failures("2.2.2.2", 3)) is None
+
+
+def test_gate_applies_principle7_both_ways():
+    """EC2 2026-09-25: root 실패 2회·성공 0회를 THREAT_CONFIRMED로 판정 → 원칙 7(단발성)과 충돌이면 거부."""
+    def auth_with(check):
+        return lambda _args: {"count": 2, "summary": "auth", "records": [], "window_total": 7, "rule_checks": [check]}
+
+    sporadic = {"rule": "principle_7", "src_ip": SEED["src_ip"], "failures": 2, "accounts": 1, "successes": 0,
+                "bruteforce": False, "sporadic": True}
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_auth_log": auth_with(sporadic)})
+    fp = _terminate("confidence_sufficient", 0.85)
+    fp["final_verdict"] = {**fp["final_verdict"], "verdict": "FALSE_POSITIVE"}
+    llm = RecordingLLM([_call("fetch_auth_log"), _call("fetch_audit_log"),
+                        _terminate("confidence_sufficient", 0.9), fp])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(
+        {**SEED, "confidence_initial": 0.9})
+    assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
+    assert any("원칙 7 기준 미충족" in n for n in result["investigation_notes"])
+
+    brute = {**sporadic, "failures": 9, "bruteforce": True, "sporadic": False}
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_auth_log": auth_with(brute)})
+    llm = RecordingLLM([_call("fetch_auth_log"), _call("fetch_audit_log"), fp,
+                        _terminate("confidence_sufficient", 0.9)])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(
+        {**SEED, "confidence_initial": 0.9})
+    assert result["final_verdict"]["verdict"] == "THREAT_CONFIRMED"
+    assert any("원칙 7 기준 충족" in n for n in result["investigation_notes"])
 
 
 def test_gate_rejects_verdicts_contradicting_tool_facts():

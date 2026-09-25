@@ -189,7 +189,10 @@ principles:
           summary에 "로그인 성공은 없어 계정 침해는 발생하지 않았다"를 반드시 명시합니다.
         - 실패 1~4회이고 단일 계정 대상 → FALSE_POSITIVE (단발성 실패, confidence 0.75~0.85).
         이 경우는 INCONCLUSIVE로 판정하지 마십시오. 필요한 사실(실패 횟수·계정 수·성공 여부)은
-        fetch_auth_log로 모두 확인할 수 있습니다.
+        fetch_auth_log로 모두 확인할 수 있습니다. src_ip로 거른 fetch_auth_log summary의
+        [원칙 7 기준] 줄이 이 계산 결과이니 그대로 따르십시오. "root 계정 대상", "사전 인증 연결
+        종료(preauth)" 같은 표현은 횟수 기준을 바꾸지 않습니다. 실패를 증거로 기록할 때 새 사실이
+        없는 evidence를 반복해 confidence를 채우지 마십시오.
       - 그 외에 일부 신호만 침해 방향이면 → 침해 방향 신호의 개수와 종류를 reasoning에
         명시하고 THREAT_CONFIRMED 또는 INCONCLUSIVE 중에서 판단합니다.
       - Q1~Q3 중 하나라도 확인할 도구/데이터가 없어 답할 수 없으면 → INCONCLUSIVE로 판정하고,

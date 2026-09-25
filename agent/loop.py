@@ -381,6 +381,8 @@ class InvestigationAgent:
         - 조회한 모든 로그가 구간 전체 0건(로그 미확보)인데 INCONCLUSIVE가 아님
         - 원칙 9 기준 충족(seed src_ip)인데 FALSE_POSITIVE
         - 웹 서버 계정의 의심 명령 실행이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만
+        - 원칙 7(로그인 성공 없음) 무차별 대입 기준 충족인데 FALSE_POSITIVE, 또는 단발성 실패뿐이고
+          다른 위협 기준도 없는데 THREAT_CONFIRMED
         """
         verdict = (final_verdict or {}).get("verdict")
         severity = str((final_verdict or {}).get("severity") or "").upper()
@@ -405,6 +407,22 @@ class InvestigationAgent:
                     f"웹 서버 계정의 의심 명령 실행 {check['web_server_suspicious']}건이 audit에 있음"
                     f"({' / '.join(check['examples'])}). 원칙 9 [침해 신호]에 따라 THREAT_CONFIRMED, "
                     "severity HIGH 이상으로 판정하고 그 명령을 evidence로 기록하십시오"
+                )
+        p7 = [c for c in state.rule_floors if c.get("rule") == "principle_7"]
+        other_threat = any(c.get("rule") != "principle_7" for c in state.rule_floors)
+        if p7:
+            worst = max(p7, key=lambda c: (c["bruteforce"], c["failures"]))
+            if worst["bruteforce"] and verdict == VerdictType.FALSE_POSITIVE.value:
+                conflicts.append(
+                    f"원칙 7 기준 충족({worst['src_ip']}: 로그인 성공 0회, 실패 {worst['failures']}회·계정 "
+                    f"{worst['accounts']}개)인데 FALSE_POSITIVE로 판정함. 원칙 7에 따라 THREAT_CONFIRMED"
+                    "(SSH 무차별 대입 시도)로 판정하십시오"
+                )
+            if not worst["bruteforce"] and not other_threat and verdict == VerdictType.THREAT_CONFIRMED.value:
+                conflicts.append(
+                    f"원칙 7 기준 미충족({worst['src_ip']}: 로그인 성공 0회, 실패 {worst['failures']}회·계정 "
+                    f"{worst['accounts']}개 — 단발성 실패)인데 THREAT_CONFIRMED로 판정함. 다른 계층의 공격 정황이 "
+                    "없으면 원칙 7에 따라 FALSE_POSITIVE로 판정하십시오"
                 )
         return conflicts
 
@@ -573,7 +591,9 @@ class InvestigationAgent:
                 principle9_met = (check.get("rule") == "principle_9" and src_ip and check.get("src_ip") == src_ip
                                   and (check.get("auth_bruteforce") or check.get("path_scan")))
                 web_exec_met = check.get("rule") == "audit_post_exploitation" and check.get("web_server_suspicious")
-                if (principle9_met or web_exec_met) and check not in state.rule_floors:
+                # 원칙 7은 충족(무차별 대입)·미충족(단발성 실패) 모두 판정 기준이라 둘 다 기록한다.
+                principle7_seen = check.get("rule") == "principle_7" and src_ip and check.get("src_ip") == src_ip
+                if (principle9_met or web_exec_met or principle7_seen) and check not in state.rule_floors:
                     state.rule_floors.append(check)
             if "window_total" in result:
                 state.window_totals.append(result["window_total"])
