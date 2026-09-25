@@ -176,6 +176,9 @@ class InvestigationAgent:
         # (b) 도구 1종류 confidence_sufficient 두 번 만에 강제 종료돼 seed의 audit을 한 번도 안 봤다.
         # 사유가 계속 바뀌며 끝나지 않는 경우는 max_cycles가 막는다.
         last_rejection_kind = None
+        # [2026-09-25] 거부된 종료 요청 중 판정 자체는 원칙 기준과 맞았던 마지막 판정. 강제 종료 턴에서
+        # LLM이 판정을 새로 내며 원칙과 어긋나게 뒤집으면 이 판정을 쓴다 (_settle_forced_verdict).
+        last_consistent_verdict = None
 
         # [20] 루프 시작! LLM한테 판단 맡김 agent/gemini_client.py 실행
         for _ in range(max_cycles):
@@ -210,6 +213,9 @@ class InvestigationAgent:
                 if reasons:
                     reason_text = ", ".join(reasons)
                     state.notes.append(f"종료 관문 발동 — 종료 거부: {reason_text}")
+                    proposed = decision.get("final_verdict")
+                    if self.strict_termination and proposed and not self._verdict_conflicts(state, proposed):
+                        last_consistent_verdict = proposed  # 판정은 원칙과 맞았고 다른 사유로 거부됨
 
                     rejection_kind = re.sub(r"[\d.]+", "", reason_text)
                     consecutive_rejections = consecutive_rejections + 1 if rejection_kind == last_rejection_kind else 1
@@ -224,7 +230,9 @@ class InvestigationAgent:
                             state, confidence_threshold=self.confidence_threshold, force_terminate=True
                         ) or {}
                         self._apply_decision(state, final_decision)
-                        final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
+                        final_verdict = self._settle_forced_verdict(
+                            state, final_decision.get("final_verdict") or self._derive_fallback_verdict(state),
+                            last_consistent_verdict)
                         break
 
                     gate_rejection_reason = reason_text  # 다음 턴 프롬프트에 실어 보냄
@@ -258,7 +266,9 @@ class InvestigationAgent:
                     state, confidence_threshold=self.confidence_threshold, force_terminate=True
                 ) or {}
                 self._apply_decision(state, final_decision)
-                final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
+                final_verdict = self._settle_forced_verdict(
+                    state, final_decision.get("final_verdict") or self._derive_fallback_verdict(state),
+                    last_consistent_verdict)
                 break
 
             # [27] 종료 조건 1,2로 안 끝났으면 = LLM이 "도구를 더 부르자"고 한 것 -> 진짜 tool 실행
@@ -283,7 +293,9 @@ class InvestigationAgent:
                 state, confidence_threshold=self.confidence_threshold, force_terminate=True
             ) or {}
             self._apply_decision(state, final_decision)
-            final_verdict = final_decision.get("final_verdict") or self._derive_fallback_verdict(state)
+            final_verdict = self._settle_forced_verdict(
+                state, final_decision.get("final_verdict") or self._derive_fallback_verdict(state),
+                last_consistent_verdict)
 
         # 거부·강제 종료를 거치고도 원칙 기준과 다른 판정이 남으면 판정은 바꾸지 않고 드러내 기록한다
         if self.strict_termination:
@@ -341,7 +353,12 @@ class InvestigationAgent:
         if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
             successful = {t.tool_name for t in chosen if t.success}
             distinct = max(len(successful), len(chosen_layers))
-            if state.current_confidence < self.confidence_threshold:
+            # 판정이 도구가 계산한 원칙 기준과 같으면 신뢰도 숫자 미달로는 거부하지 않는다. EC2 탐침 사건
+            # (2026-09-25)에서 FALSE_POSITIVE가 0.80으로 5회 거부되자 도구를 더 부르다 강제 종료 턴에서
+            # THREAT_CONFIRMED로 뒤집혔다. 사실이 다 확인된 사건에 0.05를 채우는 조사는 판정을 흔들기만 한다.
+            determined = self.strict_termination and self._rule_determined_verdict(state) == (
+                (final_verdict or {}).get("verdict"))
+            if state.current_confidence < self.confidence_threshold and not determined:
                 reasons.append(
                     f"실제 신뢰도({state.current_confidence:.2f})가 임계값({self.confidence_threshold}) 미달"
                 )
@@ -373,6 +390,39 @@ class InvestigationAgent:
         "fetch_web_log": "같은 IP의 웹 요청(경로·상태코드)",
         "fetch_network_log": "같은 IP의 외부 통신과 Suricata 경보",
     }
+
+    def _settle_forced_verdict(self, state: AgentState, verdict: Dict[str, Any],
+                               last_consistent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """강제 종료 턴 판정이 원칙과 어긋나면, 앞서 LLM이 낸 원칙에 맞는 판정을 쓴다.
+
+        강제 종료 턴은 LLM이 판정을 처음부터 다시 쓰는 호출이라, 거부 전까지 유지하던 판정이
+        뒤집힐 수 있다(EC2 2026-09-25 탐침 사건: FALSE_POSITIVE로 5회 종료 요청 → 강제 종료 턴에서
+        THREAT_CONFIRMED). 코드가 판정을 새로 만들지는 않고, LLM 자신의 앞선 판정 중에서만 고른다.
+        """
+        if not (self.strict_termination and last_consistent and self._verdict_conflicts(state, verdict)):
+            return verdict
+        state.notes.append(
+            f"강제 종료 턴 판정({verdict.get('verdict')})이 원칙 기준과 어긋나, 직전에 LLM이 낸 원칙에 맞는 "
+            f"판정({last_consistent.get('verdict')})을 최종 판정으로 사용함"
+        )
+        return last_consistent
+
+    @staticmethod
+    def _rule_determined_verdict(state: AgentState) -> Optional[str]:
+        """도구가 계산한 기준만으로 판정이 정해지는 경우 그 판정 (아니면 None).
+
+        로그 미확보 → INCONCLUSIVE, 원칙 9 충족·웹 서버 계정 의심 명령 → THREAT_CONFIRMED,
+        그 외 원칙 7(로그인 성공 없음)만 있으면 무차별 대입 → THREAT_CONFIRMED, 단발성·탐침 → FALSE_POSITIVE.
+        """
+        if state.window_totals and not any(state.window_totals):
+            return VerdictType.INCONCLUSIVE.value
+        if any(c.get("rule") != "principle_7" for c in state.rule_floors):
+            return VerdictType.THREAT_CONFIRMED.value
+        p7 = [c for c in state.rule_floors if c.get("rule") == "principle_7"]
+        if p7:
+            bruteforce = any(c["bruteforce"] for c in p7)
+            return (VerdictType.THREAT_CONFIRMED if bruteforce else VerdictType.FALSE_POSITIVE).value
+        return None
 
     @staticmethod
     def _verdict_conflicts(state: AgentState, final_verdict: Optional[Dict[str, Any]]) -> list:

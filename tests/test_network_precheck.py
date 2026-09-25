@@ -476,6 +476,41 @@ def test_gate_rejects_verdicts_contradicting_tool_facts():
     assert any("웹 서버 계정의 의심 명령 실행 1건" in n for n in result["investigation_notes"])
 
 
+def _fp(reason="confidence_sufficient", conf=0.8):
+    d = _terminate(reason, conf)
+    d["final_verdict"] = {**d["final_verdict"], "verdict": "FALSE_POSITIVE"}
+    return d
+
+
+def _auth_probe_registry():
+    probe = {"rule": "principle_7", "src_ip": SEED["src_ip"], "failures": 0, "accounts": 0, "successes": 0,
+             "probes": 2, "bruteforce": False, "sporadic": True}
+    auth = lambda _args: {"count": 2, "summary": "auth", "records": [], "window_total": 9, "rule_checks": [probe]}
+    return build_default_registry(handlers={**MOCK_HANDLERS, "fetch_auth_log": auth})
+
+
+def test_rule_matching_verdict_is_not_rejected_for_low_confidence():
+    """EC2 2026-09-25 탐침 사건: FALSE_POSITIVE가 신뢰도 0.80으로 5회 거부됐다. 판정이 원칙 7 기준과 같으면 승인."""
+    llm = RecordingLLM([_call("fetch_auth_log"), _call("fetch_audit_log"), _fp()])
+    result = InvestigationAgent(llm, _auth_probe_registry(), network_precheck=True, strict_termination=True).run(SEED)
+    assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
+    assert not any("종료 관문" in n for n in result["investigation_notes"])
+    # 기준과 다른 판정(THREAT_CONFIRMED)은 여전히 신뢰도 미달로도 거부된다
+    llm = RecordingLLM([_call("fetch_auth_log"), _call("fetch_audit_log"), _terminate("confidence_sufficient"), _fp()])
+    result = InvestigationAgent(llm, _auth_probe_registry(), network_precheck=True, strict_termination=True).run(SEED)
+    assert any("신뢰도" in n and "원칙 7" in n for n in result["investigation_notes"] if "종료 관문" in n)
+
+
+def test_forced_turn_cannot_flip_rule_consistent_verdict():
+    """강제 종료 턴에서 LLM이 원칙과 어긋나게 판정을 뒤집으면 앞서 낸 원칙에 맞는 판정을 쓴다."""
+    tc = _terminate("confidence_sufficient", 0.85)
+    # auth 하나만 보고 FALSE_POSITIVE로 두 번 종료 요청 → (b) 도구 1종류로 연속 거부 → 강제 종료 턴에서 TC
+    llm = RecordingLLM([_call("fetch_auth_log"), _fp(), _fp(), tc])
+    result = InvestigationAgent(llm, _auth_probe_registry(), network_precheck=True, strict_termination=True).run(SEED)
+    assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
+    assert any("강제 종료 턴 판정(THREAT_CONFIRMED)" in n for n in result["investigation_notes"])
+
+
 def test_confidence_sum_has_no_float_drift():
     from agent.models import AgentState
 
