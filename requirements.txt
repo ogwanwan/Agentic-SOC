@@ -3,3 +3,7 @@ python-dotenv>=1.0.0
 
 # 탐지: Sigma 룰(.yml) 로드용
 PyYAML>=6.0
+
+# 트리아지 뒷단(LLM): 상위 사건 경량 LLM(Claude Haiku) 재검토용. 기본 경로 — 키 없으면 결정론만 사용
+anthropic>=0.40.0
+
