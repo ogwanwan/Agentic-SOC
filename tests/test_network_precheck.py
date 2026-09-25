@@ -511,6 +511,32 @@ def test_forced_turn_cannot_flip_rule_consistent_verdict():
     assert any("강제 종료 턴 판정(THREAT_CONFIRMED)" in n for n in result["investigation_notes"])
 
 
+def test_user_prompt_keeps_previous_tool_summaries():
+    """이전 도구 결과 요약은 한 턴 뒤에도 already_called_tools에 남는다 (원문 records는 한 턴만)."""
+    import json as _json
+    from agent.prompts import build_user_prompt
+
+    seen_prompts = []
+
+    class PromptLLM(RecordingLLM):
+        def reason(self, state, tool_registry, **kwargs):
+            seen_prompts.append(build_user_prompt(state, **kwargs))
+            return super().reason(state, tool_registry, **kwargs)
+
+    auth = lambda _args: {"count": 2, "summary": "auth 요약 [원칙 7 기준] 미충족", "records": [], "window_total": 7}
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_auth_log": auth})
+    llm = PromptLLM([_call("fetch_auth_log"), _call("fetch_audit_log"), _terminate("no_more_evidence")])
+    InvestigationAgent(llm, registry, network_precheck=True).run(SEED)
+
+    last = _json.loads(seen_prompts[-1].split("\n\n", 1)[1][seen_prompts[-1].split("\n\n", 1)[1].index("{"):])
+    history = last["already_called_tools"]
+    assert [h["tool_name"] for h in history] == ["fetch_network_log", "fetch_auth_log", "fetch_audit_log"]
+    assert history[0].get("system_precheck") is True and "system_precheck" not in history[1]
+    assert history[1]["summary"] == "auth 요약 [원칙 7 기준] 미충족" and history[1]["result_count"] == 2
+    # 원문 관측은 직전 도구(audit) 것만
+    assert [o["tool_name"] for o in last["raw_observations_since_last_turn"]] == ["fetch_audit_log"]
+
+
 def test_confidence_sum_has_no_float_drift():
     from agent.models import AgentState
 

@@ -37,8 +37,8 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
 | `current_facts`, `current_hypotheses`, `current_unknowns` | LLM이 지난 턴까지 정리한 사실·가설·모르는 것 | LLM (루프가 보관) |
 | `confirmed_evidence`, `contradicting_evidence` | 지금까지 채택된 지지·반박 증거 | 루프 (원본 참조 검증 후) |
 | `current_confidence`, `confidence_threshold`, `confidence_threshold_reached` | 증거 누적 신뢰도와 종료 임계값(0.85) | 루프 |
-| `already_called_tools` | 이미 부른 도구+인자 (중복 금지) | 루프 |
-| `raw_observations_since_last_turn` | **방금 실행한 도구의 결과** (이번 턴에 해석할 것) | 도구 |
+| `already_called_tools` | 지금까지 부른 도구·인자·결과 건수·**결과 요약(summary)** — 매 턴 남음. 사전 조회는 `system_precheck: true` | 루프 (`state.tool_calls`) |
+| `raw_observations_since_last_turn` | **방금 실행한 도구의 결과 원문** (records 포함, 이번 턴에만 보임) — 새 증거는 여기서만 만든다 | 도구 |
 | `known_raw_refs` | 지금까지 관측된 원본 참조 목록 (증거에 인용 가능한 것) | 루프 |
 | `provenance_issues` | 잘못 인용한 참조 기록 | 루프 |
 | `query_windows` | 계층별 첫 조회 구간 | **코드 계산** |
@@ -104,10 +104,22 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
 
 ### 원칙 3. 상태 관리
 
-**지시**: `already_called_tools`에 있는 도구+인자 조합은 다시 부르지 않는다. 같은 계층을 다시 볼 때는 구간이나 필터를 바꾼다.
+**지시**
+- `already_called_tools`에는 지금까지 부른 도구·인자·결과 건수·결과 요약(summary)이 남아 있다. 이전 결과를
+  다시 확인하려면 도구를 다시 부르지 말고 그 summary를 본다.
+- 같은 도구+인자 조합은 시스템이 실행하지 않는다. 원본 레코드나 다른 조건이 필요하면 구간·필터·offset을 바꾼다.
+- summary는 이미 판단에 반영한 결과다. 새 증거는 방금 받은 `raw_observations_since_last_turn`에서만 만든다.
 
-**왜 / 코드**: 같은 조회를 반복하며 도구 호출 횟수(최대 8)를 낭비하는 것을 막는다. 루프가 같은 조합을
-실제로 차단한다(`AgentState.already_called`) — 원칙을 어겨도 실행되지 않고 notes에 "중복 호출 스킵"이 남는다.
+**왜 생겼나**
+- 과거 사건 로그는 바뀌지 않아 같은 조건의 재조회는 같은 결과를 준다 — 도구 호출 횟수(최대 8)만 낭비한다.
+- 원칙이 짧은 이유는 코드가 100% 강제하기 때문이다(`AgentState.already_called` — 요청해도 실행되지 않고
+  notes에 "중복 호출 스킵"이 남는다). 원칙은 LLM이 막힌 요청을 반복하며 턴을 버리지 않게 하는 안내다.
+- 결과 원문은 직후 한 턴에만 보여서, 예전에는 LLM이 그 턴에 facts로 옮겨 적지 않으면 판정 근거 숫자를 다시 볼
+  방법이 없었다(재조회는 막혀 있으므로). 그래서 결과 요약을 매 턴 남기도록 바꿨다(2026-09-25 A안).
+
+**코드 뒷받침**: 중복 실행 차단(`loop._execute_tool_call`), 요약 유지(`prompts._tool_history_entry`).
+같은 원본 참조를 다시 인용한 증거는 신뢰도에 반영하지 않는다. 다만 **원본 참조 없이** 같은 사실을 다시 적은
+증거는 지금 규칙으로는 반영된다 — "새 관측이 없는 턴의 증거는 반영하지 않는" 코드 규칙(②안)은 A안 결과를 본 뒤 검토한다.
 
 ### 원칙 4. 종료 판단
 

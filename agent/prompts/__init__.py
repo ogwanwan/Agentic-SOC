@@ -142,6 +142,26 @@ def build_system_prompt(tool_registry: Any) -> str:
     return SYSTEM_PROMPT_TEMPLATE.replace("{tool_schema}", tool_registry.schema_text())
 
 
+def _tool_history_entry(call: Any, state: Any) -> Dict[str, Any]:
+    """already_called_tools 한 줄: 도구·인자·성공 여부 + 결과 건수와 요약(자르지 않음).
+
+    summary 끝에 원칙 기준 계산 결과가 붙어 있어 자르면 가장 중요한 부분이 사라진다.
+    """
+    entry: Dict[str, Any] = {
+        "sequence": call.sequence,
+        "tool_name": call.tool_name,
+        "input": call.input,
+        "success": call.success,
+        "result_count": call.result_count,
+        "summary": call.result_summary,
+    }
+    if call.sequence in getattr(state, "system_call_sequences", []):
+        entry["system_precheck"] = True  # LLM이 고르지 않은 시스템 사전 조회 (도구 종류 수에 안 셈)
+    if call.error:
+        entry["error"] = call.error
+    return entry
+
+
 # [21] ← reason()에서 매 턴 호출 — 현재 조사 상태 + 코드가 계산한 조회 구간 + 직전 거부 사유
 def build_user_prompt(
     state: Any,
@@ -183,10 +203,11 @@ def build_user_prompt(
         "confidence_threshold_reached": (
             confidence_threshold is not None and state.current_confidence >= confidence_threshold
         ),
-        "already_called_tools": [
-            {"tool_name": t.tool_name, "input": t.input, "success": t.success}
-            for t in state.tool_calls
-        ],
+        # 지금까지 부른 도구와 그 결과 요약. 원문(records)은 직후 한 턴에만 보여 주고 사라지므로,
+        # 판정 근거 숫자([조회 구간 전체 집계]·[원칙 N 기준] 등)가 담긴 summary는 매 턴 남겨 둔다.
+        # 이미 본 결과라 새 evidence의 근거로 쓰지 않는다(원칙 3) — 새 evidence는
+        # raw_observations_since_last_turn에서만 만든다.
+        "already_called_tools": [_tool_history_entry(t, state) for t in state.tool_calls],
         "investigated_layers": sorted(state.investigated_layers),
         # 추적용 필드(raw_ref_locations 등)는 LLM에게 안 보여준다 — loop.py는 도구 결과
         # 원본에서 그 값을 직접 읽으므로 인용 검증에는 영향 없음.
