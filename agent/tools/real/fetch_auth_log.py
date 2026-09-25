@@ -35,6 +35,10 @@ from ..log_source import filtered_out_hint, load_window_events, pagination
 # 세는 기준을 코드로 고정하고 summary에 숫자로 준다.
 FAILED_LOGIN_EVENTS = ("ssh_failed", "ssh_invalid_user")
 SUCCESS_LOGIN_EVENTS = ("ssh_accepted",)
+# 계정 없이 끊긴 연결·배너 교환 실패 등(공통 정규화 주석: "스캐너 탐침"). ssh_auth_fail_close
+# ("authenticating user root ... [preauth]")는 키 전용 서버에서 실제 인증 시도라 탐침으로 보지 않는다.
+PROBE_EVENTS = ("ssh_probe", "ssh_disconnect")
+AUTH_ATTEMPT_WITHOUT_FAILED = ("ssh_auth_fail_close", "ssh_max_auth")
 # 실패 대상 계정 이름은 이만큼만 나열한다. EC2 24시간 조회에서 325개 계정이 전부 summary에
 # 들어가 프롬프트가 불필요하게 커졌다(2026-09-24). 개수는 항상 전체 기준이다.
 MAX_LISTED_USERS = 20
@@ -56,7 +60,14 @@ def principle7_check(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
         return None
     failed = [r for r in records if r.get("event") in FAILED_LOGIN_EVENTS]
     successes = sum(1 for r in records if r.get("event") in SUCCESS_LOGIN_EVENTS)
-    if successes or not failed:
+    # 실패 0회라도 접속 흔적(스캐너 탐침: 계정 없이 끊긴 연결 등)이 있으면 "시도 없음 = 단발성 이하"로 판정한다.
+    # EC2(2026-09-25): ssh_probe 2건뿐인 사건을 규칙이 없어 INCONCLUSIVE로 판정했다.
+    probes = [r for r in records if r.get("event") in PROBE_EVENTS]
+    if successes or not (failed or probes):
+        return None
+    if not failed and (len(probes) >= BRUTEFORCE_FAILURES
+                       or any(r.get("event") in AUTH_ATTEMPT_WITHOUT_FAILED for r in records)):
+        # 탐침이 많거나 키 전용 서버의 인증 시도 흔적이 있으면 코드 기준을 내지 않고 LLM 판단에 맡긴다
         return None
     accounts = len({r.get("user") or EMPTY_USER for r in failed})
     bruteforce = len(failed) >= BRUTEFORCE_FAILURES or accounts >= BRUTEFORCE_ACCOUNTS
@@ -66,6 +77,7 @@ def principle7_check(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
         "failures": len(failed),
         "accounts": accounts,
         "successes": 0,
+        "probes": len(probes),
         "bruteforce": bruteforce,
         "sporadic": not bruteforce,
     }
@@ -76,6 +88,9 @@ def _principle7_text(check: Dict[str, Any] | None) -> str:
         return ""
     if check["bruteforce"]:
         verdict = "충족 → THREAT_CONFIRMED(SSH 무차별 대입 시도, 로그인 성공 없음)"
+    elif check["failures"] == 0:
+        verdict = (f"미충족(로그인 시도 없이 접속만 {check['probes']}건 — 인터넷 스캐너 탐침) → 다른 계층에 "
+                   "공격 정황이 없으면 FALSE_POSITIVE")
     else:
         verdict = "미충족(단발성 실패) → 다른 계층에 공격 정황이 없으면 FALSE_POSITIVE"
     return (f" [원칙 7 기준] {check['src_ip']}: 로그인 성공 0회, 실패 {check['failures']}회·계정 {check['accounts']}개 "

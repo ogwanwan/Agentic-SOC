@@ -196,6 +196,9 @@ principles:
           (attack_type은 "SSH 무차별 대입 시도", severity LOW~MEDIUM, confidence 0.75~0.85).
           summary에 "로그인 성공은 없어 계정 침해는 발생하지 않았다"를 반드시 명시합니다.
         - 실패 1~4회이고 단일 계정 대상 → FALSE_POSITIVE (단발성 실패, confidence 0.75~0.85).
+        - 실패 0회이고 접속 흔적만 있음(ssh_probe 등 계정 없이 끊긴 연결 = 인터넷 스캐너 탐침)
+          → FALSE_POSITIVE (confidence 0.75~0.85). 다른 포트 스캔 여부 같은 확인 불가능한 가정은
+          unknowns에만 남기고 판정을 INCONCLUSIVE로 미루지 마십시오.
         이 경우는 INCONCLUSIVE로 판정하지 마십시오. 필요한 사실(실패 횟수·계정 수·성공 여부)은
         fetch_auth_log로 모두 확인할 수 있습니다. src_ip로 거른 fetch_auth_log summary의
         [원칙 7 기준] 줄이 이 계산 결과이니 그대로 따르십시오. "root 계정 대상", "사전 인증 연결

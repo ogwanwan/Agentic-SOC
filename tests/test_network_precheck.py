@@ -397,6 +397,16 @@ def test_principle7_check():
     assert principle7_check(_ssh_failures("92.118.39.50", 6) + [{"event": "ssh_accepted", "src_ip": "92.118.39.50"}]) is None
     assert principle7_check(_ssh_failures("1.1.1.1", 3) + _ssh_failures("2.2.2.2", 3)) is None
 
+    # EC2 2026-09-25: 로그인 시도 없이 접속만(ssh_probe 2건) → 단발성 이하로 판정 기준을 준다
+    probe = [{"event": "ssh_probe", "src_ip": "45.239.159.94", "raw_ref": f"auth.log:{i}"} for i in range(2)]
+    check = principle7_check(probe)
+    assert check["sporadic"] and check["failures"] == 0 and check["probes"] == 2
+    assert "로그인 시도 없이 접속만 2건" in _principle7_text(check)
+    # 탐침이 많거나 키 전용 서버의 인증 시도(ssh_auth_fail_close)가 있으면 LLM 판단에 맡긴다
+    assert principle7_check(probe * 3) is None
+    assert principle7_check(probe + [{"event": "ssh_auth_fail_close", "src_ip": "45.239.159.94",
+                                      "user": "root"}]) is None
+
 
 def test_gate_applies_principle7_both_ways():
     """EC2 2026-09-25: root 실패 2회·성공 0회를 THREAT_CONFIRMED로 판정 → 원칙 7(단발성)과 충돌이면 거부."""
@@ -414,6 +424,14 @@ def test_gate_applies_principle7_both_ways():
         {**SEED, "confidence_initial": 0.9})
     assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
     assert any("원칙 7 기준 미충족" in n for n in result["investigation_notes"])
+
+    # INCONCLUSIVE도 거부 (EC2 2026-09-25 탐침 사건: 필요한 사실은 모두 확인됨)
+    inc = _terminate("no_more_evidence")
+    inc["final_verdict"] = {**inc["final_verdict"], "verdict": "INCONCLUSIVE"}
+    llm = RecordingLLM([_call("fetch_auth_log"), _call("fetch_audit_log"), inc, fp])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(
+        {**SEED, "confidence_initial": 0.9})
+    assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
 
     brute = {**sporadic, "failures": 9, "bruteforce": True, "sporadic": False}
     registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_auth_log": auth_with(brute)})

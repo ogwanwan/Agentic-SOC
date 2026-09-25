@@ -381,8 +381,8 @@ class InvestigationAgent:
         - 조회한 모든 로그가 구간 전체 0건(로그 미확보)인데 INCONCLUSIVE가 아님
         - 원칙 9 기준 충족(seed src_ip)인데 FALSE_POSITIVE
         - 웹 서버 계정의 의심 명령 실행이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만
-        - 원칙 7(로그인 성공 없음) 무차별 대입 기준 충족인데 FALSE_POSITIVE, 또는 단발성 실패뿐이고
-          다른 위협 기준도 없는데 THREAT_CONFIRMED
+        - 원칙 7(로그인 성공 없음) 무차별 대입 기준 충족인데 FALSE_POSITIVE/INCONCLUSIVE, 또는 단발성
+          실패·접속 탐침뿐이고 다른 위협 기준도 없는데 THREAT_CONFIRMED/INCONCLUSIVE
         """
         verdict = (final_verdict or {}).get("verdict")
         severity = str((final_verdict or {}).get("severity") or "").upper()
@@ -418,11 +418,20 @@ class InvestigationAgent:
                     f"{worst['accounts']}개)인데 FALSE_POSITIVE로 판정함. 원칙 7에 따라 THREAT_CONFIRMED"
                     "(SSH 무차별 대입 시도)로 판정하십시오"
                 )
-            if not worst["bruteforce"] and not other_threat and verdict == VerdictType.THREAT_CONFIRMED.value:
+            if not worst["bruteforce"] and not other_threat and verdict in (
+                    VerdictType.THREAT_CONFIRMED.value, VerdictType.INCONCLUSIVE.value):
+                kind = (f"로그인 시도 없이 접속만 {worst.get('probes', 0)}건 — 스캐너 탐침" if worst["failures"] == 0
+                        else "단발성 실패")
                 conflicts.append(
                     f"원칙 7 기준 미충족({worst['src_ip']}: 로그인 성공 0회, 실패 {worst['failures']}회·계정 "
-                    f"{worst['accounts']}개 — 단발성 실패)인데 THREAT_CONFIRMED로 판정함. 다른 계층의 공격 정황이 "
-                    "없으면 원칙 7에 따라 FALSE_POSITIVE로 판정하십시오"
+                    f"{worst['accounts']}개 — {kind})인데 {verdict}로 판정함. 판정에 필요한 사실(실패 횟수·계정 수·"
+                    "성공 여부)은 모두 확인됐으므로, 다른 계층의 공격 정황이 없으면 원칙 7에 따라 FALSE_POSITIVE로 "
+                    "판정하십시오"
+                )
+            if worst["bruteforce"] and verdict == VerdictType.INCONCLUSIVE.value:
+                conflicts.append(
+                    f"원칙 7 기준 충족({worst['src_ip']}: 실패 {worst['failures']}회·계정 {worst['accounts']}개)인데 "
+                    "INCONCLUSIVE로 판정함. 원칙 7에 따라 THREAT_CONFIRMED(SSH 무차별 대입 시도)로 판정하십시오"
                 )
         return conflicts
 
