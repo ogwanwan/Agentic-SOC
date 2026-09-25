@@ -32,8 +32,8 @@ def _run():
                ["web_network", "suricata_flow", "web_system", "audit_lineage", "system_auth"],
                ["high", "medium"])
     score, parts = triage_score(inc)
-    # 25(high) + 40(4계층) + 25(5종) + 2(seed 2개) = 92
-    assert score == 92, f"가산 합 실패: {score} {parts}"
+    # 30(high) + 18(4계층 체인=6*3) + 15(5종=3*5) + 2(seed 2개) = 65
+    assert score == 65, f"가산 합 실패: {score} {parts}"
     assert route(score)[0] == "P1"
 
     # 3) low 단발·단일계층 → P4 (<8): 3(low) + 10?  단일계층은 +10 → 13 = P3. 계층 0이면 3=P4.
