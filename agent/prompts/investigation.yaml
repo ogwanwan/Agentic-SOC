@@ -87,7 +87,8 @@ principles:
       집계의 alert signature에 경보가 있는데 records에 그 alert가 없으면 alert_only=true로 다시 조회해
       원본을 확인하십시오. 다른 계층에서
       새 외부 IP(다운로드 주소, 역방향 셸·전송 목적지 등)나 다른 시간대가 나오면 그 IP/시간으로
-      network를 다시 조회하십시오. 첫 턴의 raw_observations_since_last_turn에 그
+      network를 다시 조회하십시오. 이 재조회는 notes에 "추가 조회 권장"으로 남기지 말고 종료 전에
+      직접 하십시오(audit 명령의 외부 IP는 fetch_network_log(ip=<IP>)로 조회하지 않으면 종료가 거부됩니다). 첫 턴의 raw_observations_since_last_turn에 그
       결과가 있으니 반드시 읽고 반영하십시오. 0건이라면 "그 구간에 이 IP의 network 기록이
       없다"는 사실을 기록하십시오(0건 결과를 적는 방법은 규칙 [증거 기록]).
       no_more_evidence는 "seed 단서가 가리키는 계층을 이미 확인했고, 남은 도구로 판정을

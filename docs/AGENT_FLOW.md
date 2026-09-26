@@ -149,6 +149,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 | (c) network | `confidence_sufficient` | seed에 src_ip가 있는데 network 조회를 시도하지 않음 (사전 조회도 인정) |
 | (d) 도구 1개로 끝내기 | `no_more_evidence`, strict | 도구 1종류만 보고, 안 본 로그 도구가 남아 있음 |
 | (e) 로그인 후 행위 | strict | seed src_ip의 로그인 성공이 보이는데 audit을 안 봄. 사유에 `ppid=<sshd pid>` 안내 |
+| (f) 명령의 외부 IP | strict | audit 명령 인자에 나온 공인 IP(`fetch_audit_log.command_external_ips()`, 최대 3개)를 network로 조회하지 않음. 사유에 `fetch_network_log(ip=<IP>)` 안내 |
 | 판정-원칙 충돌 | strict | 아래 표 |
 
 판정-원칙 충돌 (`_verdict_conflicts`):

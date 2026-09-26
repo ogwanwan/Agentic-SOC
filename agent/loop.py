@@ -310,6 +310,9 @@ class InvestigationAgent:
               get_process_tree/fetch_event_logs)을 한 번도 시도하지 않음. 침해 판정 자체는 원칙 7이
               Q1+Q2로 확정하지만, 로그인 후 무엇을 했는지(피해 범위)는 audit으로만 알 수 있다.
               0918 시나리오 비교에서 network alert로 신뢰도가 먼저 차 audit 없이 끝나는 사례가 나왔다.
+          (f) audit 명령 인자에 등장한 외부 IP(state.command_external_ips)를 network로 조회하지 않음
+              (fetch_network_log의 ip/src_ip/dst_ip 또는 fetch_event_logs의 filters.network).
+              로그인 IP와 유출 목적지가 다른 시나리오에서 새 목적지를 "추가 조회 권장"으로만 남겼다(3/3).
         """
         attempted = {t.tool_name for t in state.tool_calls}
         queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
@@ -337,6 +340,17 @@ class InvestigationAgent:
                     "audit으로 확인하지 않음. fetch_audit_log를 로그인 세션의 sshd pid로 조회하십시오: "
                     + (", ".join(hints) or "ppid=<auth 레코드의 sshd pid>")
                 )
+
+        # (f) audit 명령에 등장한 외부 IP(다운로드·전송·역방향 셸 대상)를 network로 조회하지 않음.
+        # 로그인 IP와 유출 목적지가 다른 시나리오에서 LLM이 notes에 "추가 조회 권장"만 남기고 끝냈다(3/3).
+        unchecked = self._unchecked_command_ips(state)
+        if self.strict_termination and unchecked and "fetch_network_log" in {
+                spec.name for spec in self.tool_registry.list_tools()}:
+            reasons.append(
+                f"audit 명령에 등장한 외부 IP({', '.join(unchecked)})의 network 기록을 확인하지 않음. 권장으로 남기지 말고 "
+                + " / ".join(f"fetch_network_log(ip={ip})" for ip in unchecked)
+                + "로 조회해 경보·통신을 확인하십시오"
+            )
 
         if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
             successful = {t.tool_name for t in chosen if t.success}
@@ -485,6 +499,19 @@ class InvestigationAgent:
                     "횟수와 관계없이 severity는 LOW 또는 MEDIUM으로 판정하십시오"
                 )
         return conflicts
+
+    @staticmethod
+    def _unchecked_command_ips(state: AgentState) -> list:
+        """audit 명령에 등장한 외부 IP 중 아직 network 조회(ip/src_ip/dst_ip 인자)를 시도하지 않은 것."""
+        queried = set()
+        for call in state.tool_calls:
+            if call.tool_name == "fetch_network_log":
+                queried.update(str(call.input.get(key)) for key in ("ip", "src_ip", "dst_ip") if call.input.get(key))
+            elif call.tool_name == "fetch_event_logs":
+                network_filters = (call.input.get("filters") or {}).get("network") or {}
+                queried.update(str(network_filters.get(key)) for key in ("ip", "src_ip", "dst_ip")
+                               if network_filters.get(key))
+        return [ip for ip in state.command_external_ips if ip not in queried]
 
     def _untried_tool_hint(self, attempted: set) -> str:
         registered = {spec.name for spec in self.tool_registry.list_tools()}
@@ -660,6 +687,10 @@ class InvestigationAgent:
                 principle7_seen = check.get("rule") == "principle_7" and src_ip and check.get("src_ip") == src_ip
                 if (principle9_met or web_exec_met or principle7_seen) and check not in state.rule_floors:
                     state.rule_floors.append(check)
+                # 종료 관문 (f)용: audit 명령에 등장한 외부 IP
+                for ip in check.get("external_ips") or []:
+                    if ip not in state.command_external_ips:
+                        state.command_external_ips.append(ip)
             # 필터 전 구간 전체 건수 — 모두 0이면 로그 미확보로 보고 [25-2]가 INCONCLUSIVE만 허용한다
             if "window_total" in result:
                 state.window_totals.append(result["window_total"])

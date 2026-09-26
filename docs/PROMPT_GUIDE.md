@@ -129,7 +129,7 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
   단, 판정이 도구 계산 기준(`[원칙 7 기준]`·`[원칙 9 기준]`·`[후속 침해 확인]`·로그 미확보)과 같으면 신뢰도가 모자라도
   승인된다 — 숫자를 채우려고 조사를 늘리지 않는다. (코드는 이미 이렇게 동작했는데 프롬프트에 없어서 2026-09-25에 맞춤)
 - **network 사전 조회**: src_ip가 있으면 시스템이 첫 턴 전에 network를 조회해 둔다(대표 20건 + 전체 집계).
-  집계에 경보가 있는데 records에 없으면 `alert_only`로 다시 조회한다. 다른 계층에서 새 외부 IP·시간대가 나오면 network를 다시 본다.
+  집계에 경보가 있는데 records에 없으면 `alert_only`로 다시 조회한다. 다른 계층에서 새 외부 IP·시간대가 나오면 network를 다시 본다. 이 재조회는 "권장"으로 남기지 말고 종료 전에 직접 한다(audit 명령의 외부 IP는 종료 관문 (f)가 강제).
 - `no_more_evidence`는 "seed 단서 계층을 확인했고 더 얻을 사실이 없다"는 뜻. 도구 1종류만 보고는 쓸 수 없다.
 - 거부되면(`previous_termination_rejected`) 같은 상태로 다시 종료를 요청하지 말고, 도구를 더 부르거나
   no_more_evidence로 판정한다. **임계값을 채우려고 이미 기록한 사실을 증거로 다시 만들거나 기여도를 부풀리지 않는다.**
@@ -317,7 +317,7 @@ LLM은 매 턴 이 JSON 하나로 답한다.
 |---|---|---|---|
 | 1 로그 미확보 | 원칙 1 | 도구 `window_total`, `log_source.filtered_out_hint()` | `loop._verdict_conflicts()` |
 | 2 조회 구간 | 원칙 2 | `prompts.layer_query_windows()` | — |
-| 4 종료 조건·사전 조회 | 원칙 4 | `loop.network_precheck_args()` | `loop._termination_rejections()` |
+| 4 종료 조건·사전 조회 | 원칙 4 | `loop.network_precheck_args()`, `fetch_audit_log.command_external_ips()` | `loop._termination_rejections()` (a)–(d), (f) |
 | 5 로그인 후 audit | 원칙 5 | — | `_termination_rejections()` (e) |
 | 7 SSH | 원칙 7 | `fetch_auth_log.principle7_check()` | `_verdict_conflicts()`, `_rule_determined_verdict()` |
 | 9 웹 | 원칙 9 | `fetch_web_log.principle9_check()`, `fetch_audit_log.audit_rule_check()` | `_verdict_conflicts()`, `_rule_determined_verdict()` |

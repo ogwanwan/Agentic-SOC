@@ -144,6 +144,9 @@ class AgentState:
     # 로그 조회 도구가 돌려준 "필터 전 구간 전체 건수"(window_total). 모두 0이면 그 시간대
     # 로그 자체가 없는 것(수집 누락·교체)이라, 관문이 INCONCLUSIVE 외 판정을 거부한다.
     window_totals: List[int] = field(default_factory=list)
+    # audit 명령 인자에 등장한 외부 IP(다운로드·전송·역방향 셸 대상). network로 조회하지 않은 채 남아 있으면
+    # 종료 관문 (f)가 거부한다 (loop.py strict_termination).
+    command_external_ips: List[str] = field(default_factory=list)
 
     @staticmethod
     def _to_hashable(value: Any) -> Any:
