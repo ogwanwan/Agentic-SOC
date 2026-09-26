@@ -45,25 +45,36 @@ class TechniqueRule:
     attack_type_keywords: Tuple[str, ...] = ()
     evidence_keywords: Tuple[str, ...] = ()
     notes: str = ""
+    # Literal command fragments: case-sensitive options, flexible whitespace.
+    evidence_command_keywords: Tuple[str, ...] = ()
+    # Require at least one context phrase in the SAME affirmative clause as a hit.
+    required_context_keywords: Tuple[str, ...] = ()
+    # Explicit denial/uncertainty about these subjects vetoes the context claim.
+    context_subject_keywords: Tuple[str, ...] = ()
+    allow_verdict_hits: bool = True
 
     def __post_init__(self) -> None:
         for name in ("technique_id", "technique_name", "tactic_id", "tactic_name"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip() or value != value.strip():
                 raise ValueError(f"{name} must be a non-empty, trimmed string")
-        for name in ("attack_type_keywords", "evidence_keywords"):
+        for name in ("attack_type_keywords", "evidence_keywords", "evidence_command_keywords",
+                     "required_context_keywords", "context_subject_keywords"):
             value = getattr(self, name)
             if not isinstance(value, tuple) or any(not isinstance(word, str) for word in value):
                 raise ValueError(f"{name} must be a tuple of strings")
         if not isinstance(self.notes, str):
             raise ValueError("notes must be a string")
+        if not isinstance(self.allow_verdict_hits, bool):
+            raise ValueError("allow_verdict_hits must be a bool")
 
 
 @dataclass(frozen=True)
 class MappingHit:
     """An unmerged rule match. Verdict hits have no invented evidence or refs.
 
-    matched_keywords contains unique strip/casefold-normalized catalog keywords.
+    matched_keywords contains unique normalized catalog keywords. Natural-language
+    keywords use casefold; command keywords preserve option case.
     Evidence times and references retain their original strings.
     """
 

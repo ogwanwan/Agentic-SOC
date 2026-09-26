@@ -36,6 +36,23 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 | `test_raw_log_ingestion.py`, `test_seed_generation.py` | 로그 수집과 사건 후보 우선순위 |
 | `test_pipeline.py` | 여러 seed가 우선순위대로 조사에 전달되는지 검사 |
 | `test_loop.py` | 종료 조건·중복 호출 방지·최대 호출 수·도구 오류 처리 |
+| `test_attack_mapping_cli.py` | ATT&CK 결과 저장, 같은 사건의 여러 조사·반복 실행 보존, 비객체 JSON 뒤의 배치 처리, 출력 폴더 이탈·파일명 충돌 방지 |
+| `test_attack_mapping_killchain.py` | 공격 단계 우선 정렬, UTC 환산 순서·대표 시각, 동일 시각의 안정 정렬, 원래 시각·입력 보존 |
+| `test_attack_mapping_e2e.py` | ATT&CK 매핑 → Kill Chain → CLI 저장 → 최종 보고서 연결 |
+| `test_attack_mapping_review_regressions.py` | 실제 Catalog의 명령어 대소문자·부정/도움말·C2 조건, CP949/콘솔 장애·깊은 JSON·BOM·대문자 확장자, 생성물 재입력 차단, 저장 장애 정리·동시 저장 재시도 |
+
+ATT&CK 저장·입력·시간대 회귀 사례의 발생 원인과 수정 전후 결과는
+[버그 수정 보고서](../docs/ATTACK_MAPPING_BUGFIX_REPORT_20260926.md)를 참고하세요.
+후속 점검에서 발견한 매핑 오분류·배치 처리 문제의 수정은
+[추가 수정 보고서](../docs/ATTACK_MAPPING_FIX_REPORT_20260927.md)에 정리했습니다.
+실제 Catalog·조사 출력 형식·CLI를 연결한 검증 자료는 다음 명령으로 새 폴더에 생성할 수 있습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.verify_attack_mapping_abc
+```
+
+이 명령은 관련/전체 오프라인 pytest와 ABCD 데모를 포함합니다. `--out-dir`을 지정하면
+아직 존재하지 않는 경로를 사용해야 하며, 검사 실패 시 종료 코드 1을 반환합니다.
 
 `test_abcd_pipeline.py`는 네트워크 연결을 차단한 상태에서 실행합니다. LLM 응답만
 고정해 같은 순서로 조사하도록 하고, 로그 처리 함수나 조사 도구의 결과를 성공값으로

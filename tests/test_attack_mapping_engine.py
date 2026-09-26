@@ -324,7 +324,9 @@ def test_rule_is_immutable_and_rejects_mutable_or_malformed_fields():
     with pytest.raises(FrozenInstanceError):
         SHELL.technique_id = "changed"
     for patch in ({"evidence_keywords": ["webshell"]}, {"attack_type_keywords": (None,)},
-                  {"technique_id": ""}, {"tactic_name": " Persistence "}, {"notes": None}):
+                  {"technique_id": ""}, {"tactic_name": " Persistence "}, {"notes": None},
+                  {"evidence_command_keywords": ["curl -T"]}, {"required_context_keywords": (None,)},
+                  {"context_subject_keywords": ["C2"]}, {"allow_verdict_hits": 1}):
         with pytest.raises(ValueError):
             replace(SHELL, **patch)
 
@@ -334,9 +336,20 @@ def test_version_and_mapping_are_independent_of_rule_order():
     assert mapping_table_version([SHELL]) == mapping_table_version([
         replace(SHELL, evidence_keywords=tuple(reversed(SHELL.evidence_keywords)) + ("webshell",)),
     ])
+    command_rule = replace(SHELL, evidence_command_keywords=("curl -T", "curl --upload-file"),
+                           required_context_keywords=("over C2", "via C2"), context_subject_keywords=("C2",))
+    assert mapping_table_version([command_rule]) == mapping_table_version([
+        replace(command_rule, evidence_command_keywords=("curl --upload-file", "curl -T", "curl -T"),
+                required_context_keywords=("via C2", "over C2")),
+    ])
+    assert mapping_table_version([command_rule]) != mapping_table_version([
+        replace(command_rule, evidence_command_keywords=("curl -t", "curl --upload-file")),
+    ])
     assert map_investigation(investigation(), RULES) == map_investigation(investigation(), iter(reversed(RULES)))
     for patch in ({"notes": "revised"}, {"evidence_keywords": ("new",)}, {"attack_type_keywords": ("new",)},
-                  {"technique_name": "new"}, {"technique_id": "T0000"}, {"tactic_id": "TA0000"}, {"tactic_name": "new"}):
+                  {"technique_name": "new"}, {"technique_id": "T0000"}, {"tactic_id": "TA0000"}, {"tactic_name": "new"},
+                  {"evidence_command_keywords": ("curl -T",)}, {"required_context_keywords": ("over C2",)},
+                  {"context_subject_keywords": ("C2",)}, {"allow_verdict_hits": False}):
         assert mapping_table_version([SHELL]) != mapping_table_version([replace(SHELL, **patch)])
 
 

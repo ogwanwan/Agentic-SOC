@@ -129,3 +129,105 @@ def test_engine_error_result_is_still_written_and_reported(tmp_path, capsys):
     assert mapping["mapping_status"] == "error"
     assert mapping["errors"]
     assert "error" in capsys.readouterr().out
+
+
+def test_same_incident_keeps_both_investigations(tmp_path):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    for index in (1, 2):
+        _write_json(inputs / f"{index}.json", investigation(investigation_id=f"INV-{index}"))
+    out_dir = tmp_path / "out"
+
+    assert run(["--all-in-dir", str(inputs), "--out-dir", str(out_dir)], rules=TEST_RULES) == 0
+
+    reports = list(out_dir.glob("*_final_report.json"))
+    assert len(reports) == 2
+    assert {json.loads(path.read_text(encoding="utf-8"))["investigation_id"] for path in reports} == {
+        "INV-1", "INV-2",
+    }
+    for path in reports:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        mapping_path = path.with_name(path.name.replace("_final_report.json", "_attack_mapping.json"))
+        assert json.loads(mapping_path.read_text(encoding="utf-8")) == report["attack_mapping"]
+
+
+@pytest.mark.parametrize("existing_suffix", ["attack_mapping", "final_report"])
+def test_existing_output_is_preserved_across_repeated_runs(tmp_path, existing_suffix):
+    inv_path = _write_json(tmp_path / "inv.json", investigation())
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    existing = out_dir / f"INC-CLI_{existing_suffix}.json"
+    existing.write_text("previous result", encoding="utf-8")
+
+    for _ in range(2):
+        assert run([str(inv_path), "--out-dir", str(out_dir)], rules=TEST_RULES) == 0
+
+    assert existing.read_text(encoding="utf-8") == "previous result"
+    for number in (2, 3):
+        assert (out_dir / f"INC-CLI__{number}_attack_mapping.json").exists()
+        assert (out_dir / f"INC-CLI__{number}_final_report.json").exists()
+
+
+@pytest.mark.parametrize("payload", [[], [1], None, "invalid", 42, True])
+def test_non_object_json_does_not_abort_next_file(tmp_path, capsys, payload):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    _write_json(inputs / "a_bad.json", payload)
+    good = investigation()
+    _write_json(inputs / "b_good.json", good)
+    out_dir = tmp_path / "out"
+
+    assert run(["--all-in-dir", str(inputs), "--out-dir", str(out_dir)], rules=TEST_RULES) == 1
+
+    report = json.loads((out_dir / "INC-CLI_final_report.json").read_text(encoding="utf-8"))
+    assert report["evidence_chain"] == good["evidence_chain"]
+    assert report["attack_mapping"]["mapping_status"] == "mapped"
+    assert not list(out_dir.glob("a_bad_*.json"))
+    output = capsys.readouterr()
+    assert "a_bad.json" in output.err and "object" in output.err
+    assert "Traceback" not in output.err
+    assert "INC-CLI" in output.out
+
+
+@pytest.mark.parametrize("incident_id", [
+    "../escaped-proof", "..\\escaped-proof", "nested/child", "nested\\child",
+    "CON.txt", "..", "invalid:\x00?*name", "사건-001",
+])
+def test_output_stays_in_requested_directory(tmp_path, incident_id):
+    inv_path = _write_json(tmp_path / "input.json", investigation(incident_id=incident_id))
+    out_dir = tmp_path / "requested"
+
+    assert run([str(inv_path), "--out-dir", str(out_dir)], rules=TEST_RULES) == 0
+
+    artifacts = [path for path in tmp_path.rglob("*.json") if path != inv_path]
+    assert len(artifacts) == 2
+    assert all(path.resolve().parent == out_dir.resolve() for path in artifacts)
+    for path in artifacts:
+        assert json.loads(path.read_text(encoding="utf-8"))["incident_id"] == incident_id
+
+
+def test_absolute_incident_path_is_only_used_as_a_filename(tmp_path):
+    incident_id = str(tmp_path / "escaped-absolute")
+    inv_path = _write_json(tmp_path / "input.json", investigation(incident_id=incident_id))
+    out_dir = tmp_path / "requested"
+
+    assert run([str(inv_path), "--out-dir", str(out_dir)], rules=TEST_RULES) == 0
+
+    reports = list(tmp_path.rglob("*_final_report.json"))
+    assert len(reports) == 1 and reports[0].parent == out_dir
+    assert json.loads(reports[0].read_text(encoding="utf-8"))["incident_id"] == incident_id
+
+
+def test_sanitized_name_collision_preserves_both_incident_ids(tmp_path):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    ids = ["incident/a", "incident\\a"]
+    for index, incident_id in enumerate(ids):
+        _write_json(inputs / f"{index}.json", investigation(incident_id=incident_id))
+    out_dir = tmp_path / "out"
+
+    assert run(["--all-in-dir", str(inputs), "--out-dir", str(out_dir)], rules=TEST_RULES) == 0
+
+    reports = list(out_dir.glob("*_final_report.json"))
+    assert len(reports) == 2
+    assert {json.loads(path.read_text(encoding="utf-8"))["incident_id"] for path in reports} == set(ids)

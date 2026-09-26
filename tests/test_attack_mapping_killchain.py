@@ -7,6 +7,8 @@ catalog or on A's engine internals beyond the documented MappedTechnique shape.
 
 from copy import deepcopy
 
+import pytest
+
 from attack_mapping.killchain import build_kill_chain
 from attack_mapping.engine import map_investigation
 from attack_mapping.schema import TechniqueRule
@@ -102,6 +104,55 @@ def test_stable_sort_preserves_input_order_for_equal_keys():
 
     assert [s["technique_id"] for s in build_kill_chain([first, second])] == ["T1548.001", "T1136.001"]
     assert [s["technique_id"] for s in build_kill_chain([second, first])] == ["T1136.001", "T1548.001"]
+
+
+@pytest.mark.parametrize("earlier,later", [
+    ("2026-09-26T09:00:00+09:00", "2026-09-26T01:00:00Z"),
+    ("2026-09-25T23:00:00-02:00", "2026-09-26T00:30:00-01:00"),
+    ("2026-09-26T00:00:00Z", "2026-09-26T00:00:00.100000Z"),
+    ("2026-09-26T09:00:00+0900", "2026-09-26T01:00:00+0000"),
+    ("2026-09-26T00:00:00", "2026-09-26T00:30:00Z"),
+])
+def test_timezone_aware_order_and_representative_time(earlier, later):
+    early = technique("T1505.003", "Persistence", times=[earlier])
+    late = technique("T1098.004", "Persistence", times=[later])
+    inputs = [late, early]
+    before = deepcopy(inputs)
+
+    chain = build_kill_chain(inputs)
+    assert [step["technique_id"] for step in chain] == ["T1505.003", "T1098.004"]
+    assert [step["time"] for step in chain] == [earlier, later]
+    assert inputs == before
+
+    merged = technique("T1505.003", "Persistence", times=[later, earlier])
+    assert build_kill_chain([merged])[0]["time"] == earlier
+    assert merged["times"] == [later, earlier]
+
+
+def test_equal_instants_preserve_input_order_and_original_time_spelling():
+    local = "2026-09-26T09:00:00+09:00"
+    utc = "2026-09-26T00:00:00Z"
+    first = technique("T1505.003", "Persistence", times=[local, utc])
+    second = technique("T1098.004", "Persistence", times=[utc])
+
+    chain = build_kill_chain([first, second])
+
+    assert [step["technique_id"] for step in chain] == ["T1505.003", "T1098.004"]
+    assert [step["time"] for step in chain] == [local, utc]
+
+
+def test_unparseable_times_are_retained_but_do_not_override_known_times():
+    known_time = "2026-09-26T00:00:00Z"
+    invalid = technique("T1098.004", "Persistence", times=["unknown"])
+    mixed = technique("T1505.003", "Persistence", times=["", known_time, "unknown"])
+    untimed = technique("T1053.003", "Persistence", times=[])
+    before = deepcopy([invalid, untimed, mixed])
+
+    chain = build_kill_chain([invalid, untimed, mixed])
+
+    assert [step["technique_id"] for step in chain] == ["T1505.003", "T1098.004", "T1053.003"]
+    assert [step["time"] for step in chain] == [known_time, "unknown", None]
+    assert [invalid, untimed, mixed] == before
 
 
 # --- Integration with A's real engine output ---

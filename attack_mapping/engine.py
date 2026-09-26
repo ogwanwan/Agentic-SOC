@@ -15,6 +15,7 @@ from dataclasses import asdict
 from typing import Any, Dict, List, Tuple
 
 from .schema import AttackMappingResult, MappedTechnique, MappingHit, MappingStatus, TechniqueRule
+from .matching import evidence_keywords, verdict_keywords
 
 
 def _object(value: Any, path: str) -> Dict[str, Any]:
@@ -41,7 +42,8 @@ def _strings(value: Any, path: str) -> List[str]:
 
 def _rule_json(rule: TechniqueRule) -> str:
     record = asdict(rule)
-    for name in ("attack_type_keywords", "evidence_keywords"):
+    for name in ("attack_type_keywords", "evidence_keywords", "evidence_command_keywords",
+                 "required_context_keywords", "context_subject_keywords"):
         record[name] = sorted(set(record[name]))
     return json.dumps(record, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
@@ -73,20 +75,13 @@ def mapping_table_version(rules: Iterable[TechniqueRule]) -> str:
     The prefix versions this serialization contract, not the upstream ATT&CK DB.
     """
     payload = "[" + ",".join(_rule_json(rule) for rule in _prepare_rules(rules)) + "]"
-    return "rules-v1-sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _keywords(texts: List[str], keywords: Tuple[str, ...]) -> Tuple[str, ...]:
-    normalized = [text.strip().casefold() for text in texts]
-    words = {word.strip().casefold() for word in keywords if word.strip()}
-    # Compare fields separately: joining them could manufacture a cross-field hit.
-    return tuple(sorted(word for word in words if any(word in text for text in normalized)))
+    return "rules-v2-sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _verdict_hits(attack_type: str, rules: Tuple[TechniqueRule, ...]) -> List[MappingHit]:
     hits = []
     for rule in rules:
-        keywords = _keywords([attack_type], rule.attack_type_keywords)
+        keywords = verdict_keywords(attack_type, rule)
         if keywords:
             hits.append(MappingHit(
                 rule.technique_id, rule.technique_name, rule.tactic_id, rule.tactic_name,
@@ -139,7 +134,7 @@ def _evidence_hits(
     hits = []
     for evidence in chain:
         for rule in rules:
-            keywords = _keywords([evidence["event_type"], evidence["description"]], rule.evidence_keywords)
+            keywords = evidence_keywords(evidence["event_type"], evidence["description"], rule)
             if keywords:
                 hits.append(MappingHit(
                     rule.technique_id, rule.technique_name, rule.tactic_id, rule.tactic_name,
