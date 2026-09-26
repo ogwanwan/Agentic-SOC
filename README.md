@@ -90,8 +90,10 @@ python -m tests.test_consistency --runs 3 --seed-json seed.json   # 같은 seed 
 
 기본은 Gemini(`gemini-3.5-flash-lite`, 무료 티어)다. 무료 티어의 429(요청 한도)·503(일시 과부하)은 코드가
 기다렸다 재시도하며, 하루 한도를 넘으면 다음 날(한국 시간 오후 4시경) 초기화된다.
-`LLM_PROVIDER=anthropic`으로 Claude를 고를 수 있지만, `ClaudeClient`는 아직 조사 루프 인자를 받지 않아
-전환 전에 맞춰야 한다([docs/AGENT_FLOW.md](docs/AGENT_FLOW.md) 9장).
+`LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`로 Claude로 바꿀 수 있다(모델은 `CLAUDE_MODEL`, 기본 `claude-sonnet-5`).
+Gemini와 같은 설정(출력 한도 8192, temperature 0)이고, 429·529·연결 오류는 SDK가 재시도한다. 시스템 프롬프트는
+캐시로 표시해 반복 비용을 줄이고, 호출별 토큰 사용량은 `ClaudeClient.usage_totals`에 누적된다.
+실제 Claude로 판정 재현성은 아직 검증하지 않았다 — 전환 시 같은 seed로 재검증할 것.
 
 ## 판정을 안정시키는 장치 (요약)
 

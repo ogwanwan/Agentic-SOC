@@ -231,7 +231,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 
 | 변수 | 뜻 |
 |---|---|
-| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`, `LLM_PROVIDER` | LLM (기본 gemini) |
+| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`, `LLM_PROVIDER`, `CLAUDE_MODEL` | LLM (기본 gemini, Claude 모델 기본 claude-sonnet-5) |
 | `HOST` | 결과·seed에 기록되는 수집 서버 이름 (비우면 web-01) |
 | `WEB/AUTH/AUDIT/NETWORK_LOG_LOCAL_PATH` | 읽을 로그 파일 경로 (EC2: `/var/log/...`). **필수** |
 | `RAW_LOG_LOCAL_MAX_LINES` | seed 생성 때 계층별로 볼 파일 끝 이벤트 수 |
@@ -241,7 +241,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 
 ## 9. 알려진 한계
 
-- `ClaudeClient.reason()`은 조사 루프가 넘기는 인자(`confidence_threshold` 등)를 아직 받지 않아, `LLM_PROVIDER=anthropic`으로 바꾸면 첫 턴에 오류가 난다. 출력 한도(2000)·temperature도 Gemini 설정과 다르다.
+- `LLM_PROVIDER=anthropic`(Claude)은 오프라인 테스트로만 확인했다. 실제 Claude의 판정 재현성·비용은 API 키로 측정해야 한다(`ClaudeClient.usage_totals`에 토큰 합계).
 - seed 생성은 파일 끝 N건을 보므로 새 로그가 없으면 같은 사건을 다시 고를 수 있다(1차 탐지 seed 연동 시 해소 예정).
 - `get_process_tree`는 관측된 audit 기반 추정이라 확정된 프로세스 트리가 아니다.
 - 원칙 9 기준값(POST 10회, 경로 20개)과 `.git/config` 같은 민감 파일 탐색의 판정은 팀 정책으로 정할 사항이다.
