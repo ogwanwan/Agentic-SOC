@@ -64,6 +64,7 @@ except Exception:  # pragma: no cover
 from tools.base import success, failure
 from tools.registry import register
 from common.schema import build_event
+from tools.log_sources import log_name, open_log_text
 from common.timeparse import normalize_iso
 
 # 로그 경로 (.env → 기본 Ubuntu Apache 경로)
@@ -239,7 +240,7 @@ def fetch_apache_log(
       method       : HTTP 메서드(대소문자 무시)
       exclude_self : True면 서버 자기 공인 IP(SERVER_PUBLIC_IP) 자기호출 제외
     """
-    log_name = os.path.basename(log_path)
+    name = log_name(log_path)
     filters = {
         "time_window": time_window,
         "src_ip": src_ip,
@@ -250,9 +251,9 @@ def fetch_apache_log(
     }
 
     events = []
-    with open(log_path, encoding="utf-8", errors="replace") as f:
+    with open_log_text(log_path) as f:  # 평문·.gz 모두
         for lineno, line in enumerate(f, start=1):
-            event = parse_line(line, log_name=log_name, lineno=lineno)
+            event = parse_line(line, log_name=name, lineno=lineno)
             if event is None:
                 continue
             if match_filter(event, filters):

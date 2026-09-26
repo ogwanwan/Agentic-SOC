@@ -1,0 +1,12 @@
+# 5분마다 agentic-soc.service 실행. 이전 실행이 아직 돌고 있으면 겹쳐 뜨지 않는다(oneshot).
+[Unit]
+Description=Run Agentic SOC detection every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=10s
+# 서버가 꺼져 있다 켜지면 놓친 실행을 한 번 보충
+Persistent=true
+
+[Install]
+WantedBy=timers.target

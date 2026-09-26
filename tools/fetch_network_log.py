@@ -35,6 +35,7 @@ from tools.base import success, failure
 from tools.registry import register
 from common.network import canonical_ip, raw_path_and_query
 from common.schema import build_event
+from tools.log_sources import log_name, open_log_text
 from common.timeparse import normalize_iso
 
 SURICATA_LOG_PATH = os.getenv("SURICATA_LOG_PATH", "/var/log/suricata/eve.json")
@@ -217,13 +218,13 @@ def fetch_network_log(
       flow_id     : alert↔http 조인용 flow_id(int) 정확일치
       signature   : alert.signature 부분일치
     """
-    log_name = os.path.basename(log_path)
+    name = log_name(log_path)
     filters = {
         "time_window": time_window, "src_ip": src_ip, "event_type": event_type,
         "flow_id": flow_id, "signature": signature,
     }
     events = []
-    with open(log_path, encoding="utf-8", errors="replace") as f:
+    with open_log_text(log_path) as f:  # 평문·.gz 모두
         for lineno, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
@@ -234,7 +235,7 @@ def fetch_network_log(
                 continue  # 깨진 JSON 줄은 건너뛴다
             if not isinstance(row, dict):
                 continue
-            event = normalize_row(row, log_name, lineno, sensor_id=sensor_id)
+            event = normalize_row(row, name, lineno, sensor_id=sensor_id)
             if event is None:
                 continue
             if match_filter(event, filters):

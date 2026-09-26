@@ -1,13 +1,14 @@
 # Agentic SOC — 1차 탐지
 
-Apache, Auth, Suricata, Audit 로그를 공통 Event로 정규화하고, 탐지 근거가 있는 사건(Incident)을 만드는 결정론적 파이프라인이다. 조사·트리아지는 이 단계의 범위 밖이다.
+Apache, Auth, Suricata, Audit 로그를 공통 Event로 정규화하고, 탐지 근거가 있는 사건(Incident)을 만들어 우선순위를 매기는 파이프라인이다. 탐지·사건 묶기·점수는 결정론이고, 상위 사건에만 LLM(Claude Haiku)이 조사 필요 여부를 한 줄로 덧붙인다. 심층 조사는 이 단계의 범위 밖이다.
 
 ```text
 4계층 실로그 → 정규화 Event → Sigma/Suricata Seed → 빈도 집계
-             → 계층 간 연결 → Seed가 있는 Incident → JSONL
+             → 계층 간 연결 → Seed가 있는 Incident → 파편 병합(dedup)
+             → 트리아지(점수 P1~P4 + 상위 LLM 재검토) → JSONL
 ```
 
-운영 진입점은 `run_pipeline.py`다. `tools/normalize.py`는 정규화까지만, `detect/run.py`는 Seed 생성까지만 실행한다.
+운영 진입점은 `run_pipeline.py`다. `tools/normalize.py`는 정규화까지만, `detect/run.py`는 Seed 생성까지만 실행한다. 서버에서 5분마다 자동 실행하는 방법은 [deploy/DEPLOY.md](deploy/DEPLOY.md)에 있다.
 
 ---
 
@@ -30,7 +31,8 @@ agentic-soc/
 │   ├── fetch_auth_log.py           # auth.log → auth Event
 │   ├── fetch_network_log.py        # Suricata eve.json → network Event
 │   ├── fetch_audit_log.py          # audit.log → system Event
-│   ├── normalize.py                # 4계층 Event 병합·정렬
+│   ├── normalize.py                # 4계층 Event 병합·정렬(분석 창·로테이트 파일 선택)
+│   ├── log_sources.py              # 로테이트 파일(.1, .N.gz) 찾기·gz 열기
 │   ├── base.py                     # 도구 응답 형식
 │   ├── registry.py                 # 도구 등록소
 │   └── sample_*                    # 4계층 테스트 로그
@@ -50,6 +52,7 @@ agentic-soc/
 │   ├── grouping.py                 # Linker edge 수집·클러스터·Incident 생성
 │   ├── guards.py                   # 중복·시간차 오연결 방지
 │   ├── incident.py                 # Incident 출력 형식·멤버 제한
+│   ├── dedup.py                    # 같은 entity·사유 사건 병합
 │   ├── registry.py                 # Linker 등록소
 │   ├── links/
 │   │   ├── web_network.py          # web↔network
@@ -57,7 +60,12 @@ agentic-soc/
 │   │   ├── web_system.py           # web↔system
 │   │   ├── audit_lineage.py        # system 내부 부모↔자식
 │   │   └── system_auth.py          # system↔auth
-│   └── tests/                     # Linker·사건 묶기 테스트 스크립트
+├── triage/
+│   ├── triage.py                   # 결정론 점수·우선순위(P1~P4)
+│   └── llm_review.py               # 상위 사건 LLM 재검토(키 없으면 생략)
+├── pipeline/
+│   └── state.py                    # 주기 실행 증분 상태(new/update 판정)·실행 잠금
+├── deploy/                         # systemd service·timer, 서버 배포 문서
 └── tests/
     ├── test_engine.py              # 조건 컴파일·계층별 룰 인덱싱
     ├── test_full_pipeline.py       # 파이프라인 출력·합성 4계층 공격 체인
@@ -130,7 +138,20 @@ python -u run_pipeline.py \
 | `--window` | 개별 Seed의 시간 반경(기본 60초) |
 | `--min-count` | 룰별 설정이 없는 low/medium Seed의 최소 탐지 수(기본 5) |
 | `--no-require-seed` | 탐지 Seed가 없는 연결 클러스터도 Incident로 출력 |
+| `--min-priority` | 지정 우선순위 이상만 저장(예: `P2`) |
 | `--show` | 콘솔에 보여줄 다계층 Incident 수(기본 10) |
+| `--since-minutes` | 최근 N분만 분석. 로테이트 파일(`.1`, `.N.gz`) 중 창 시작 이후 수정된 파일도 읽음 |
+| `--now` | 분석 기준 시각(기본 현재 UTC). 샘플 재현·테스트용 |
+| `--state-dir` | 증분 상태 디렉터리. 지정하면 새로 생겼거나 바뀐 사건만 고르고, LLM 재검토도 그 사건에만 함 |
+| `--emit-dir` | 고른 사건을 `incidents-YYYY-MM-DD.jsonl`에 append(`--state-dir` 필요) |
+
+서버 주기 실행 예(샘플 로그로 재현하려면 `--now 2026-09-18T00:00:00Z --since-minutes 7200`):
+
+```bash
+python -u run_pipeline.py --since-minutes 60 --state-dir /var/lib/agentic-soc --emit-dir /var/lib/agentic-soc/incidents
+```
+
+같은 명령을 다시 실행하면 이미 낸 사건은 다시 나오지 않는다. 각 줄의 `emit_type`은 `new` 또는 `update`이고, 실행 간 같은 사건은 `incident_key`로 알아본다. 자세한 내용은 [deploy/DEPLOY.md](deploy/DEPLOY.md).
 
 `python tools/normalize.py`는 정규화까지만, `python detect/run.py --out-seeds out/seeds.jsonl`는 원본 Seed 생성까지만 실행한다. `detect/run.py` 전용 `--web-strong-window` 등의 옵션은 `run_pipeline.py`에 적용되지 않는다.
 
@@ -192,7 +213,7 @@ PYTHONIOENCODING=utf-8 python -m unittest discover -s tests -p 'test_*.py'
 PYTHONIOENCODING=utf-8 python tests/test_full_pipeline.py
 ```
 
-Windows PowerShell에서는 먼저 `$env:PYTHONIOENCODING = 'utf-8'`을 설정한 뒤 `python -m unittest discover -s tests -p 'test_*.py'`를 실행한다. `test_full_pipeline.py`는 설정된 로그를 읽고 코드 안의 합성 4계층 웹셸 체인을 추가 검증한다. 운영의 빈도 집계와 `require_seed=True`는 위의 `run_pipeline.py` 명령으로 확인한다. `correlate/tests/`의 스크립트는 개별 실행한다(예: `python correlate/tests/test_grouping.py`).
+Windows PowerShell에서는 먼저 `$env:PYTHONIOENCODING = 'utf-8'`을 설정한 뒤 `python -m unittest discover -s tests -p 'test_*.py'`를 실행한다. `test_full_pipeline.py`는 설정된 로그를 읽고 코드 안의 합성 4계층 웹셸 체인을 추가 검증한다. 운영의 빈도 집계와 `require_seed=True`는 위의 `run_pipeline.py` 명령으로 확인한다. `test_full_pipeline.py`는 `.env`(또는 `*_LOG_PATH` 환경변수)가 없으면 이벤트 0건으로 실패한다. `tests/`의 스크립트형 테스트는 개별 실행도 된다(예: `python tests/test_grouping.py`).
 
 로컬 및 EC2 Python 3.10에서 테스트 51개가 통과했다. EC2 실로그 실행에서는 정규화 이벤트 102,889건 → 원본 Seed 1,928건 → 집계 Seed 87건 → Incident 33건을 확인했다. 해당 데이터에서 전체 실행 시간은 약 56초였다. 로그 양과 시점에 따라 수치는 달라진다.
 
