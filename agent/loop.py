@@ -423,6 +423,7 @@ class InvestigationAgent:
         - 웹 서버 계정의 의심 명령 실행이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만
         - 원칙 7(로그인 성공 없음) 무차별 대입 기준 충족인데 FALSE_POSITIVE/INCONCLUSIVE, 또는 단발성
           실패·접속 탐침뿐이고 다른 위협 기준도 없는데 THREAT_CONFIRMED/INCONCLUSIVE
+        - 원칙 7 무차별 대입(로그인 성공 없음)이고 다른 위협 기준도 없는데 severity가 HIGH 이상
         """
         verdict = (final_verdict or {}).get("verdict")
         severity = str((final_verdict or {}).get("severity") or "").upper()
@@ -472,6 +473,16 @@ class InvestigationAgent:
                 conflicts.append(
                     f"원칙 7 기준 충족({worst['src_ip']}: 실패 {worst['failures']}회·계정 {worst['accounts']}개)인데 "
                     "INCONCLUSIVE로 판정함. 원칙 7에 따라 THREAT_CONFIRMED(SSH 무차별 대입 시도)로 판정하십시오"
+                )
+            # 로그인 성공이 없는 무차별 대입은 계정 수·횟수가 많아도 침해가 일어나지 않았으므로 LOW~MEDIUM.
+            # EC2 사건(31개 계정·76회 실패, 성공 0회)에서 LLM이 규모만 보고 HIGH를 매겼다. HIGH 이상은 다른
+            # 계층에서 침해 기준(웹셸 신호 등)이 확인된 사건에만 쓴다.
+            if (worst["bruteforce"] and not other_threat and verdict == VerdictType.THREAT_CONFIRMED.value
+                    and severity in ("HIGH", "CRITICAL")):
+                conflicts.append(
+                    f"원칙 7: 로그인 성공이 없는 무차별 대입({worst['src_ip']}: 실패 {worst['failures']}회·계정 "
+                    f"{worst['accounts']}개)인데 severity를 {severity}로 판정함. 침해가 일어나지 않았으므로 계정 수·"
+                    "횟수와 관계없이 severity는 LOW 또는 MEDIUM으로 판정하십시오"
                 )
         return conflicts
 

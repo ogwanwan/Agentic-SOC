@@ -476,6 +476,23 @@ def test_gate_rejects_verdicts_contradicting_tool_facts():
     assert any("웹 서버 계정의 의심 명령 실행 1건" in n for n in result["investigation_notes"])
 
 
+def test_bruteforce_without_login_success_cannot_be_high_severity():
+    """EC2 2026-09-26: 31개 계정·76회 실패, 성공 0회를 HIGH로 판정 → 원칙 7(LOW~MEDIUM)과 충돌하면 거부."""
+    brute = {"rule": "principle_7", "src_ip": SEED["src_ip"], "failures": 76, "accounts": 31, "successes": 0,
+             "probes": 0, "bruteforce": True, "sporadic": False}
+    auth = lambda _args: {"count": 76, "summary": "auth", "records": [], "window_total": 90, "rule_checks": [brute]}
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_auth_log": auth})
+    high = _terminate("confidence_sufficient", 0.9)
+    high["final_verdict"] = {**high["final_verdict"], "severity": "HIGH"}
+    medium = _terminate("confidence_sufficient", 0.9)
+    medium["final_verdict"] = {**medium["final_verdict"], "severity": "MEDIUM"}
+    llm = RecordingLLM([_call("fetch_auth_log"), _call("fetch_audit_log"), high, medium])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(
+        {**SEED, "confidence_initial": 0.9})
+    assert result["final_verdict"]["severity"] == "MEDIUM"
+    assert any("severity를 HIGH로" in n for n in result["investigation_notes"])
+
+
 def _fp(reason="confidence_sufficient", conf=0.8):
     d = _terminate(reason, conf)
     d["final_verdict"] = {**d["final_verdict"], "verdict": "FALSE_POSITIVE"}

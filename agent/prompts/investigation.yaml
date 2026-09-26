@@ -201,6 +201,8 @@ principles:
         "해당 없음"으로 적고, Q1의 전체 실패 횟수로만 판정합니다.
         - 같은 src_ip에서 실패 5회 이상, 또는 2개 이상의 서로 다른 계정 대상 → THREAT_CONFIRMED
           (attack_type은 "SSH 무차별 대입 시도", severity LOW~MEDIUM, confidence 0.75~0.85).
+          로그인 성공이 없으므로 대상 계정 수나 실패 횟수가 아무리 많아도 severity를 HIGH 이상으로 올리지
+          마십시오 — HIGH 이상은 다른 계층에서 침해(명령 실행·웹셸 등)가 확인된 경우에만 씁니다.
           summary에 "로그인 성공은 없어 계정 침해는 발생하지 않았다"를 반드시 명시합니다.
         - 실패 1~4회이고 단일 계정 대상 → FALSE_POSITIVE (단발성 실패, confidence 0.75~0.85).
         - 실패 0회이고 접속 흔적만 있음(ssh_probe 등 계정 없이 끊긴 연결 = 인터넷 스캐너 탐침)
