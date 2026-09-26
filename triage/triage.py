@@ -42,7 +42,7 @@ def triage_score(incident):
     parts = {
         "severity": _severity_points(incident),
         "layers": 6 * max(0, layer_count - 1),  # 계층 체인 가산(단일계층=0)
-        "join_types": 3 * len({e.get("join") for e in incident.get("join_path", []) or []}),
+        "join_types": 3 * len({e.get("join") for e in incident.get("join_path", []) or [] if e.get("join")}),
         "seed_count": min(2 * (len(seeds) - 1), 8) if seeds else 0,
     }
     return sum(parts.values()), parts

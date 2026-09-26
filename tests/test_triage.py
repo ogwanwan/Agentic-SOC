@@ -36,6 +36,13 @@ def _run():
     assert score == 65, f"가산 합 실패: {score} {parts}"
     assert route(score)[0] == "P1"
 
+    # 2-b) 버그#1: join 키 없는 edge 는 연결 종류로 안 센다(예전엔 None 이 1종으로 +점수)
+    inc = {"incident_id": "j1", "entity": {"type": "src_ip", "value": "1.2.3.4"},
+           "window": ["a", "b"], "layers": ["web"], "members": ["x"], "member_count": 1,
+           "oversized": False, "join_path": [{"a": "x", "b": "y"}],  # join 키 없음
+           "seeds": [{"score_parts": {"rule_severity": "high"}}]}
+    assert triage_score(inc)[1]["join_types"] == 0, "join 키 없는 edge 가 카운트됨"
+
     # 3) low 단발·단일계층 → P4 (<8): 3(low) + 10?  단일계층은 +10 → 13 = P3. 계층 0이면 3=P4.
     #    layers 빈 + low seed → 3점 → P4
     inc = _inc("c3", [], [], ["low"])

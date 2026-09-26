@@ -21,6 +21,9 @@ def _run():
     assert _parse('설명... [{"incident_id":"x","investigate":true,"reason":"r"}] 끝') == \
         [{"incident_id": "x", "investigate": True, "reason": "r"}]
     assert _parse("no json here") == []
+    # 1-b) 버그#3: 배열 뒤에 또 다른 [..] 나 인용이 붙어도 첫 배열만 파싱(rfind 방식은 여기서 깨졌음)
+    assert _parse('[{"incident_id":"a","investigate":true,"reason":"웹셸[1] 참고"}] 추가설명 [1]') == \
+        [{"incident_id": "a", "investigate": True, "reason": "웹셸[1] 참고"}]
 
     # 2) 가짜 call 주입 → P1/P2 만 llm 필드 부착, P3 는 손 안 댐
     seen = {}
@@ -51,6 +54,14 @@ def _run():
     long = llm_review([_inc("a", "P1")],
                       call=lambda d: [{"incident_id": "a", "investigate": True, "reason": "가" * 500}])
     assert len(long[0]["llm_reason"]) == 200
+
+    # 6) 버그#2: investigate 가 문자열 "false" 로 와도 False 로 처리(예전엔 truthy 라 True)
+    s = llm_review([_inc("a", "P1")],
+                   call=lambda d: [{"incident_id": "a", "investigate": "false", "reason": "정상"}])
+    assert s[0]["llm_investigate"] is False, "문자열 'false' 가 True 로 샜음"
+    s = llm_review([_inc("b", "P1")],
+                   call=lambda d: [{"incident_id": "b", "investigate": "true", "reason": "의심"}])
+    assert s[0]["llm_investigate"] is True
 
     print("test_llm_review OK →", [(i["incident_id"], i.get("llm_investigate")) for i in out])
 
