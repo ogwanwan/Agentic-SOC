@@ -143,7 +143,7 @@ python -u run_pipeline.py \
 | `--since-minutes` | 최근 N분만 분석. 로테이트 파일(`.1`, `.N.gz`) 중 창 시작 이후 수정된 파일도 읽음 |
 | `--now` | 분석 기준 시각(기본 현재 UTC). 샘플 재현·테스트용 |
 | `--state-dir` | 증분 상태 디렉터리. 지정하면 새로 생겼거나 바뀐 사건만 고르고, LLM 재검토도 그 사건에만 함 |
-| `--emit-dir` | 고른 사건을 `incidents-YYYY-MM-DD.jsonl`에 append(`--state-dir` 필요) |
+| `--emit-dir` | 고른 사건을 실행마다 `YYYY-MM-DD/HHMMSS-<run_id>.jsonl` 파일 하나로 저장. 보고할 사건이 없으면 파일을 만들지 않음(`--state-dir` 필요) |
 
 서버 주기 실행 예(샘플 로그로 재현하려면 `--now 2026-09-18T00:00:00Z --since-minutes 7200`):
 
@@ -151,7 +151,7 @@ python -u run_pipeline.py \
 python -u run_pipeline.py --since-minutes 60 --state-dir /var/lib/agentic-soc --emit-dir /var/lib/agentic-soc/incidents
 ```
 
-같은 명령을 다시 실행하면 이미 낸 사건은 다시 나오지 않는다. 각 줄의 `emit_type`은 `new` 또는 `update`이고, 실행 간 같은 사건은 `incident_key`로 알아본다. 자세한 내용은 [deploy/DEPLOY.md](deploy/DEPLOY.md).
+같은 명령을 다시 실행하면 이미 낸 사건은 다시 나오지 않는다. 각 줄의 `emit_type`은 `new` 또는 `update`이고, 실행 간 같은 사건은 `incident_key`로 알아본다. 조사 에이전트는 `--emit-dir` 아래에 새로 생긴 `*.jsonl` 파일을 가져가면 된다(인계 규칙은 [deploy/DEPLOY.md](deploy/DEPLOY.md) 6절).
 
 `python tools/normalize.py`는 정규화까지만, `python detect/run.py --out-seeds out/seeds.jsonl`는 원본 Seed 생성까지만 실행한다. `detect/run.py` 전용 `--web-strong-window` 등의 옵션은 `run_pipeline.py`에 적용되지 않는다.
 

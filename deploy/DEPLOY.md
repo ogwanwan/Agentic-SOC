@@ -1,7 +1,7 @@
 # 서버 배포 — 5분 주기 자동 탐지
 
 로그가 쌓이는 EC2(Ubuntu)에 파이프라인을 올리고, systemd timer로 5분마다 실행한다.
-매번 **최근 60분**을 다시 분석하고, **새로 생겼거나 바뀐 Incident만** 날짜별 JSONL 파일에 덧붙인다.
+매번 **최근 60분**을 다시 분석하고, **새로 생겼거나 바뀐 Incident만** 실행별 JSONL 파일로 저장한다. 조사 에이전트는 새로 생긴 파일을 가져간다.
 
 ```text
 agentic-soc.timer (5분마다)
@@ -10,7 +10,7 @@ agentic-soc.timer (5분마다)
             ├─ 로그 4종 + 로테이트 파일(.1, .N.gz) 중 최근 60분만 정규화
             ├─ 탐지 → 사건 묶기 → 트리아지
             ├─ state.json과 비교해 new/update만 선택 → 그 사건만 LLM 재검토
-            └─ incidents/incidents-YYYY-MM-DD.jsonl에 append
+            └─ incidents/YYYY-MM-DD/HHMMSS-<run_id>.jsonl 저장 (보고할 사건이 있을 때만)
 ```
 
 ## 왜 이 방식인가
@@ -111,12 +111,27 @@ systemctl list-timers agentic-soc.timer       # 다음 실행 시각
 - `[normalize] 경고`가 없는지
 - `[timing] 합계`가 5분(300초)보다 충분히 짧은지. `TimeoutStartSec=240`을 넘기면 실행이 강제 종료된다.
 
-## 6. 결과 읽기
+## 6. 결과 읽기와 조사 에이전트 인계
+
+실행 1회당 파일 1개가 날짜(UTC) 폴더에 생긴다. 보고할 사건이 없는 실행은 파일을 만들지 않는다.
+
+```text
+/var/lib/agentic-soc/incidents/
+└── 2026-09-26/
+    ├── 074915-12d5605ecf1a.jsonl     # 실행 시각(UTC HHMMSS)-run_id
+    └── 081005-a3f9c1e27b44.jsonl
+```
 
 ```bash
-ls /var/lib/agentic-soc/incidents/
-tail -f /var/lib/agentic-soc/incidents/incidents-$(date -u +%F).jsonl
+ls -R /var/lib/agentic-soc/incidents/ | tail
+cat /var/lib/agentic-soc/incidents/$(date -u +%F)/*.jsonl
 ```
+
+**조사 에이전트 인계 규칙**
+- `*.jsonl` 파일만 가져간다. 점(`.`)으로 시작하는 `.….tmp` 파일은 쓰는 중인 임시 파일이므로 무시한다.
+- 파일은 임시 이름으로 다 쓴 뒤 한 번에 이름을 바꿔 나타나므로, 보이는 `*.jsonl`은 항상 완성된 파일이다.
+- 한번 생긴 파일은 파이프라인이 다시 고치지 않는다. 같은 날짜 폴더 안에서 파일 이름순이 곧 시간순이다.
+- 처리한 파일은 에이전트가 다른 폴더로 옮기거나 지워서 중복 처리를 막는다. 어디까지 처리했는지 따로 기억하는 방식도 가능하다.
 
 한 줄이 Incident 한 건이다. 기존 Incident 필드에 다음 필드가 추가된다.
 
@@ -127,7 +142,7 @@ tail -f /var/lib/agentic-soc/incidents/incidents-$(date -u +%F).jsonl
 | `emitted_at` | 이 줄을 쓴 실행의 기준 시각(UTC) |
 | `run_id` | 실행 식별자 |
 
-같은 사건의 최신 상태는 같은 `incident_key`의 마지막 줄이다. 공격이 계속되면 5분마다 `update` 줄이 추가될 수 있다.
+같은 사건의 최신 상태는 같은 `incident_key`를 가진 가장 최근 파일의 줄이다. 공격이 계속되면 5분마다 `update`가 담긴 파일이 새로 생길 수 있다.
 
 ## 7. 운영
 
@@ -137,7 +152,7 @@ tail -f /var/lib/agentic-soc/incidents/incidents-$(date -u +%F).jsonl
 | 일시 중지 / 재개 | `sudo systemctl stop agentic-soc.timer` / `start` |
 | 코드 업데이트 | `cd /opt/agentic-soc && sudo git pull && sudo .venv/bin/pip install -r requirements.txt` (타이머는 그대로) |
 | 상태 초기화 | `sudo rm /var/lib/agentic-soc/state.json` → 다음 실행에서 최근 60분 사건이 전부 `new`로 다시 나감 |
-| 결과 보관 정리 | `sudo find /var/lib/agentic-soc/incidents -name 'incidents-*.jsonl' -mtime +30 -delete` |
+| 결과 보관 정리 | `sudo find /var/lib/agentic-soc/incidents -name '*.jsonl' -mtime +30 -delete && sudo find /var/lib/agentic-soc/incidents -mindepth 1 -type d -empty -delete` |
 
 상태 파일은 24시간 동안 다시 보이지 않은 사건을 스스로 정리한다.
 

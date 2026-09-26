@@ -8,7 +8,7 @@ Incident 까지 잇는 엔드투엔드 러너다(새 로직 없이 기존 함수
   python run_pipeline.py --audit tools/sample_audit.log   # 특정 계층 경로만 덮어쓰기
   python run_pipeline.py --out-incidents out/incidents.jsonl
 
-운영(주기 실행) 모드 — 최근 N분만 로테이트 파일까지 읽고, 새로 생겼거나 바뀐 사건만 append:
+운영(주기 실행) 모드 — 최근 N분만 로테이트 파일까지 읽고, 새로 생겼거나 바뀐 사건만 실행별 파일로 저장:
   python run_pipeline.py --since-minutes 60 --state-dir /var/lib/agentic-soc --emit-dir /var/lib/agentic-soc/incidents
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ def main() -> int:
                     help="최근 N분만 분석(로테이트 파일 포함). 미지정 시 파일 전체")
     ap.add_argument("--now", help="기준 시각 ISO8601(기본: 현재 UTC). 샘플 재현·테스트용")
     ap.add_argument("--state-dir", help="증분 상태 디렉터리. 지정 시 새로 생겼거나 바뀐 사건만 내보내고 LLM 재검토도 그 사건만")
-    ap.add_argument("--emit-dir", help="내보낼 사건을 incidents-YYYY-MM-DD.jsonl 로 append 할 디렉터리(--state-dir 필요)")
+    ap.add_argument("--emit-dir", help="내보낼 사건을 실행마다 YYYY-MM-DD/HHMMSS-<run_id>.jsonl 로 쓸 디렉터리(--state-dir 필요)")
     args = ap.parse_args()
     if args.emit_dir and not args.state_dir:
         ap.error("--emit-dir 는 --state-dir 와 함께 써야 한다")
@@ -135,7 +135,7 @@ def run(args, now) -> int:
         lap("triage")
         if args.emit_dir and emits:
             path = write_emits(args.emit_dir, emits, now)
-            print(f"[emit] {len(emits)}건 추가: {path}")
+            print(f"[emit] {len(emits)}건 저장: {path}")
         save_state(args.state_dir, new_state)  # 쓰기 성공 뒤에 저장 — 도중에 죽으면 다음 실행이 다시 낸다
     else:
         # ④-b 트리아지 뒷단(LLM): 상위(P1~P2) 사건을 경량 LLM(Claude Haiku)으로 재검토 —
@@ -167,15 +167,26 @@ def run(args, now) -> int:
 
 
 def write_emits(emit_dir, emits, now):
-    """내보낼 사건을 날짜별 JSONL 에 append. 각 줄에 emit_type·emitted_at·run_id·incident_key 를 붙인다."""
-    Path(emit_dir).mkdir(parents=True, exist_ok=True)
-    path = Path(emit_dir) / f"incidents-{now.astimezone(timezone.utc):%Y-%m-%d}.jsonl"
+    """내보낼 사건을 실행 1회당 파일 1개로 쓴다: <emit_dir>/YYYY-MM-DD/HHMMSS-<run_id>.jsonl
+
+    조사 에이전트가 "새 파일이 생기면 가져가는" 인계 방식이다. 숨김 임시 파일(.….tmp)에 다 쓴 뒤
+    os.replace 로 이름을 바꾸므로, 가져가는 쪽에는 완성된 *.jsonl 만 보인다(쓰다 만 파일 없음).
+    각 줄에 emit_type·emitted_at·run_id·incident_key 를 붙인다.
+    """
+    utc = now.astimezone(timezone.utc)
+    day_dir = Path(emit_dir) / f"{utc:%Y-%m-%d}"
+    day_dir.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex[:12]
-    emitted_at = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with open(path, "a", encoding="utf-8") as fh:
+    path = day_dir / f"{utc:%H%M%S}-{run_id}.jsonl"
+    tmp = day_dir / f".{path.name}.tmp"
+    emitted_at = utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(tmp, "w", encoding="utf-8") as fh:
         for kind, inc in emits:
             row = dict(inc, emit_type=kind, emitted_at=emitted_at, run_id=run_id, incident_key=incident_key(inc))
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
     return path
 
 
