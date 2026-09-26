@@ -48,11 +48,15 @@ def _digest(inc):
 
 
 def _parse(text):
-    """관대한 JSON 파싱: 첫 '[' ~ 마지막 ']' 만 떼어 배열로(모델이 앞뒤 말 붙여도 견딤)."""
-    i, j = text.find("["), text.rfind("]")
-    if i == -1 or j == -1 or j < i:
+    """관대한 JSON 파싱: 첫 '[' 부터 첫 완결 배열만 디코드(뒤에 설명·[1] 인용 붙어도 무시)."""
+    i = text.find("[")
+    if i == -1:
         return []
-    return json.loads(text[i:j + 1])
+    try:
+        arr, _ = json.JSONDecoder().raw_decode(text[i:])
+    except ValueError:
+        return []
+    return arr if isinstance(arr, list) else []
 
 
 def _default_call(digests):
@@ -94,6 +98,9 @@ def llm_review(incidents, call=None, priorities=REVIEW_PRIORITIES, max_review=MA
         v = by_id.get(inc.get("incident_id"))
         if v is None:
             continue
-        inc["llm_investigate"] = bool(v.get("investigate"))
+        inv = v.get("investigate")
+        if isinstance(inv, str):  # "false"/"true" 문자열도 올바로 해석(비어있지않은 문자열=True 방지)
+            inv = inv.strip().lower() in ("true", "1", "yes", "y")
+        inc["llm_investigate"] = bool(inv)
         inc["llm_reason"] = (v.get("reason") or "").strip()[:200]
     return incidents
