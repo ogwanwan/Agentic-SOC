@@ -38,6 +38,9 @@ principles:
         (system은 audit) 도구로 원본을 조회하고, raw_observations_since_last_turn의 records에서 확인한
         뒤 그 records의 raw_ref를 인용해 evidence로 기록하십시오. 1차 탐지 참조만 인용하고 그 계층을
         조회하지 않으면 종료가 거부됩니다.
+      - detection.rules의 룰마다 그 탐지 근거(evidence_refs) 원본을 도구로 확인하십시오. 한 룰이 가리키는
+        행위(예: 권한 상승 뒤 계정 생성)를 확인하지 않고 끝내면 사건의 범위를 놓칩니다. 조회해도 원본을
+        찾을 수 없으면 unknowns에 룰 이름과 이유를 남기십시오. 확인도 unknowns도 없으면 종료가 거부됩니다.
 
   - id: 2
     title: 동적 도구 선택
@@ -89,7 +92,8 @@ principles:
       - 서로 다른 계층(도구)을 2종류 이상 확인했을 것
       - seed에 src_ip가 있으면 network 계층을 최소 1회 확인했을 것
       - evidence에 인용한 1차 탐지 참조(detection.rules[].evidence_refs)의 계층을 도구로 확인했을 것
-        (이 조건은 no_more_evidence 종료에도 적용됩니다)
+      - detection.rules의 룰마다 탐지 근거 원본을 도구 결과에서 확인했거나 unknowns에 남겼을 것
+        (이 두 조건은 no_more_evidence 종료에도 적용됩니다)
       seed에 src_ip가 있으면 시스템이 첫 턴 전에 fetch_network_log(ip=src_ip, 사건 구간 앞뒤
       30분)를 자동으로 한 번 실행해 둡니다. ip는 출발지·목적지 양쪽을 모두 봅니다. 사전 조회는
       대표 레코드 20건만 돌려주고, 전체 규모·경보·목적지는 summary의 [조회 구간 전체 집계]에 있습니다.
@@ -125,8 +129,13 @@ principles:
       - auth → audit: auth 레코드의 sshd pid는 로그인 세션의 pid입니다. 그 세션에서 실행된
         명령은 세션의 자식 프로세스이므로 fetch_audit_log에 ppid=<세션 pid>로 조회하십시오.
       - web → audit/network: 같은 src_ip와 시간대로 조회하십시오.
+      - audit 프로세스 체인: 자식 프로세스는 fetch_audit_log에 ppid=<부모 pid>로 조회합니다. sudo·su로 권한을
+        올린 뒤 실행된 명령(계정 생성, 설정 변경 등)은 sudo 프로세스의 자식이므로, 웹 서버 프로세스의 자식에서
+        sudo가 보이면 ppid=<sudo pid>로 한 단계 더 내려가 확인하십시오. get_process_tree는 부모(조상) 방향만 보여줍니다.
       - 서버에서 외부로 나간 통신: fetch_network_log에 dst_ip=<외부 IP>로 조회하십시오.
         src_ip는 패킷 출발지이므로 외부 IP를 src_ip로 넣으면 아웃바운드 통신이 잡히지 않습니다.
+        ip/src_ip/dst_ip에는 IP 주소만 쓸 수 있습니다. 명령에 도메인만 있으면(curl https://example.com/...)
+        IP 필터 없이 그 시간 구간으로 조회해 http 이벤트의 hostname과 dest_ip를 확인하십시오.
 
   - id: 6
     title: 권한 사용(sudo) 사건과 audit 단독 증거의 함정

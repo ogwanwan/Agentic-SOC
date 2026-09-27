@@ -74,6 +74,7 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
     1차 탐지가 준 단서일 뿐 근거가 아니다.
   - `detection.rules[].detail`의 명령·경로를 그대로 증거로 옮기지 않는다. 그 룰의 계층 도구로 원본을 조회해
     records에서 확인한 뒤 그 raw_ref를 인용한다(2026-09-27).
+  - 1차 탐지 룰마다 탐지 근거 원본을 도구로 확인하고, 찾을 수 없으면 unknowns에 룰 이름과 이유를 남긴다(2026-09-27).
 
 **왜 생겼나**
 - **severity_hint 오염**: 0918에 실제 자동 생성 seed(INC-001)로 반복 실행했더니, seed의 초기 추정치가
@@ -84,6 +85,9 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
   LLM이 `detection`의 `sh -c curl ...`, `sudo su`, `useradd ...`를 첫 턴에 그대로 증거로 적어 신뢰도 1.0을 채우고,
   audit은 한 번도 조회하지 않은 채 THREAT_CONFIRMED로 끝냈다. 1차 탐지 참조는 관측된 참조로 등록되므로 원본
   추적도 passed였다. 판정은 맞았지만 1차 탐지 결과를 다시 확인하지 않고 받아 적은 것이라 종료 관문 (g)로 막는다.
+- **1차 탐지 룰 일부 누락**: (g)를 넣은 뒤 재실행에서는 audit부터 제대로 조회했지만(pid=1200 → ppid=1200), sudo(pid 5320)의
+  자식인 `useradd -m -G sudo svcbackup`(pid 5501)과 auth의 계정 생성 기록은 확인하지 않고 끝냈다. 1차 탐지가 두 룰로
+  탐지한 지속성 확보 행위가 조사 결과에서 빠진 것이라 룰마다 확인(또는 unknowns 기록)을 요구하는 관문 (h)를 더했다.
 
 **코드 뒷받침**
 - 도구가 `window_total`(필터 전 구간 전체 건수)을 돌려주고, 0이면 summary에 "로그 기록 자체가 없음"을 붙인다.
@@ -154,13 +158,18 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
 **지시**: 계층별로 따로 결론 내지 말고 한 공격 시나리오로 엮는다. 한 계층에서 얻은 IP·시간·프로세스를 다음 조회 조건으로 쓴다.
 - auth → audit: 로그인 세션의 sshd pid로 `fetch_audit_log(ppid=<pid>)` — 세션에서 실행한 명령은 그 pid의 자식이다.
 - web → audit/network: 같은 src_ip·시간대.
+- audit 프로세스 체인: 자식은 `fetch_audit_log(ppid=<부모 pid>)`. sudo·su 뒤 명령은 sudo의 자식이라 `ppid=<sudo pid>`로
+  한 단계 더 내려간다. `get_process_tree`는 조상 방향만 보여 준다(2026-09-27 추가).
 - 서버에서 외부로 나간 통신: `dst_ip=<외부 IP>` (외부 IP를 src_ip로 넣으면 아웃바운드가 안 잡힌다).
+  ip 필터에는 IP만 쓴다. 명령에 도메인만 있으면 IP 필터 없이 구간으로 조회해 http 이벤트의 hostname·dest_ip를 본다.
 
 **왜 생겼나**: "조인 엔진" 코드 없이 LLM이 계층을 연결하도록 한 설계. 0918 시나리오 비교에서 audit을
 `user=ubuntu`로 조회해 0건이 나왔는데, audit의 `user`는 실행 계정(sudo 뒤에는 root)이라 세션 명령이 빠졌다.
 
 **코드 뒷받침**: 로그인 성공이 보이는데 audit을 안 보면 종료 관문이 거부하고 사유에 `ppid=<sshd pid>`를 적어 준다.
-network 사전 조회는 방향 무관 `ip` 필터를 써서 역방향 셸도 잡는다.
+network 사전 조회는 방향 무관 `ip` 필터를 써서 역방향 셸도 잡는다. 1차 탐지 룰의 자식 프로세스 행위를 놓치면
+관문 (h)가 룰 이름과 pid/ppid를 적어 거부한다. network 도구는 ip 필터에 도메인이 오면 오류를 돌려준다(2026-09-27
+실제 실행에서 `ip="raw.githubusercontent.com"`이 조용히 0건이었다).
 
 ### 원칙 6. 권한 사용(sudo) 사건과 audit 단독 증거의 함정
 
@@ -336,7 +345,7 @@ LLM은 매 턴 이 JSON 하나로 답한다.
 |---|---|---|---|
 | 1 로그 미확보 | 원칙 1 | 도구 `window_total`, `log_source.filtered_out_hint()` | `loop._verdict_conflicts()` |
 | 2 조회 구간 | 원칙 2 | `prompts.layer_query_windows()` | — |
-| 1 1차 탐지 단서 확인 | 원칙 1·2·4 | `incident_input.to_investigation_seed()`(detection 요약) | `_termination_rejections()` (g) `_unverified_detection_refs()` |
+| 1 1차 탐지 단서 확인 | 원칙 1·2·4 | `incident_input.to_investigation_seed()`(detection 요약) | `_termination_rejections()` (g) `_unverified_detection_refs()`, (h) `_unverified_detection_rules()` |
 | 4 종료 조건·사전 조회 | 원칙 4 | `loop.network_precheck_args()`, `fetch_audit_log.command_external_ips()` | `loop._termination_rejections()` (a)–(d), (f) |
 | 5 로그인 후 audit | 원칙 5 | — | `_termination_rejections()` (e) |
 | 7 SSH | 원칙 7 | `fetch_auth_log.principle7_check()` | `_verdict_conflicts()`, `_rule_determined_verdict()` |

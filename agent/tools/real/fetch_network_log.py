@@ -30,6 +30,8 @@
   - dst_ip → dest_ip, src_port → transport_src_port, dst_port → transport_dest_port
   - protocol: 대소문자 무시 일치
   - alert_only: event_type == "alert"인 이벤트만
+  ip/src_ip/dst_ip에 IP가 아닌 값(도메인 등)을 넣으면 오류로 알린다. 예전엔 조용히 0건이라 LLM이
+  "통신 없음"으로 읽을 수 있었다(2026-09-27 실제 실행: ip="raw.githubusercontent.com").
 
 direction(internal/outbound/inbound)은 계산하지 않는다 — 호스트 IP 사전 등록 단계가
 우리 시스템엔 없고, 공통 정규화 스키마에도 그 필드가 없다.
@@ -39,6 +41,7 @@ direction(internal/outbound/inbound)은 계산하지 않는다 — 호스트 IP 
 
 from __future__ import annotations
 
+import ipaddress
 from collections import Counter
 from typing import Any, Dict, List
 
@@ -96,6 +99,14 @@ def fetch_network_log(args: Dict[str, Any]) -> Dict[str, Any]:
     start_time = args["start_time"]
     end_time = args["end_time"]
     limit, offset = pagination(args)
+    for key in ("ip", "src_ip", "dst_ip"):
+        if args.get(key) is not None:
+            try:
+                ipaddress.ip_address(str(args[key]))
+            except ValueError:
+                raise ValueError(f"{key}에는 IP 주소만 쓸 수 있습니다({args[key]!r}). 도메인은 network 조회 조건이 "
+                                 "될 수 없으니 다른 계층 결과에 나온 IP를 쓰거나, IP 없이 구간으로 조회해 http 이벤트의 "
+                                 "hostname을 확인하십시오") from None
 
     # [33] → log_source.load_window_events(): 파일 읽기 → [34] 1차 탐지팀 정규화 → 구간 안 이벤트
     loaded = load_window_events("network", host, start_time, end_time)

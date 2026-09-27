@@ -151,6 +151,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 | (e) 로그인 후 행위 | strict | seed src_ip의 로그인 성공이 보이는데 audit을 안 봄. 사유에 `ppid=<sshd pid>` 안내 |
 | (f) 명령의 외부 IP | strict | audit 명령 인자에 나온 공인 IP(`fetch_audit_log.command_external_ips()`, 최대 3개)를 network로 조회하지 않음. 사유에 `fetch_network_log(ip=<IP>)` 안내 |
 | (g) 1차 탐지 참조 확인 | strict | 증거가 인용한 1차 탐지 참조(`detection.rules[].evidence_refs`)를 도구로 관측하지 않았고 그 계층(system = audit)을 한 번도 조회하지 않음. 사유에 계층별 도구 안내. 직접 작성한 사건(계층 정보 없음)은 제외 |
+| (h) 1차 탐지 룰별 확인 | strict | 1차 탐지 룰 중 탐지 근거 원본을 도구 결과에서 하나도 관측하지 못했고 `unknowns`에도 룰 이름·참조가 없는 것이 있음. 사유에 룰 이름·계층·pid/ppid 안내 |
 | 판정-원칙 충돌 | strict | 아래 표 |
 
 판정-원칙 충돌 (`_verdict_conflicts`):

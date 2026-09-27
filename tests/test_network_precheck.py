@@ -596,7 +596,10 @@ def test_detection_refs_require_their_layer_before_termination():
     copied = {"description": "php-fpm이 웹루트에 is.php 작성", "layer": "process",
               "raw_refs": ["sample_audit.log:6"], "confidence_contribution": 0.05}
     first = {**_call("fetch_web_log"), "new_evidence": [copied]}
-    done = _terminate("confidence_sufficient", 0.95)
+    # 가짜 도구는 1차 탐지 원본을 돌려주지 않으므로 관문 (h)는 unknowns로 넘긴다 — 여기서는 (g)만 본다
+    done = {**_terminate("confidence_sufficient", 0.95), "unknowns": [
+        "1차 탐지 원본 미확인: sample_audit.log:6 sample_audit.log:11 sample_audit.log:16 "
+        "sample_auth.log:5 sample_audit.log:21"]}
     llm = RecordingLLM([first, _call("fetch_auth_log"), done, _call("fetch_audit_log"), done])
     registry = build_default_registry(handlers=MOCK_HANDLERS)
     result = InvestigationAgent(llm, registry, strict_termination=True).run(seed)
@@ -619,3 +622,50 @@ def test_detection_refs_require_their_layer_before_termination():
     # strict_termination=False(데모·기존 단위 테스트 조건)에서는 적용하지 않는다
     loose = InvestigationAgent(RecordingLLM([first, _call("fetch_auth_log"), done]), registry).run(seed)
     assert [t["tool_name"] for t in loose["tools_called"]] == ["fetch_web_log", "fetch_auth_log"]
+
+
+def test_every_detection_rule_needs_observed_source_or_unknowns():
+    """관문 (h): 1차 탐지 룰마다 탐지 근거 원본을 도구로 관측했거나 unknowns에 남겨야 종료할 수 있다.
+
+    2026-09-27 재실행에서 audit(ppid=1200)은 봤지만 sudo(pid 5320)의 자식 useradd(pid 5501)와 auth의 계정
+    생성 기록을 확인하지 않고 끝냈다. 1차 탐지는 이 계정 생성을 룰 2개로 탐지했었다.
+    """
+    from agent.incident_input import load_incidents, to_investigation_seed
+    from tests.test_pipeline import FIXTURE
+
+    incident = next(i for i in load_incidents(FIXTURE) if i["incident_id"] == "INC-7d29ffde")
+    seed = {**to_investigation_seed(incident, host="web-01"), "confidence_initial": 0.9}
+
+    def audit(args):
+        refs = {1200: ["sample_audit.log:6"], 5320: ["sample_audit.log:21"]}.get(args.get("ppid") or args.get("pid"), [])
+        if args.get("ppid") == 1200:
+            refs = ["sample_audit.log:11", "sample_audit.log:16"]
+        return {"count": len(refs), "summary": "audit", "records": [{"raw_ref": r} for r in refs]}
+
+    def auth(_args):
+        return {"count": 1, "summary": "auth", "records": [{"raw_ref": "sample_auth.log:5", "event": "user_created"}]}
+
+    registry = build_default_registry(handlers={**MOCK_HANDLERS, "fetch_audit_log": audit, "fetch_auth_log": auth})
+
+    def audit_call(**filters):
+        return {"next_action": "call_tool", "tool_call": {"tool_name": "fetch_audit_log", "args": {
+            "host": "web-01", "start_time": "a", "end_time": "b", **filters}}}
+
+    done = _terminate("confidence_sufficient", 0.95)
+    llm = RecordingLLM([audit_call(pid=1200), audit_call(ppid=1200), _call("fetch_web_log"), done,
+                        audit_call(ppid=5320), _call("fetch_auth_log"), done])
+    result = InvestigationAgent(llm, registry, strict_termination=True).run(seed)
+    rejected = [n for n in result["investigation_notes"] if "1차 탐지 룰 중 탐지 근거 원본을 도구로 확인하지 않은" in n]
+    assert len(rejected) == 1
+    assert "audit_persistence_account_cron(audit, sample_audit.log:21, pid=5501, ppid=5320" in rejected[0]
+    assert "auth_login_account_created(auth, sample_auth.log:5" in rejected[0]
+    assert "audit_webshell_recon" not in rejected[0]  # 관측한 룰은 안내하지 않는다
+    assert result["statistics"]["termination_reason"] == "confidence_sufficient"
+    assert [t["input"].get("ppid") for t in result["tools_called"] if t["tool_name"] == "fetch_audit_log"] == [None, 1200, 5320]
+
+    # 찾을 수 없는 원본은 unknowns에 룰 이름을 남기면 종료할 수 있다
+    with_unknowns = {**done, "unknowns": ["audit_persistence_account_cron, auth_login_account_created 원본 미발견"]}
+    llm = RecordingLLM([audit_call(pid=1200), audit_call(ppid=1200), _call("fetch_web_log"), with_unknowns])
+    other = InvestigationAgent(llm, registry, strict_termination=True).run(seed)
+    assert not any("1차 탐지 룰 중" in n for n in other["investigation_notes"])
+    assert other["statistics"]["termination_reason"] == "confidence_sufficient"

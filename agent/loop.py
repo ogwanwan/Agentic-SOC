@@ -335,6 +335,9 @@ class InvestigationAgent:
               증거로 인용했고, 그 참조의 계층을 도구로 한 번도 조회하지 않음(_unverified_detection_refs).
               1차 탐지 Incident로 바꾼 첫 실제 실행(2026-09-27)에서 LLM이 detection의 명령 인자를 그대로
               증거로 옮겨 audit을 한 번도 보지 않고 THREAT_CONFIRMED로 끝냈다.
+          (h) 1차 탐지 룰(seed detection.rules) 중 탐지 근거 참조를 도구 결과에서 하나도 관측하지 못했고,
+              unknowns에 그 룰 이름이나 참조를 남기지도 않은 룰이 있음(_unverified_detection_rules).
+              (g) 수정 뒤 재실행에서 audit은 봤지만 sudo 자식인 useradd(계정 생성) 룰 2개를 확인하지 않고 끝냈다.
         """
         attempted = {t.tool_name for t in state.tool_calls}
         queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
@@ -383,6 +386,17 @@ class InvestigationAgent:
                 + "). detection 정보는 단서일 뿐이므로 "
                 + " / ".join(DETECTION_LAYER_TOOLS[layer][0] for layer in unverified)
                 + "로 그 원본을 조회해 raw_observations에서 확인한 뒤 판단하십시오"
+            )
+
+        # (h) 1차 탐지 룰마다 원본을 확인했거나, 확인하지 못한 사실을 unknowns에 남겼어야 한다
+        unchecked_rules = self._unverified_detection_rules(state)
+        if self.strict_termination and unchecked_rules:
+            reasons.append(
+                "1차 탐지 룰 중 탐지 근거 원본을 도구로 확인하지 않은 것이 있음: "
+                + "; ".join(unchecked_rules[:5])
+                + (f" 외 {len(unchecked_rules) - 5}개" if len(unchecked_rules) > 5 else "")
+                + ". 그 원본을 도구로 조회해 확인하거나(자식 프로세스는 fetch_audit_log ppid=<부모 pid>), "
+                "조회해도 찾을 수 없으면 unknowns에 룰 이름과 이유를 남기십시오"
             )
 
         if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
@@ -443,6 +457,28 @@ class InvestigationAgent:
                 if ref not in unverified.setdefault(layer, []):
                     unverified[layer].append(ref)
         return unverified
+
+    @staticmethod
+    def _unverified_detection_rules(state: AgentState) -> list:
+        """종료 관문 (h): 탐지 근거 참조를 도구 결과에서 하나도 관측하지 못했고 unknowns에도 언급되지 않은
+        1차 탐지 룰의 안내 문구 목록. 같은 룰 이름·참조 조합이 여러 번 탐지됐으면 한 번만 적는다."""
+        observed = {ref for t in state.tool_calls for ref in t.raw_refs}
+        unknowns = " ".join(str(u) for u in state.unknowns)
+        hints, seen = [], set()
+        for rule in (state.seed.get("detection") or {}).get("rules") or []:
+            refs = [ref for ref in rule.get("evidence_refs") or [] if isinstance(ref, str)]
+            name = rule.get("rule_name") or rule.get("reason") or "?"
+            key = (name, tuple(refs))
+            if not refs or key in seen or observed & set(refs):
+                continue
+            seen.add(key)
+            if name in unknowns or any(ref in unknowns for ref in refs):
+                continue
+            layer = "audit" if rule.get("layer") == "system" else rule.get("layer")
+            detail = rule.get("detail") or {}
+            where = ", ".join(f"{k}={detail[k]}" for k in ("pid", "ppid", "user", "src_ip") if detail.get(k) is not None)
+            hints.append(f"{name}({layer}, {refs[0]}" + (f", {where}" if where else "") + ")")
+        return hints
 
     # 거부 사유에 붙이는 "다음에 볼 도구" 안내. 예전 문구("도구 1종류만 사용됨")만으로는 LLM이
     # 무엇을 더 봐야 할지 몰라 같은 종료를 반복했다(EC2 xmlrpc 사건).

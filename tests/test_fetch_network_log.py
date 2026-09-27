@@ -155,6 +155,17 @@ def test_fetch_network_log_filters_by_src_dst_ip() -> None:
         _uninstall_log()
 
 
+def test_fetch_network_log_rejects_non_ip_filter() -> None:
+    # 2026-09-27: LLM이 ip에 도메인(raw.githubusercontent.com)을 넣어 조용히 0건이 나왔다 — 오류로 알린다
+    import pytest
+    from agent.tools.real.fetch_network_log import fetch_network_log
+
+    base = {"host": "web-01", "start_time": "2026-01-01T00:00:00Z", "end_time": "2026-12-31T23:59:59Z"}
+    for key in ("ip", "src_ip", "dst_ip"):
+        with pytest.raises(ValueError, match=f"{key}에는 IP 주소만"):
+            fetch_network_log({**base, key: "raw.githubusercontent.com"})
+
+
 def test_fetch_network_log_pagination() -> None:
     prefix = "raw/source_type=suricata/host=web-01/dt=2026-09-13/"
     pieces = ({prefix: {"eve.json": _sample_network_text()}})

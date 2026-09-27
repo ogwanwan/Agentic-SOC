@@ -70,7 +70,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 - `summary`에 `[조회 구간 전체 집계]`: limit으로 자른 페이지와 무관하게 조건에 맞는 전체 이벤트 기준으로 코드가 센 값(건수, 실제 기록 시각, 상위 항목). LLM이 records를 직접 세지 않게 하기 위한 것이다.
 - `window_total`: 필터 전 조회 구간 전체 건수. 0이면 "활동 없음"이 아니라 로그 미확보다.
 - `rule_checks`: 판정 원칙 기준을 코드가 계산한 결과. web은 `principle_9`(인증·XML-RPC POST 10회 이상, 경로 20개 이상+4xx 과반), audit은 `audit_post_exploitation`(웹 서버 계정의 셸·의심 명령 실행, cron `sh -c`·EC2 Instance Connect 제외), auth는 `principle_7`(IP 하나로 거르고 로그인 성공이 없을 때: 실패 5회 이상 또는 계정 2개 이상 → 무차별 대입, 1~4회·1계정 → 단발성, 실패 0회·`ssh_probe` 1~4건 → 스캐너 탐침).
-- `fetch_network_log`의 `ip` 필터는 방향 무관(src·dest 모두 매칭)이다. 역방향 셸(서버 → 공격자)을 잡기 위해서다.
+- `fetch_network_log`의 `ip` 필터는 방향 무관(src·dest 모두 매칭)이다. 역방향 셸(서버 → 공격자)을 잡기 위해서다. `ip`/`src_ip`/`dst_ip`에 IP가 아닌 값(도메인)이 오면 `ValueError`로 알린다(조용한 0건 방지, 실패 호출로 LLM에게 전달).
 - audit의 `user` 필터는 **실행 계정**이다(sudo 뒤에는 root). 로그인 세션을 따라가려면 `ppid`를 쓴다.
 
 `agent/tools/registry.py::build_default_registry()`가 7개 도구(`fetch_event_logs`, `fetch_web_log`, `fetch_auth_log`, `fetch_audit_log`, `fetch_network_log`, `get_process_tree`, `resolve_ip_geo`)를 등록한다. 실제 구현은 **파일명 = 함수명 = 도구명** 규칙으로 `agent/tools/real/<도구이름>.py`에서 자동 탐색되고, 없으면 `mock_tools.py`의 목업으로 **에러 없이 조용히** 폴백한다. 새 도구를 연결한 뒤에는 `registry.get(name).handler`로 실제 함수가 붙었는지 확인할 것. `resolve_ip_geo`는 `main.py`에서 `exclude`로 빠져 있다.
@@ -97,6 +97,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
   - (e) strict: seed src_ip의 로그인 성공(`ssh_accepted`)이 보이는데 audit을 시도하지 않음. 거부 사유에 `ppid=<sshd pid>`를 적어준다
   - (f) strict: audit 명령 인자에 나온 공인 IP를 network로 조회하지 않음
   - (g) strict: 증거가 인용한 1차 탐지 참조(`detection.rules[].evidence_refs`)를 도구 결과에서 관측하지 않았고 그 계층(system = audit)을 도구로 한 번도 조회하지 않음(`_unverified_detection_refs()`). 조회 시도만 해도 인정. 계층을 알 수 없는 참조(직접 작성한 사건)는 보지 않는다. 1차 탐지 Incident 첫 실제 실행에서 LLM이 detection의 명령 인자를 그대로 증거로 옮겨 audit 없이 확정한 사례 때문
+  - (h) strict: 1차 탐지 룰(`detection.rules`) 중 탐지 근거 참조를 도구 결과에서 하나도 관측하지 못했고 `unknowns`에 룰 이름·참조도 없는 것이 있음(`_unverified_detection_rules()`). 사유에 룰 이름·계층·pid/ppid 안내. (g) 수정 뒤 재실행에서 sudo 자식인 useradd(계정 생성) 룰 2개를 확인하지 않고 끝낸 사례 때문
   - 판정-원칙 충돌 (`_verdict_conflicts()`, strict): 조회한 모든 계층의 `window_total`이 0인데 INCONCLUSIVE가 아님 / 원칙 9 기준 충족인데 FALSE_POSITIVE / audit에 웹 서버 계정 의심 명령이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만 / 원칙 7 무차별 대입인데 FALSE_POSITIVE·INCONCLUSIVE / 원칙 7 단발성·탐침이고 다른 위협 기준이 없는데 THREAT_CONFIRMED·INCONCLUSIVE
   - 거부 사유에는 아직 안 본 도구와 확인 목적이 적힌다(`UNTRIED_TOOL_PURPOSE`).
 - **강제 종료**: 같은 사유(숫자 제외 비교)로 연속 2회 거부될 때만 강제 종료 턴으로 전환한다. 거부 사이에 새 도구가 실행되면 횟수를 초기화한다. 강제 종료 턴에서 LLM이 원칙과 어긋나게 판정을 뒤집으면 앞서 LLM이 낸 원칙에 맞는 판정을 쓴다(`_settle_forced_verdict()`). 그래도 충돌이 남으면 판정은 바꾸지 않고 notes에 "⚠ 판정-원칙 불일치"를 남긴다.
