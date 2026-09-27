@@ -101,7 +101,7 @@ def test_demo_is_independent_of_existing_environment_and_restores_it(monkeypatch
     monkeypatch.setenv("HOST", "different-host")
     monkeypatch.setenv("LOG_LOCAL_HOST", "different-host")
     monkeypatch.setenv("AUTH_LOG_YEAR", "1999")
-    monkeypatch.setenv("WEB_LOG_LOCAL_PATH", "missing-file.txt")
+    monkeypatch.setenv("APACHE_LOG_PATH", "missing-file.txt")
     before = dict(os.environ)
     assert run_demo()["results"][0]["provenance"]["status"] == "passed"
     assert dict(os.environ) == before

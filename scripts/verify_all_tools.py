@@ -81,10 +81,10 @@ def check_get_process_tree() -> bool:
 
     # audit 샘플에서 실제로 존재하는 pid를 하나 뽑아서 그걸로 조회한다
     # (없는 pid로 조회하면 정상적으로 count=0이 나오는 거라 검증 의미가 없음).
-    local_path = os.environ.get("AUDIT_LOG_LOCAL_PATH")
+    local_path = os.environ.get("AUDIT_LOG_PATH")
     if not local_path or not os.path.exists(local_path):
         print(f"\n{'=' * 10} get_process_tree {'=' * 10}")
-        print("[건너뜀] AUDIT_LOG_LOCAL_PATH가 없어서 실제 pid를 못 뽑음")
+        print("[건너뜀] AUDIT_LOG_PATH가 없어서 실제 pid를 못 뽑음")
         return True
 
     events = normalize_audit("web-01", WIDE_RANGE["start_time"], WIDE_RANGE["end_time"])

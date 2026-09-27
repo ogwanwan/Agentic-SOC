@@ -1,6 +1,6 @@
 ﻿"""fetch_audit_log(agent/tools/real/fetch_audit_log.py) 단독 테스트.
 
-실제 AWS에 붙지 않고, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해서(tests/_log_files.py)
+실제 AWS에 붙지 않고, 임시 로그 파일을 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)로 지정해서(tests/_log_files.py)
 - ENRICHED 포맷(0x1d 구분자)의 raw/enriched 필드가 병합되는지
 - 같은 audit ID(serial)로 여러 줄(SYSCALL/EXECVE/CWD)이 하나의 구조화된
   이벤트로 조립되는지 (uid/euid/session_type/exec_args/target_file 등)
@@ -33,7 +33,7 @@ from tests._log_files import install_log_files, uninstall_log_files
 # 를 통해 normalizer.adapter → normalizer.tools.fetch_auth_log를 같이 import하므로
 # 똑같이 영향을 받는다).
 import agent.tools.real.fetch_audit_log as _load_dotenv_trigger  # noqa: F401
-for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_PATH", "NETWORK_LOG_LOCAL_PATH"):
+for _env_name in ("AUTH_LOG_PATH", "AUDIT_LOG_PATH", "APACHE_LOG_PATH", "SURICATA_LOG_PATH"):
     os.environ.pop(_env_name, None)
 
 

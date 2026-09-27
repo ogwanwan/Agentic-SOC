@@ -28,7 +28,7 @@ summary 끝의 [조회 구간 전체 집계]는 페이지와 무관하게 조건
 pam_auth_failure/sudo_command/su_failure 등 세분화된 값)·src_ip·raw_ref를 쓴다.
 도구 인자 event_type은 이 event 값과 비교한다.
 
-필요 환경변수: AUTH_LOG_LOCAL_PATH (읽을 auth 로그 파일 경로)
+필요 환경변수: AUTH_LOG_PATH (읽을 auth 로그 파일 경로)
 """
 
 from __future__ import annotations
@@ -151,11 +151,11 @@ def fetch_auth_log(args: Dict[str, Any]) -> Dict[str, Any]:
     next_offset = offset + len(page) if has_more else None
 
     if loaded["error"] == "permission_denied":
-        summary = f"{host}의 auth 로그 파일 읽기 권한이 없습니다. AUTH_LOG_LOCAL_PATH 권한을 확인하세요."
+        summary = f"{host}의 auth 로그 파일 읽기 권한이 없습니다. AUTH_LOG_PATH 권한을 확인하세요."
     elif total_matched == 0:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 인증 이벤트를 찾지 못했습니다. "
-            "host 이름, 기간, 또는 AUTH_LOG_LOCAL_PATH 설정을 확인하세요."
+            "host 이름, 기간, 또는 AUTH_LOG_PATH 설정을 확인하세요."
         ) + filtered_out_hint(len(loaded["events"]), args, ("user", "src_ip", "result", "event_type"))
     else:
         page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"

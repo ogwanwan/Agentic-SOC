@@ -70,7 +70,7 @@ def test_gzip_auth_original_name_and_location(tmp_path, monkeypatch):
     path = tmp_path / "auth.log.1.gz"
     with gzip.open(path, "wt", encoding="utf-8") as stream:
         stream.write("\nSep 21 00:00:00 web-01 sshd[1]: Accepted password for root from 192.0.2.10 port 22 ssh2\n")
-    monkeypatch.setenv("AUTH_LOG_LOCAL_PATH", str(path))
+    monkeypatch.setenv("AUTH_LOG_PATH", str(path))
     record = query(layers=["auth"])["records"][0]
     assert record["raw_ref"] == "auth.log.1:2"
     assert record["raw_ref_locations"] == {"auth.log.1:2": [path.as_posix() + ":2"]}

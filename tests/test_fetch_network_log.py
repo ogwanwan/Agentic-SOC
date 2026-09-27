@@ -1,6 +1,6 @@
 """fetch_network_log(agent/tools/real/fetch_network_log.py) 단독 테스트.
 
-실제 AWS 없이, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해(tests/_log_files.py)
+실제 AWS 없이, 임시 로그 파일을 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)로 지정해(tests/_log_files.py)
 - eve.json(NDJSON) 이벤트가 구조화되어 반환되는지
 - alert_only 필터로 http 등 비-alert 이벤트가 걸러지는지
 - src_ip(xff로 승격된 실 클라이언트)/dst_ip/dst_port/protocol 필터가 되는지
@@ -36,11 +36,11 @@ from tests._log_files import install_log_files, uninstall_log_files
 # load_dotenv()는 normalizer/adapter.py를 거쳐야만 실행돼서 이 시점엔 아직 안
 # 됐었다. 그래서 여기서 4개 변수를 지워도, 뒤에서 fetch_network_log를 import하는
 # 순간(adapter.py가 그제서야 fetch_apache_log.py/fetch_network_log.py를 처음
-# import) load_dotenv()가 다시 실행되면서 NETWORK_LOG_LOCAL_PATH가 .env 값으로
+# import) load_dotenv()가 다시 실행되면서 SURICATA_LOG_PATH가 .env 값으로
 # 재오염됐다 — 로컬 PC 테스트에서 count가 안 맞던 진짜 원인. adapter.py를 미리
 # import해서 4개 벤더 파일의 load_dotenv()를 전부 한 번에 끝내놓은 뒤 지운다.
 import agent.tools.normalizer_adapter as _load_dotenv_trigger  # noqa: F401
-for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_PATH", "NETWORK_LOG_LOCAL_PATH"):
+for _env_name in ("AUTH_LOG_PATH", "AUDIT_LOG_PATH", "APACHE_LOG_PATH", "SURICATA_LOG_PATH"):
     os.environ.pop(_env_name, None)
 
 

@@ -39,7 +39,7 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 
 `test_abcd_pipeline.py`는 네트워크 연결을 차단한 상태에서 실행합니다. LLM 응답만
 고정해 같은 순서로 조사하도록 하고, 로그 처리 함수나 조사 도구의 결과를 성공값으로
-대체하지 않습니다. 도구 테스트는 `tests/_log_files.py`로 임시 로그 파일을 만들어 `<계층>_LOG_LOCAL_PATH`로 지정합니다(S3 읽기 코드와 S3 모사 테스트는 삭제됨).
+대체하지 않습니다. 도구 테스트는 `tests/_log_files.py`로 임시 로그 파일을 만들어 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH`)로 지정합니다(S3 읽기 코드와 S3 모사 테스트는 삭제됨).
 
 ## 실제 LLM 평가와의 차이
 

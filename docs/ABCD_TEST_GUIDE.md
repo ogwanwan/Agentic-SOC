@@ -1,6 +1,6 @@
 # A·B·C·D 통합 테스트와 쉬운 설명
 
-> **S3 읽기 코드는 삭제됐다.** 로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2는 `/var/log/...`)에서만 읽는다. 아래의 S3 객체·`s3://` 참조·S3 모사 테스트 설명은 기록으로만 남아 있고 현재 코드에는 해당하지 않는다. 현재 동작 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md).
+> **S3 읽기 코드는 삭제됐다.** 로그는 `.env`의 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH`) 파일(EC2는 `/var/log/...`)에서만 읽는다. 아래의 S3 객체·`s3://` 참조·S3 모사 테스트 설명은 기록으로만 남아 있고 현재 코드에는 해당하지 않는다. 현재 동작 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md).
 
 이 문서는 `codex/merge-cd-investigation` 브랜치의 코드 기준이다.
 먼저 아래 명령으로 실행해 보고, 동작 원리가 궁금하면 뒤의 설명을 읽으면 된다.
@@ -210,7 +210,7 @@ Agentic-SOC/
 
 1. `python -m pip install -r requirements.txt`로 운영 의존성을 설치한다.
 2. `.env.example`을 `.env`로 복사하고 선택한 모델의 API 키를 입력한다.
-3. `HOST`, `LOG_LOCAL_HOST`, 계층별 `*_LOG_LOCAL_PATH`를 내 수집 서버와 파일에 맞춘다.
+3. `HOST`, `LOG_LOCAL_HOST`, 계층별 `*_LOG_PATH`를 내 수집 서버와 파일에 맞춘다.
 4. auth가 연도 없는 syslog이면 `AUTH_LOG_YEAR`를 실제 로그 연도로 맞춘다.
 5. `python main.py <사건 파일>`을 실행한다(1차 탐지 Incident JSONL 또는 사건 JSON). 사건마다 `results/investigation_agent/`에 JSON이 저장된다.
 
@@ -222,14 +222,14 @@ Windows의 복사 명령은 `Copy-Item .env.example .env`, macOS/Linux는 `cp .e
 | `LLM_PROVIDER` | `gemini` 또는 `anthropic` |
 | `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | 선택한 모델의 실제 API 키 |
 | `HOST` / `LOG_LOCAL_HOST` | 수집 서버 이름. 웹 요청의 도메인 이름과 구분 |
-| `WEB_LOG_LOCAL_PATH` | 현재 템플릿은 존재하는 `sample_logs/sample_apache_web.log`를 사용 |
-| `AUTH_LOG_LOCAL_PATH`, `AUDIT_LOG_LOCAL_PATH`, `NETWORK_LOG_LOCAL_PATH` | 해당 원본 로그 파일 경로 |
+| `APACHE_LOG_PATH` | 현재 템플릿은 존재하는 `sample_logs/sample_apache_web.log`를 사용 |
+| `AUTH_LOG_PATH`, `AUDIT_LOG_PATH`, `SURICATA_LOG_PATH` | 해당 원본 로그 파일 경로 |
 | `AUTH_LOG_YEAR` | 연도 없는 인증 로그 해석에 사용할 실제 연도 |
 
 B/C 조회에는 사건 시간이 적용되므로 내 샘플의 날짜에 맞는 사건 window가 필요하다. 직접 Python에서 도구를 호출할 때는
 `.env`를 자동으로 읽지 않으므로 환경변수를 지정하거나 `load_dotenv()`를 호출한다.
 
-`*_LOG_LOCAL_PATH`는 필수다(S3 읽기는 삭제됨). 경로가 비어 있으면 설정 오류로 알린다.
+`*_LOG_PATH`는 필수다(S3 읽기는 삭제됨). 경로가 비어 있으면 설정 오류로 알린다.
 객체 경로는 `raw/source_type=<apache|auth|auditd|suricata>/host=<서버>/dt=<UTC 날짜>/...`다.
 상세 호출 예시는 [C/D 구현 안내](C_D_IMPLEMENTATION.md)에 있다.
 

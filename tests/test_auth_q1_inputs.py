@@ -44,7 +44,7 @@ def test_summary_counts_one_attempt_once(tmp_path, monkeypatch):
         ]
     path = tmp_path / "auth.log"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    monkeypatch.setenv("AUTH_LOG_LOCAL_PATH", str(path))
+    monkeypatch.setenv("AUTH_LOG_PATH", str(path))
     monkeypatch.setenv("AUTH_LOG_YEAR", "2026")
     result = fetch_auth_log({"host": "web-01", "start_time": "2026-09-22T13:00:00Z",
                              "end_time": "2026-09-22T14:00:00Z", "src_ip": "192.0.2.10"})
@@ -63,7 +63,7 @@ def test_empty_username_counts_as_one_account(tmp_path, monkeypatch):
         "Sep 24 05:57:03 web-01 sshd[9]: Connection closed by invalid user  192.0.2.20 port 5000 [preauth]\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("AUTH_LOG_LOCAL_PATH", str(path))
+    monkeypatch.setenv("AUTH_LOG_PATH", str(path))
     monkeypatch.setenv("AUTH_LOG_YEAR", "2026")
     result = fetch_auth_log({"host": "web-01", "start_time": "2026-09-24T05:00:00Z",
                              "end_time": "2026-09-24T06:00:00Z", "src_ip": "192.0.2.20"})

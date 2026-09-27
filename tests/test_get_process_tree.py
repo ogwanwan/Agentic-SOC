@@ -1,6 +1,6 @@
 ﻿"""get_process_tree(agent/tools/real/get_process_tree.py) 단독 테스트.
 
-실제 AWS 없이, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해(tests/_log_files.py)
+실제 AWS 없이, 임시 로그 파일을 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)로 지정해(tests/_log_files.py)
 - audit 이벤트의 pid/ppid를 따라 조상 체인이 올바른 순서로 추적되는지
   (leaf -> ... -> root, sshd -> bash -> sh -> id)
 - 부모가 로그에 없으면(parent_not_observed) 거기서 멈추고 lineage_status="partial"인지
@@ -35,11 +35,11 @@ from tests._log_files import install_log_files, uninstall_log_files
 # get_process_tree.py도 normalizer/adapter.py를 import하므로(normalize_audit()를
 # 쓰려고), 뒤에서 이 테스트가 get_process_tree를 import하는 순간 adapter.py가
 # apache/network 벤더 파일들을 처음 import하면서 load_dotenv()가 "새로" 실행되고,
-# 방금 지운 AUDIT_LOG_LOCAL_PATH까지 포함해 4개 변수가 .env 값으로 재오염됐다 —
+# 방금 지운 AUDIT_LOG_PATH까지 포함해 4개 변수가 .env 값으로 재오염됐다 —
 # 로컬 PC 테스트에서 count가 안 맞던 진짜 원인. adapter.py를 미리 import해서 4개
 # 벤더 파일의 load_dotenv()를 전부 한 번에 끝내놓은 뒤 지우면 이 문제가 없다.
 import agent.tools.normalizer_adapter as _load_dotenv_trigger  # noqa: F401
-for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_PATH", "NETWORK_LOG_LOCAL_PATH"):
+for _env_name in ("AUTH_LOG_PATH", "AUDIT_LOG_PATH", "APACHE_LOG_PATH", "SURICATA_LOG_PATH"):
     os.environ.pop(_env_name, None)
 
 

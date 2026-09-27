@@ -33,10 +33,10 @@ WIDE_WINDOW = ["2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"]
 
 
 def _run() -> None:
-    os.environ["AUTH_LOG_LOCAL_PATH"] = os.path.join(SAMPLES, "sample_auth.log")
-    os.environ["AUDIT_LOG_LOCAL_PATH"] = os.path.join(SAMPLES, "sample_audit.log")
-    os.environ["WEB_LOG_LOCAL_PATH"] = os.path.join(SAMPLES, "sample_access.log")
-    os.environ["NETWORK_LOG_LOCAL_PATH"] = os.path.join(SAMPLES, "sample_eve.json")
+    os.environ["AUTH_LOG_PATH"] = os.path.join(SAMPLES, "sample_auth.log")
+    os.environ["AUDIT_LOG_PATH"] = os.path.join(SAMPLES, "sample_audit.log")
+    os.environ["APACHE_LOG_PATH"] = os.path.join(SAMPLES, "sample_access.log")
+    os.environ["SURICATA_LOG_PATH"] = os.path.join(SAMPLES, "sample_eve.json")
 
     from agent.tools.normalizer_adapter import (
         normalize_auth,
@@ -50,7 +50,7 @@ def _run() -> None:
     from primary_detection.normalizer.tools.fetch_network_log import fetch_network_log as vendor_fetch_network
 
     # --- auth ---
-    direct_auth = vendor_fetch_auth(os.environ["AUTH_LOG_LOCAL_PATH"], time_window=WIDE_WINDOW)
+    direct_auth = vendor_fetch_auth(os.environ["AUTH_LOG_PATH"], time_window=WIDE_WINDOW)
     via_adapter_auth = normalize_auth("web-01", WIDE_WINDOW[0], WIDE_WINDOW[1])
     assert len(direct_auth) > 0, "샘플 auth 로그에서 이벤트가 하나도 안 나오면 샘플/파서가 깨진 것"
     assert direct_auth == via_adapter_auth, (
@@ -58,7 +58,7 @@ def _run() -> None:
     )
 
     # --- audit ---
-    direct_audit = vendor_fetch_audit(os.environ["AUDIT_LOG_LOCAL_PATH"], time_window=WIDE_WINDOW)
+    direct_audit = vendor_fetch_audit(os.environ["AUDIT_LOG_PATH"], time_window=WIDE_WINDOW)
     via_adapter_audit = normalize_audit("web-01", WIDE_WINDOW[0], WIDE_WINDOW[1])
     assert len(direct_audit) > 0, "샘플 audit 로그에서 이벤트가 하나도 안 나오면 샘플/파서가 깨진 것"
     assert direct_audit == via_adapter_audit, (
@@ -66,7 +66,7 @@ def _run() -> None:
     )
 
     # --- web(apache) ---
-    direct_web = vendor_fetch_web(os.environ["WEB_LOG_LOCAL_PATH"], time_window=WIDE_WINDOW)
+    direct_web = vendor_fetch_web(os.environ["APACHE_LOG_PATH"], time_window=WIDE_WINDOW)
     via_adapter_web = normalize_web("web-01", WIDE_WINDOW[0], WIDE_WINDOW[1])
     assert len(direct_web) > 0, "샘플 apache 로그에서 이벤트가 하나도 안 나오면 샘플/파서가 깨진 것"
     assert direct_web == via_adapter_web, (
@@ -74,7 +74,7 @@ def _run() -> None:
     )
 
     # --- network(suricata) ---
-    direct_network = vendor_fetch_network(os.environ["NETWORK_LOG_LOCAL_PATH"], time_window=WIDE_WINDOW)
+    direct_network = vendor_fetch_network(os.environ["SURICATA_LOG_PATH"], time_window=WIDE_WINDOW)
     via_adapter_network = normalize_network("web-01", WIDE_WINDOW[0], WIDE_WINDOW[1])
     assert len(direct_network) > 0, "샘플 suricata 로그에서 이벤트가 하나도 안 나오면 샘플/파서가 깨진 것"
     assert direct_network == via_adapter_network, (

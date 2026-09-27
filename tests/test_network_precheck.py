@@ -206,7 +206,7 @@ def test_network_summary_has_aggregate(tmp_path, monkeypatch):
                  "proto": "TCP", "alert": {"signature": "ET SCAN xmlrpc flood", "severity": 2}})
     path = tmp_path / "eve.json"
     path.write_text("\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8")
-    monkeypatch.setenv("NETWORK_LOG_LOCAL_PATH", str(path))
+    monkeypatch.setenv("SURICATA_LOG_PATH", str(path))
 
     result = fetch_network_log({"host": "web-01", "start_time": "2026-09-24T05:00:00Z",
                                 "end_time": "2026-09-24T06:00:00Z", "ip": "129.222.213.124", "limit": 20})
@@ -286,7 +286,7 @@ def test_web_summary_has_request_aggregate(tmp_path, monkeypatch):
     )
     path = tmp_path / "access.log"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    monkeypatch.setenv("WEB_LOG_LOCAL_PATH", str(path))
+    monkeypatch.setenv("APACHE_LOG_PATH", str(path))
 
     result = fetch_web_log({"host": "web-01", "start_time": "2026-09-24T05:00:00Z",
                             "end_time": "2026-09-24T06:00:00Z", "src_ip": "129.222.213.124"})

@@ -60,7 +60,7 @@
 
 ## 로그 파일 읽기
 
-각 tool 파일은 `.env`의 `<도구명 대문자>_LOCAL_PATH`(예: `AUTH_LOG_LOCAL_PATH`)에
+각 tool 파일은 `.env`의 `<도구명 대문자>_LOCAL_PATH`(예: `AUTH_LOG_PATH`)에
 지정된 경로의 파일을 읽습니다. EC2에 배포된 상태에서는 이 경로가 실제 시스템
 로그 경로(`/var/log/auth.log` 등)를 가리키고, 로컬 개발 중에는 샘플 로그 경로를
 가리킵니다 — **코드는 동일하고 `.env`의 경로만 다릅니다.**
@@ -93,7 +93,7 @@ def fetch_auth_log(args: dict) -> dict:
     limit = int(args.get("limit", 200))
     offset = int(args.get("offset", 0))
 
-    log_path = os.environ.get("AUTH_LOG_LOCAL_PATH")
+    log_path = os.environ.get("AUTH_LOG_PATH")
     text, error = _read_source_text(log_path)
 
     all_events = parse_auth_events(text, reference_year=start.year, time_window=(start, end),
@@ -127,7 +127,7 @@ print(registry.get("fetch_auth_log").handler)
 거치지 않고) 이렇게 직접 호출해보는 것도 유용합니다:
 
 ```powershell
-python -c "from agent.tools.real.fetch_auth_log import fetch_auth_log; import os; os.environ['AUTH_LOG_LOCAL_PATH']='sample_logs/sample_auth.log'; r = fetch_auth_log({'host':'web-01','start_time':'...','end_time':'...'}); print(r['count'])"
+python -c "from agent.tools.real.fetch_auth_log import fetch_auth_log; import os; os.environ['AUTH_LOG_PATH']='sample_logs/sample_auth.log'; r = fetch_auth_log({'host':'web-01','start_time':'...','end_time':'...'}); print(r['count'])"
 ```
 
 ## 주의

@@ -66,10 +66,10 @@ cp .env.example .env               # 키와 로그 경로를 채운다
 ```
 GEMINI_API_KEY=발급받은_키
 HOST=<수집 서버 이름, EC2는 hostname 결과>
-WEB_LOG_LOCAL_PATH=/var/log/apache2/access.log
-AUTH_LOG_LOCAL_PATH=/var/log/auth.log
-AUDIT_LOG_LOCAL_PATH=/var/log/audit/audit.log
-NETWORK_LOG_LOCAL_PATH=/var/log/suricata/eve.json
+APACHE_LOG_PATH=/var/log/apache2/access.log
+AUTH_LOG_PATH=/var/log/auth.log
+AUDIT_LOG_PATH=/var/log/audit/audit.log
+SURICATA_LOG_PATH=/var/log/suricata/eve.json
 ```
 
 ```bash

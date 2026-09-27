@@ -1,6 +1,6 @@
 """fetch_web_log(agent/tools/real/fetch_web_log.py) 단독 테스트.
 
-실제 AWS에 붙지 않고, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해서(tests/_log_files.py)
+실제 AWS에 붙지 않고, 임시 로그 파일을 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)로 지정해서(tests/_log_files.py)
 - 실제 EC2 apache access.log 형식(공백 구분, req_id 포함)이 구조화되어 반환되는지
 - src_ip 필터가 되는지 (client 필드 %a 기준 — apache는 이미 실 클라이언트 IP라 xff 불필요)
 - method/path/status_code 필터가 되는지
@@ -32,12 +32,12 @@ import types
 # import되기 때문에 이 시점엔 아직 안 실행된 상태였다. 그래서 여기서 4개 변수를
 # 지워도, 뒤에서 이 테스트 파일이 fetch_web_log를 import하는 순간(adapter.py가
 # 그제서야 fetch_apache_log.py/fetch_network_log.py를 처음 import) load_dotenv()가
-# "새로 실행"되면서 방금 지운 WEB_LOG_LOCAL_PATH(+다른 변수들까지)가 .env 값으로
+# "새로 실행"되면서 방금 지운 APACHE_LOG_PATH(+다른 변수들까지)가 .env 값으로
 # 다시 채워져버렸다 — 이게 로컬 PC에서 count가 안 맞던 진짜 원인이었다.
 # adapter.py를 미리 import해서 4개 벤더 파일의 load_dotenv()를 전부 한 번에
 # 끝내놓은 다음에 지우면, 그 뒤에 무엇을 import하든 다시 채워지지 않는다.
 import agent.tools.normalizer_adapter as _load_dotenv_trigger  # noqa: F401
-for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_PATH", "NETWORK_LOG_LOCAL_PATH"):
+for _env_name in ("AUTH_LOG_PATH", "AUDIT_LOG_PATH", "APACHE_LOG_PATH", "SURICATA_LOG_PATH"):
     os.environ.pop(_env_name, None)
 from typing import Any, Dict
 

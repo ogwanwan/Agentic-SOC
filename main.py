@@ -19,7 +19,7 @@
 실행 준비
   1. `pip install -r requirements.txt`
   2. .env에 GEMINI_API_KEY(또는 LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY)
-  3. .env에 계층별 로그 파일 경로(WEB/AUTH/AUDIT/NETWORK_LOG_LOCAL_PATH)와 HOST(수집 서버 이름)
+  3. .env에 계층별 로그 파일 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)와 HOST(수집 서버 이름)
      — EC2라면 /var/log/... 경로 (.env.example 참고). 조사 도구가 원본 로그를 다시 읽을 때 쓴다.
   4. 사건 파일: 1차 탐지 출력(한 줄에 Incident 한 건인 JSONL) 또는 직접 작성한 사건 JSON
 

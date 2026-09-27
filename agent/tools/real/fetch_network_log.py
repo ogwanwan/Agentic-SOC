@@ -36,7 +36,7 @@
 direction(internal/outbound/inbound)은 계산하지 않는다 — 호스트 IP 사전 등록 단계가
 우리 시스템엔 없고, 공통 정규화 스키마에도 그 필드가 없다.
 
-필요 환경변수: NETWORK_LOG_LOCAL_PATH (읽을 Suricata eve.json 경로)
+필요 환경변수: SURICATA_LOG_PATH (읽을 Suricata eve.json 경로)
 """
 
 from __future__ import annotations
@@ -119,11 +119,11 @@ def fetch_network_log(args: Dict[str, Any]) -> Dict[str, Any]:
     next_offset = offset + len(page) if has_more else None
 
     if loaded["error"] == "permission_denied":
-        summary = f"{host}의 network 로그 파일 읽기 권한이 없습니다. NETWORK_LOG_LOCAL_PATH 권한을 확인하세요."
+        summary = f"{host}의 network 로그 파일 읽기 권한이 없습니다. SURICATA_LOG_PATH 권한을 확인하세요."
     elif total_matched == 0:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 네트워크 이벤트를 찾지 못했습니다. "
-            "host 이름, 기간, 또는 NETWORK_LOG_LOCAL_PATH 설정을 확인하세요."
+            "host 이름, 기간, 또는 SURICATA_LOG_PATH 설정을 확인하세요."
         ) + filtered_out_hint(len(loaded["events"]), args,
                               ("ip", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "alert_only"))
     else:
