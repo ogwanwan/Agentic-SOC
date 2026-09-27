@@ -46,7 +46,6 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent import GeminiClient, InvestigationAgent, SeedGenerator
-from agent.report import format_text_report
 from agent.tools import ToolRegistry, ToolSpec
 
 load_dotenv()
@@ -187,7 +186,9 @@ def main() -> None:
         result = agent.run(seed)
 
         print(f"\n{'='*10} 조사 결과: {result['incident_id']} {'='*10}")
-        print(format_text_report(result))
+        verdict = result["final_verdict"]
+        print(f"판정: {verdict.get('verdict')} (severity {verdict.get('severity')}), "
+              f"원본 참조 검증: {result['provenance']['status']}")
 
         print("\n[검증용] 실제로 호출된 도구 목록 (계층 간 연결 확인용):")
         for t in result["tools_called"]:

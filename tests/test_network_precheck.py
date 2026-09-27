@@ -257,17 +257,6 @@ def test_login_success_requires_audit_before_termination():
     assert not any("audit으로 확인하지 않음" in n for n in other["investigation_notes"])
 
 
-def test_report_moves_raw_refs_to_compact_section():
-    from agent.report import compact_refs
-
-    few = ["access.log:343", "access.log:344"]
-    assert compact_refs(few) == "access.log:343, access.log:344"  # 적으면 원문 그대로
-    refs = [f"access.log:{n}" for n in (343, 344, 345, 348, 349, 350, 351, 352, 353)] + ["eve.json:10", "eve.json:12"]
-    assert compact_refs(refs) == "access.log:343-345, 348-353 / eve.json:10, 12"
-    many = [f"eve.json:{n}" for n in range(0, 40, 2)]  # 비연속 20줄
-    assert compact_refs(many) == "eve.json:0, 2, 4, 6, 8, 10 외 14줄"
-
-
 def test_audit_event_type_accepts_record_type_and_zero_hint():
     """event_type에 룰 key 대신 레코드 종류(EXECVE)를 넣어도 매칭하고, 필터로 0건이면 안내를 준다."""
     from agent.tools.log_source import filtered_out_hint

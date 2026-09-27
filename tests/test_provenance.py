@@ -10,7 +10,6 @@ from agent.models import AgentState
 from agent.prompts import build_user_prompt
 from agent.provenance import references
 from agent.raw_log_ingestion import fetch_recent_raw_logs
-from agent.report import format_text_report
 from agent.seed_generation import SeedGenerator
 from agent.tools.log_source import LOCAL_PATH_ENV
 from agent.tools.registry import ToolRegistry, ToolSpec, build_default_registry
@@ -98,7 +97,6 @@ def test_seed_and_supporting_contradicting_evidence_reach_reports(tmp_path, monk
     assert result["raw_refs"] == [ref]
     for name in ("evidence_chain", "contradicting_evidence"):
         assert result[name][0]["raw_ref"] == ref and result[name][0]["raw_refs"] == [ref]
-    assert ref in format_text_report(result)
     assert json.loads(json.dumps(result))["raw_refs"] == [ref]
     assert '"known_raw_refs"' in llm.prompts[-1]
 
@@ -218,7 +216,6 @@ def test_verified_empty_result_evidence_keeps_provenance_passed():
     assert result["provenance"]["empty_result_evidence"] == [empty["evidence_id"]]
     assert result["evidence_chain"][0]["empty_result_call"] is None
     assert result["statistics"]["confidence_increase"] == pytest.approx(0.25)  # 기여는 그대로 반영
-    assert "[도구 호출 #2 0건 확인]" in format_text_report(result)
     assert '"sequence": 2' in llm.prompts[2]  # LLM이 보는 관측에 호출 번호가 있다
 
 

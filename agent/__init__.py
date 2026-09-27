@@ -10,7 +10,7 @@
   prompts/              [21]      조사 프롬프트 (내용은 prompts/investigation.yaml)
   tools/                [29]~[36] 조사 도구 레지스트리와 실제 도구(tools/real/)
   provenance.py                   원본 참조(raw_ref) 전달·검증
-  report.py             [41]·[45] 결과 JSON 조립·텍스트 보고서
+  report.py             [41]      결과 JSON 조립
 
 아래 sys.path 추가는 1차 탐지 코드가 "primary-detection"(하이픈) 폴더에 있던 시절의 것이다. 지금은
 폴더가 primary_detection(밑줄)이라 저장소 루트에서 실행하면 그대로 패키지로 import되고, 이 경로는
@@ -37,7 +37,7 @@ from .tools import ToolRegistry, ToolSpec, ToolValidationError, build_default_re
 from .claude_client import ClaudeClient, ClaudeDecisionError
 from .gemini_client import GeminiClient, GeminiDecisionError
 from .loop import InvestigationAgent
-from .report import build_investigation_result, format_text_report
+from .report import build_investigation_result
 from .raw_log_ingestion import fetch_recent_raw_logs
 from .seed_generation import SeedGenerator
 from .pipeline import run_investigation_pipeline
@@ -59,7 +59,6 @@ __all__ = [
     "GeminiDecisionError",
     "InvestigationAgent",
     "build_investigation_result",
-    "format_text_report",
     "fetch_recent_raw_logs",
     "SeedGenerator",
     "run_investigation_pipeline",

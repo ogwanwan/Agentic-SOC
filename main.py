@@ -2,8 +2,8 @@
 
 역할
   .env 설정을 읽고, 도구 레지스트리와 LLM 클라이언트를 만든 뒤 전체 조사 파이프라인
-  (로그 수집 → 조사할 사건(seed) 고르기 → 사건별 조사 → 보고서)을 한 번 실행한다.
-  결과는 콘솔에 텍스트 보고서로 보여 주고, 원본 JSON은 results/investigation_agent/에 저장한다.
+  (로그 수집 → 조사할 사건(seed) 고르기 → 사건별 조사 → 결과 JSON)을 한 번 실행한다.
+  결과 JSON은 results/investigation_agent/에 저장하고, 콘솔에는 저장한 파일 경로만 보여 준다.
 
 누가 부르나
   사람이 직접 실행한다 (EC2: `python3 main.py`).
@@ -12,7 +12,7 @@
   [2] agent/tools/registry.py   build_default_registry()   조사 도구 목록 만들기
   [3] agent/gemini_client.py    GeminiClient()             LLM 클라이언트 (LLM_PROVIDER=anthropic이면 claude_client.py)
   [4] agent/pipeline.py         run_investigation_pipeline() 전체 파이프라인 실행
-  [45] agent/report.py          format_text_report()       JSON → 사람이 읽는 텍스트 보고서
+  [45] main.py                  save_investigation_result() 결과 JSON 저장
 
 실행 준비
   1. `pip install -r requirements.txt`
@@ -21,8 +21,9 @@
      — EC2라면 /var/log/... 경로 (.env.example 참고)
 
 결과 저장
-  텍스트 보고서는 따로 저장하지 않는다. format_text_report()가 JSON으로 언제든 다시 만들 수
-  있어서 JSON만 "원본"으로 results/investigation_agent/<investigation_id>_<UTC시각>.json에 보관한다.
+  사건마다 results/investigation_agent/<investigation_id>_<UTC시각>.json에 보관한다.
+  사람이 읽는 텍스트 보고서는 만들지 않는다 — 최종 보고서는 이후 단계(ATT&CK 매핑·대응 권고)
+  결과까지 합쳐 따로 만든다.
   전체 동작 흐름은 docs/AGENT_FLOW.md 참고.
 """
 
@@ -33,7 +34,6 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 from agent import ClaudeClient, GeminiClient, build_default_registry, run_investigation_pipeline
-from agent.report import format_text_report
 
 load_dotenv()  # .env 파일에서 GEMINI_API_KEY / ANTHROPIC_API_KEY / HOST 등을 읽어온다
 
@@ -101,15 +101,8 @@ def main() -> None:
         print(f"{host}의 최근 로그에서 조사할 만한 seed 후보가 없었습니다.")
         return
 
-    # [45] 결과 출력·저장 → agent/report.py format_text_report()로 텍스트 보고서를 만들어 출력하고,
-    #      원본 JSON은 results/investigation_agent/에 저장해 콘솔에는 파일명만 참고 자료로 보여 준다.
-    saved_paths = []
-    for i, result in enumerate(results, start=1):
-        saved_path = save_investigation_result(result)
-        saved_paths.append(saved_path)
-        print(f"\n{'='*10} 조사 {i}/{len(results)} — {result['incident_id']} {'='*10}")
-        print(format_text_report(result))
-        print(f"\n[참고 자료] 원본 조사 결과 JSON: {saved_path}")
+    # [45] 결과 저장 → 사건마다 결과 JSON을 results/investigation_agent/에 저장하고 경로만 출력한다
+    saved_paths = [save_investigation_result(result) for result in results]
 
     print(f"\n--- 저장된 조사 결과 JSON {len(saved_paths)}건 ---")
     for path in saved_paths:

@@ -18,7 +18,7 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로
   → agent/seed_generation.py     LLM triage로 조사할 사건 후보 + 우선순위
   → agent/pipeline.py            우선순위 순서로 사건마다 조사 루프 실행
   → agent/loop.py                LLM 판단 → 도구 실행 → 결과 관찰 반복, 종료 관문 통과 시 종료
-  → agent/report.py              결과 JSON(results/investigation_agent/*.json) + 텍스트 보고서
+  → agent/report.py              결과 JSON(results/investigation_agent/*.json)
 ```
 
 | 역할 | 쉽게 말하면 | 위치 |
@@ -40,7 +40,7 @@ agent/
   prompts/               조사 프롬프트 — 판정 원칙 본문은 investigation.yaml
   gemini_client.py       LLM 호출 (기본) / claude_client.py
   provenance.py          원본 참조 전달·검증
-  report.py              결과 JSON·텍스트 보고서
+  report.py              결과 JSON 조립
   tools/
     registry.py          도구 등록·실행 (real/<도구이름>.py 자동 연결)
     log_source.py        로그 파일 읽기·정규화·시간창 필터 (수집과 도구 공용)
@@ -76,7 +76,7 @@ RAW_LOG_LOCAL_MAX_LINES=50
 ```
 
 ```bash
-python main.py                                  # 전체 실행 → 보고서 출력, results/investigation_agent/에 JSON 저장
+python main.py                                  # 전체 실행 → results/investigation_agent/에 JSON 저장 (콘솔에는 경로만)
 python -m pytest -q                             # 오프라인 테스트 (API 키 불필요)
 python -m tests.test_normalizer_parity          # 1차 탐지 정규화 결과와 동일성 검증
 python -m scripts.verify_all_tools              # .env 로그 경로로 도구 일괄 점검

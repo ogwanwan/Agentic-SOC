@@ -10,7 +10,7 @@
 | Tool 연결·실행 계층 | `tools/` (`ToolRegistry`, `ToolSpec`, `build_default_registry`) — 자세한 건 [tools/README.md](tools/README.md) |
 | Agent 판단·Prompt | `prompts.py`, `claude_client.py` (Claude), `gemini_client.py` (Gemini) |
 | Agent 제어 + 최종 산출물 | `loop.py` 내 종료/중복/실패 처리 + `report.py` |
-| 보고서 출력 | `report.py` (`build_investigation_result`) |
+| 결과 JSON | `report.py` (`build_investigation_result`) |
 
 Triage가 파이프라인에서 빠지면서 추가된 전(前) 단계:
 

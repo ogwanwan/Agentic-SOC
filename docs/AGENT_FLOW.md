@@ -26,7 +26,7 @@ main.py
                          ├─ [25]      종료 요청이면 → 종료 관문 → 통과하면 끝
                          └─ [27]~[39] 도구 요청이면 → 도구 실행 → 결과를 다음 턴에 LLM에게
                    └─ [41] 결과 JSON 만들기                agent/report.py
- └─ [45] 텍스트 보고서 출력 + results/investigation_agent/*.json 저장
+ └─ [45] results/investigation_agent/*.json 저장 (콘솔에는 경로만)
 ```
 
 LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고, 코드는 **조회 실행·숫자 세기·기준 계산·조기 종료 차단**을 맡는다.
@@ -107,7 +107,7 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 |---|---|
 | [41] | `report.build_investigation_result()`로 결과 JSON |
 | [42]·[43]·[44] | loop → pipeline → main으로 반환 |
-| [45] | `report.format_text_report()`로 텍스트 보고서 출력, JSON은 `results/investigation_agent/<investigation_id>_<UTC시각>.json` |
+| [45] | `main.save_investigation_result()`로 JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장하고 경로만 출력. 사람이 읽는 텍스트 보고서는 만들지 않는다 |
 
 ### 도구 내부 — `agent/tools/real/fetch_*_log.py`
 

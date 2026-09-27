@@ -22,7 +22,6 @@ import pathlib
 from typing import Any, Dict, List
 
 from agent.loop import InvestigationAgent
-from agent.report import format_text_report
 from agent.tools import ToolRegistry, ToolSpec, build_default_registry
 from agent.tools.mock_tools import MOCK_HANDLERS
 
@@ -216,32 +215,6 @@ def test_happy_path_terminates_with_threat_confirmed() -> None:
     assert result["remaining_unknowns"] == ["실제 서버 침해 여부"]
     assert len(result["attack_timeline"]) == 2
     print("[PASS] test_happy_path_terminates_with_threat_confirmed")
-
-
-def test_format_text_report_renders_expected_sections() -> None:
-    """format_text_report()가 사용자 예시 포맷(E1.., Timeline, Provisional Conclusion 등)대로 나오는지 확인."""
-    llm = FakeLLMClient(_happy_path_decisions())
-    registry = _mock_only_registry()
-    agent = InvestigationAgent(llm, registry, max_calls=8, confidence_threshold=0.85)
-
-    result = agent.run(SEED)
-    text = format_text_report(result)
-
-    assert "INVESTIGATION RESULT" in text
-    assert "Incident INC-001" in text
-    assert "Initial Hypothesis" in text
-    assert "E1 [" in text and "E2 [" in text and "E3 [" in text  # E3 추가
-    assert "Timeline" in text and "10:01" in text
-    assert "Provisional Conclusion" in text
-    assert "웹셸 업로드 후 원격 코드 실행" in text
-    assert "Supporting Evidence 3" in text  # 2 -> 3으로 수정
-    assert "Contradicting Evidence 0" in text
-    assert "Unresolved 실제 서버 침해 여부" in text
-    # [2026-09-24] 판정 확신도(LLM)와 증거 누적 신뢰도(시스템)를 나눠 표시
-    assert "Verdict Confidence 0.90" in text
-    assert f"Investigation Confidence {result['statistics']['investigation_confidence']:.2f}" in text
-    assert "THREAT_CONFIRMED (severity" in text
-    print("[PASS] test_format_text_report_renders_expected_sections")
 
 
 def test_duplicate_tool_call_is_skipped() -> None:
@@ -558,7 +531,6 @@ def test_real_tool_auto_discovery() -> None:
 
 if __name__ == "__main__":
     test_happy_path_terminates_with_threat_confirmed()
-    test_format_text_report_renders_expected_sections()
     test_duplicate_tool_call_is_skipped()
     test_max_call_forces_termination()
     test_tool_failure_does_not_stop_investigation()

@@ -103,7 +103,7 @@ AUTH_LOG_YEAR 설정을 우선하며, 없으면 같은 해의 사건 구간에�
   → seed.evidence_refs / 도구 records.raw_refs
   → AgentState의 참조 목록
   → Evidence.raw_refs
-  → evidence_chain / contradicting_evidence / tools_called / JSON·텍스트 보고서
+  → evidence_chain / contradicting_evidence / tools_called / 결과 JSON
 ```
 
 | 필드 | 역할 |

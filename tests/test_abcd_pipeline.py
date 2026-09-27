@@ -6,7 +6,6 @@ import pytest
 
 from agent.pipeline import run_investigation_pipeline
 from agent.provenance import strip_trace_fields
-from agent.report import format_text_report
 from agent.tools import build_default_registry
 from scripts.demo_abcd import LAYERS, ROOT, WINDOW, ScriptedDemoClient, run_demo, sample_environment
 
@@ -84,8 +83,6 @@ def test_real_pipeline_preserves_input_query_evidence_and_report(layers):
         assert path.read_text(encoding="utf-8").splitlines()[int(line) - 1]
     roundtrip = json.loads(json.dumps(result))
     assert roundtrip["raw_ref_locations"] == result["raw_ref_locations"]
-    text = format_text_report(result)
-    assert all(ref in text for ref in expected)
 
 
 def test_pipeline_rejects_fabricated_seed_before_investigation():

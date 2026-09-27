@@ -11,7 +11,6 @@ Agentic-SOC: LLM 기반 SOC(보안관제) 파이프라인을 만드는 팀 프�
 - **1차 탐지 에이전트** (`main` / `feature/agent`, `feature/primary-detection`): Apache+auth 로그를 IP별로 집계해 `malicious_bot`/`benign_bot`/`human`/`undetermined`로 분류하고, 조사가 필요한 IP만 골라 조사 에이전트로 넘긴다. 공통 정규화(`primary_detection/normalizer`)의 원본이 여기 있다.
 - **조사 에이전트(Investigation Agent)** — 여러 브랜치에 존재:
   - `feature/Agentic-SOC-Investigation-Agent` (**이 문서가 다루는 브랜치**). 개인 저장소의 `integrate-investigation`과 같은 내용으로 유지한다.
-  - `feature/investigation-attack-mapping` (개인 저장소 `integrate-attack-mapping`) — 0927에 이전 ATT&CK 매핑(`feature/ATT&CK-test`)을 합쳤던 통합 브랜치. 그 매핑은 폐기되어 제거했고, 통합 중 한 조사 쪽 수정(0건 증거 provenance, 공격 단계별 증거, `results/investigation_agent/`)만 남겨 조사 에이전트 브랜치와 같은 커밋으로 맞췄다. 조사 에이전트 수정은 조사 에이전트 브랜치에서 하고, 새 ATT&CK 매핑을 붙일 브랜치는 팀과 정한다.
   - `feature/agent-final` — 같은 `cb5005d`에서 갈라진 자매 브랜치. 0924 이후의 provenance·재현성 수정(아래 "상태와 신뢰도", "종료 관문")이 **없다**. raw_ref 미인용 시 신뢰도 기여를 0으로 만드는 이전 규칙을 쓴다. 이 브랜치의 변경을 그쪽으로 자동 전파하지 않는다.
 
 브랜치마다 폴더 구조와 세부 로직이 다르므로, 한쪽에서 읽은 코드/동작 지식을 다른 쪽에 그대로 적용하면 안 된다. 0918 이후 이 브랜치의 변경 이력과 검증 결과는 [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)에 있다.
@@ -42,7 +41,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 주의:
 - `pytest.ini`가 `tests/test_consistency.py`를 자동 실행에서 제외한다(실제 API 호출).
 - `No module named agent`/`scripts` 에러가 나면 저장소 루트에서 `python -m ...` 형태로 실행했는지 확인한다.
-- `main.py`는 보고서만 콘솔에 출력하고, 원본 investigation_result JSON은 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장한 뒤 파일명을 표시한다.
+- `main.py`는 보고서를 콘솔에 출력하지 않는다. investigation_result JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장한 뒤 파일명을 표시한다.
 - EC2 운영 환경은 Python 3.10이다. 시각 파싱처럼 버전에 따라 동작이 다른 부분은 3.10에서 확인한다.
 
 ## Architecture
@@ -55,7 +54,7 @@ raw log (.env의 <계층>_LOG_LOCAL_PATH 파일 — EC2는 /var/log/..., 로컬�
   → agent/pipeline.py                 우선순위 순서로 각 seed를 조사 루프에 투입 (run_investigation_pipeline)
   → agent/loop.py                     ReAct 루프: 매 사이클 LLM 호출 1회로 facts/hypotheses/evidence
                                        갱신 + 다음 행동(call_tool | terminate) 동시 결정 (InvestigationAgent.run)
-  → agent/report.py                   최종 investigation_result JSON + 텍스트 리포트
+  → agent/report.py                   최종 investigation_result JSON (main.py가 results/investigation_agent/에 저장)
 ```
 코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다. `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
@@ -103,7 +102,7 @@ raw log (.env의 <계층>_LOG_LOCAL_PATH 파일 — EC2는 /var/log/..., 로컬�
 - LLM 응답 해석 실패(`...DecisionError`)는 `_safe_reason()`이 1회 재시도하고, 또 실패하면 그 사건만 폴백 판정으로 마무리하고 다음 seed를 계속 조사한다. API 키·권한 오류는 그대로 올린다.
 
 ### 원본 추적/Provenance (D) — `agent/provenance.py`
-evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations()`로 `state.raw_refs`(seed+도구 결과에서 실제 관측된 참조 집합)와 대조된다. 최종 보고서의 `provenance.status`(`passed`/`incomplete`/`unavailable`)는 "참조가 유효했는가"의 검증이지 "판정이 맞는가"의 검증이 아니다. 텍스트 리포트는 Findings에 `[원본 N줄]`만 적고, 원본 위치는 맨 아래 `Raw References`에 범위로 묶어 보여준다(`compact_refs()`).
+evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations()`로 `state.raw_refs`(seed+도구 결과에서 실제 관측된 참조 집합)와 대조된다. 최종 보고서의 `provenance.status`(`passed`/`incomplete`/`unavailable`)는 "참조가 유효했는가"의 검증이지 "판정이 맞는가"의 검증이 아니다. 사람이 읽는 텍스트 보고서는 만들지 않는다(0927 제거) — 최종 보고서는 이후 단계(ATT&CK 매핑·대응 권고) 결과까지 합쳐 따로 만든다.
 
 ### 프롬프트 — `agent/prompts/` (패키지), `agent/seed_prompts.py`
 조사 루프 시스템 프롬프트는 `agent/prompts/investigation.yaml`에 있고 `agent/prompts/__init__.py`가 조립한다(계층별 첫 조회 구간 `query_windows`와 auth 24시간 조회창 `auth_lookback_window`를 코드가 계산해 주입). 판정 재현성을 위한 원칙 중 코드 관문과 짝을 이루는 것:
