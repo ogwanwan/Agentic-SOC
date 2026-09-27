@@ -69,6 +69,31 @@ def test_reinvestigated_incident_keeps_earlier_mapping_files(tmp_path):
     assert all("__2" in path for path in second["output_paths"])
 
 
+def test_verified_empty_result_evidence_keeps_verdict_mapping(tmp_path):
+    # EC2 XML-RPC 사건처럼 기법이 판정 문구로만 붙는 경우, "0건 → 활동 없음" 증거 하나 때문에
+    # provenance가 incomplete면 판정 문구 매칭이 꺼져 기법이 0개가 된다. 확인된 0건 증거는 막지 않는다.
+    def run(empty_result_call):
+        state = AgentState(incident_id="INC-XMLRPC", seed={"raw_refs": ["web.log:1"]})
+        state.raw_refs = ["web.log:1"]
+        state.add_evidence(Evidence(
+            evidence_id="EVID-101", sequence=1, time="2026-09-27T04:31:11Z", layer="web", event_type="web_access",
+            description="/xmlrpc.php 경로로 POST 요청 150건", source_log="web.log", raw_refs=["web.log:1"]))
+        state.add_evidence(Evidence(
+            evidence_id="EVID-102", sequence=2, time=None, layer="network", event_type="none",
+            description="network 조회 0건 — 추가 통신 없음", source_log="", empty_result_call=empty_result_call))
+        source = build_investigation_result(
+            state, "no_more_evidence", {"verdict": "THREAT_CONFIRMED", "attack_type": "웹 인증 무차별 대입"}, "INV-X")
+        saved = main.save_investigation_result(source, str(tmp_path))
+        return main.run_attack_mapping(saved, str(tmp_path / "attack_mapping"))
+
+    verified = run(2)
+    assert verified["provenance_status"] == "passed" and verified["mapping_status"] == "mapped"
+    assert [t["technique_id"] for t in verified["techniques"]] == ["T1110"]
+    unverified = run(None)
+    assert unverified["provenance_status"] == "incomplete"
+    assert unverified["mapping_status"] == "no_techniques_matched"
+
+
 def test_mapping_failure_does_not_stop_main(tmp_path, capsys):
     broken = tmp_path / "broken.json"
     broken.write_text("[]", encoding="utf-8")

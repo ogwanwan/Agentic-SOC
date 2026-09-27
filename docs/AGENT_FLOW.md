@@ -85,7 +85,7 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 | [20] | `_safe_reason()` → `gemini_client.reason()` | LLM 호출. 응답 해석 실패는 1회 재시도, 또 실패하면 이 사건만 폴백 판정 |
 | [21] | `prompts.build_system_prompt()` / `build_user_prompt()` | 시스템: `investigation.yaml` 원칙 + 도구 목록 + 출력 형식. 사용자: 현재 State + **지금까지 부른 도구의 결과 요약**(`already_called_tools`, 매 턴 유지) + **코드가 계산한 조회 구간**(`query_windows`, `auth_lookback_window`) + 직전 거부 사유. 도구 결과 원문(records)은 직후 한 턴에만 |
 | [22]·[23] | `complete_json()` | Gemini 호출(429·503·연결 끊김은 재시도) → JSON 결정 |
-| [24] | `_apply_decision()` | facts/가설/unknowns 갱신. 새 증거마다 **원본 참조 검증** 후 신뢰도에 더함(반박이면 뺌) |
+| [24] | `_apply_decision()` | facts/가설/unknowns 갱신. 새 증거마다 **원본 참조 검증** 후 신뢰도에 더함(반박이면 뺌). "조회 0건" 증거는 `empty_result_call`이 성공한 0건 호출인지 `_verified_empty_call()`로 확인 |
 | [25] | | LLM이 `terminate`면 → |
 | [25-1] | `_termination_rejections()` | **종료 관문** (아래 표). 거부 사유가 있으면 다음 턴에 사유를 알려 주고 계속 조사 |
 | [25-2] | `_verdict_conflicts()` | 판정이 도구가 계산한 기준과 어긋나는지 |

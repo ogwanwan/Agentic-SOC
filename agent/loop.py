@@ -81,6 +81,19 @@ def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "limit": NETWORK_PRECHECK_LIMIT,
     }
 
+
+def _verified_empty_call(state: AgentState, value: Any) -> Optional[int]:
+    """0건 증거가 가리킨 도구 호출이 실제로 성공한 0건 조회면 그 sequence, 아니면 None.
+
+    실패한 호출(로그 미확보·인자 오류)은 "활동 없음"의 근거가 아니고, 결과가 있었던 호출은 0건이 아니다.
+    """
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value)
+    if type(value) is not int:
+        return None
+    call = next((c for c in state.tool_calls if c.sequence == value), None)
+    return value if call is not None and call.success and call.result_count == 0 else None
+
 # [17] ← agent/pipeline.py [16]이 seed마다 하나씩 만들어 run(seed)을 부른다.
 #      "충분하다"는 판단(종료 관문 통과)이 나올 때까지 LLM 판단 → 도구 실행을 반복한다.
 class InvestigationAgent:
@@ -606,7 +619,16 @@ class InvestigationAgent:
                                           for source in state.raw_ref_groups.get(ref, [ref])))
             if any(len(state.raw_ref_locations.get(ref, [])) > 1 for ref in raw_refs):
                 contribution = 0.0
-            if not raw_refs and not unknown_refs and state.raw_refs:
+            # "조회 결과 0건" 증거는 인용할 원본 줄이 없다. LLM이 적은 empty_result_call이 실제로
+            # 성공한 0건 조회인지 코드가 확인한 경우에만 원본 누락으로 세지 않는다(2026-09-27: 이 증거들
+            # 때문에 provenance가 incomplete가 되어 ATT&CK 매핑이 partial·판정 문구 매칭 꺼짐으로 바뀌었다).
+            empty_call = None
+            if not raw_refs and not unknown_refs and ev.get("empty_result_call") is not None:
+                empty_call = _verified_empty_call(state, ev["empty_result_call"])
+                if empty_call is None:
+                    state.notes.append(f"증거 {sequence}: empty_result_call={ev['empty_result_call']!r}은 "
+                                       "성공한 0건 조회가 아니어서 확인하지 못했습니다(provenance 미완료).")
+            if not raw_refs and not unknown_refs and empty_call is None and state.raw_refs:
                 state.notes.append(f"증거 {sequence}: raw_ref 인용이 없습니다(신뢰도 기여는 반영, provenance 미완료).")
             # 같은 로그를 다시 인용한 증거는 신뢰도에 두 번 반영하지 않는다. 종료 관문이 거부된 뒤 LLM이
             # 이미 기록한 사실을 새 evidence로 다시 만들어 임계값을 채우는 사례가 main.py 실행에서
@@ -626,6 +648,7 @@ class InvestigationAgent:
                 contradicting_hypothesis=ev.get("contradicting_hypothesis", []),
                 confidence_contribution=contribution,
                 raw_refs=raw_refs,
+                empty_result_call=empty_call,
             )
             state.add_evidence(evidence, contradicting=contradicting)
 
@@ -719,7 +742,9 @@ class InvestigationAgent:
             )
 
             # [39] 결과를 다음 턴 LLM 관측(raw_observations_since_last_turn)으로 넘긴다 → run() [27] 뒤로 복귀
-            state.pending_observations.append({"tool_name": name, "args": args, "result": result})
+            #      sequence는 0건 증거의 empty_result_call로 인용하는 번호다
+            state.pending_observations.append({"sequence": state.tool_calls[-1].sequence,
+                                               "tool_name": name, "args": args, "result": result})
         except (ToolValidationError, KeyError, NotImplementedError) as exc:
             state.mark_called(name, args)
             error_msg = str(exc)
@@ -736,6 +761,7 @@ class InvestigationAgent:
             )
             state.pending_observations.append(
                 {
+                    "sequence": state.tool_calls[-1].sequence,
                     "tool_name": name,
                     "args": args,
                     "result": {
@@ -763,6 +789,7 @@ class InvestigationAgent:
             )
             state.pending_observations.append(
                 {
+                    "sequence": state.tool_calls[-1].sequence,
                     "tool_name": name,
                     "args": args,
                     "result": {

@@ -58,6 +58,9 @@ class Evidence:
     contradicting_hypothesis: List[str] = field(default_factory=list)
     confidence_contribution: float = 0.0
     raw_refs: List[str] = field(default_factory=list)
+    # "조회 결과 0건" 증거의 근거가 된 도구 호출 sequence. loop.py가 그 호출이 실제로 성공했고
+    # 0건이었는지 확인한 경우에만 채운다 — 인용할 원본 줄이 없어도 provenance 누락으로 세지 않는다.
+    empty_result_call: Optional[int] = None
 
     @classmethod
     def new(cls, sequence: int, **kwargs: Any) -> "Evidence":

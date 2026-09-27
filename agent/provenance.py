@@ -79,7 +79,9 @@ def observed_locations(result: Dict[str, Any]) -> Dict[str, List[str]]:
 
 def provenance_report(state: Any) -> Dict[str, Any]:
     evidence = state.evidence + state.contradicting_evidence
-    missing = [e.evidence_id for e in evidence if not e.raw_refs]
+    # 코드가 "성공한 0건 조회"로 확인한 증거(empty_result_call)는 인용할 원본 줄이 없는 게 정상이다
+    empty_result = [e.evidence_id for e in evidence if not e.raw_refs and e.empty_result_call is not None]
+    missing = [e.evidence_id for e in evidence if not e.raw_refs and e.empty_result_call is None]
     issues = list(state.provenance_issues)
     ambiguous = {ref: sources for ref, sources in state.raw_ref_locations.items() if len(sources) > 1}
     status = "passed" if state.raw_refs else "unavailable"
@@ -87,4 +89,5 @@ def provenance_report(state: Any) -> Dict[str, Any]:
         status = "incomplete"
     return {"status": status, "raw_ref_count": len(state.raw_refs),
             "seed_raw_refs": references(state.seed, seed=True),
-            "evidence_without_raw_refs": missing, "ambiguous_raw_refs": ambiguous, "issues": issues}
+            "evidence_without_raw_refs": missing, "empty_result_evidence": empty_result,
+            "ambiguous_raw_refs": ambiguous, "issues": issues}

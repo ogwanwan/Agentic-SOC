@@ -302,6 +302,7 @@ output_schema: |
         "event_type": "...",
         "source_log": "...",
         "raw_refs": ["도구 records 또는 seed에서 받은 raw_ref 원문"],
+        "empty_result_call": null,
         "time": "ISO8601 또는 null",
         "supporting_hypothesis": ["H1"],
         "contradicting_hypothesis": [],
@@ -335,6 +336,7 @@ rules: |
     attack_timeline은 confirmed_evidence를 근거로 시간 순서대로 채우십시오. 시각은 seed의 trigger_time이나
     window가 아니라 도구 결과의 실제 기록 시각을 쓰십시오. 반복 행위는 summary [조회 구간 전체 집계]의
     "실제 기록 시각 A~B"를 그대로 써서 시작(A)과 끝(B)을 각각 한 줄로 적습니다.
+    confirmed_evidence에 없는 행위를 타임라인에만 적지 마십시오(후속 ATT&CK 매핑은 evidence만 봅니다).
   - final_verdict.summary는 판정 근거를 나열하지 말고, 사람이 읽는 보고서 첫 줄에 바로 쓸 수 있는
     자연스러운 한국어 문장 1~2개로 작성하십시오.
   - final_verdict.reasoning은 판단 과정 자체를 적습니다. 원칙 6~9번의 판단 기준 중 실제로 어떤 항목을
@@ -359,8 +361,20 @@ rules: |
     audit처럼 여러 줄로 조립된 이벤트는 그 이벤트의 raw_ref 하나만 적어도 시스템이 나머지 줄을 함께
     연결합니다. known_raw_refs에 없는 참조를 만들거나 수정하지 마십시오. source_log는 설명용 이름이며 raw_refs를 대신하지 않습니다.
   - 조회 결과가 0건이라는 사실(예: "이 IP의 network 기록 없음")은 인용할 원본 로그가 없습니다. 판단에 쓰려면
-    evidence로 적되 raw_refs는 빈 배열로 두고, description에 어떤 도구·조건·구간으로 조회해 0건이었는지 명시하며,
-    약한 신호(±0.05)로만 반영하십시오. 같은 0건 사실은 한 번만 적고, 판단에 쓰지 않을 0건은 investigation_notes에 적으십시오.
+    evidence로 적되 raw_refs는 빈 배열로 두고, empty_result_call에 0건이었던 도구 호출의 sequence(정수,
+    raw_observations_since_last_turn·already_called_tools 항목의 "sequence")를 적으십시오. 시스템이 그 호출이 실제로
+    성공한 0건 조회인지 확인합니다. 실패한 호출(error)이나 결과가 있었던 호출은 0건 근거가 될 수 없습니다.
+    description에 어떤 도구·조건·구간으로 조회해 0건이었는지 명시하며, 약한 신호(±0.05)로만 반영하십시오.
+    같은 0건 사실은 한 번만 적고, 판단에 쓰지 않을 0건은 investigation_notes에 적으십시오.
+    원본 로그를 인용하는 일반 evidence의 empty_result_call은 null로 두십시오.
+  - 공격 흐름의 단계(예: 압축 → 외부 전송 → 흔적 삭제, 업로드 → 명령 실행 → 정보 확인)는 같은 도구 결과에
+    함께 나와도 합치지 말고 단계마다 따로 evidence로 기록하며, 각 evidence에는 그 단계의 raw_ref만 인용하십시오.
+    예: tar 압축, curl 전송, rm 삭제가 한 audit 결과에 있으면 evidence 3개입니다. 한 단계의 하위 프로세스(예: sh -c가
+    실행한 id·whoami·uname)는 한 evidence로 묶습니다.
+  - 명령 실행 evidence의 description에는 실행된 명령을 요약하지 말고 인자까지 원문 그대로 적으십시오
+    (예: "tar 압축" 대신 "tar -czf /tmp/site_backup.tar.gz /var/www/ /etc/mysql/"). 누가(계정·세션) 실행했는지도 함께 적습니다.
+  - 도구 결과 원문은 다음 턴에 사라지므로, 나중에 attack_timeline에 적을 행위는 결과를 본 이번 턴에 evidence로
+    남겨야 합니다. 새로운 위협 정황을 더하지 않는 부수 단계(예: 전송 후 흔적 삭제)는 약한 신호(±0.05)로 반영하십시오.
   - "contradicting"은 그 증거가 현재 주요 가설(confidence가 가장 높은 hypothesis)을 약화시키는지를
     뜻합니다. "정상적이었다/의심스럽지 않았다"는 사실이 자동으로 contradicting은 아닙니다. 가설이
     "침해 발생"이면 "로그인 실패 없음"은 반박(contradicting=true)이지만, 가설이 "정상 관리 행위"라면

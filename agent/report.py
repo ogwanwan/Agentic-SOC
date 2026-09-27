@@ -52,6 +52,7 @@ def build_investigation_result(
             "source_log": e.source_log,
             "raw_ref": e.raw_refs[0] if e.raw_refs else None,
             "raw_refs": list(e.raw_refs),
+            "empty_result_call": e.empty_result_call,
         }
         for e in state.evidence
     ]
@@ -67,6 +68,7 @@ def build_investigation_result(
             "source_log": e.source_log,
             "raw_ref": e.raw_refs[0] if e.raw_refs else None,
             "raw_refs": list(e.raw_refs),
+            "empty_result_call": e.empty_result_call,
         }
         for e in state.contradicting_evidence
     ]
@@ -211,6 +213,8 @@ def format_text_report(result: Dict[str, Any]) -> str:
             label = _source_label(ev)
             tag = " (반박)" if ev in result["contradicting_evidence"] else ""
             count = f" [원본 {len(ev['raw_refs'])}줄]" if ev.get("raw_refs") else ""
+            if not count and ev.get("empty_result_call") is not None:
+                count = f" [도구 호출 #{ev['empty_result_call']} 0건 확인]"
             lines.append(f"E{ev.get('sequence', '?')} [{label}]{tag} {ev['description']}{count}")
         lines.append("")
 

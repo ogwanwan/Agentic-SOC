@@ -188,6 +188,50 @@ def test_failed_tool_does_not_discard_already_observed_refs():
     assert result["tools_called"][1]["error"] == "offline"
 
 
+def _empty_result_run(empty_result_call):
+    """도구 1: 결과 있음(input:1), 도구 2: 0건, 도구 3: 실패. 0건 증거가 empty_result_call을 인용."""
+    registry = ToolRegistry()
+    registry.register(ToolSpec("found", "", [], handler=lambda args: {"count": 1, "records": [{"raw_ref": "input:1"}]}))
+    registry.register(ToolSpec("empty", "", [], handler=lambda args: {"count": 0, "records": []}))
+    def fail(args):
+        raise OSError("offline")
+    registry.register(ToolSpec("fail", "", [], handler=fail))
+    llm = ScriptedInvestigator([
+        {"next_action": "call_tool", "tool_call": {"tool_name": "found"}},
+        {"next_action": "call_tool", "tool_call": {"tool_name": "empty"}},
+        {"next_action": "call_tool", "tool_call": {"tool_name": "fail"}},
+        terminate([evidence(raw_ref="input:1"),
+                   evidence(description="empty 조회 0건 — 후속 활동 없음", confidence_contribution=0.05,
+                            empty_result_call=empty_result_call)]),
+    ])
+    return InvestigationAgent(llm, registry).run({"incident_id": "EMPTY"}), llm
+
+
+def test_verified_empty_result_evidence_keeps_provenance_passed():
+    # 2026-09-27: "조회 0건 → 활동 없음" 증거가 원본 누락으로 세져 provenance가 incomplete가 되고,
+    # ATT&CK 매핑이 partial·판정 문구 매칭 꺼짐으로 바뀌던 문제. 성공한 0건 호출로 확인되면 누락이 아니다.
+    result, llm = _empty_result_run(2)
+    assert result["provenance"]["status"] == "passed"
+    assert result["provenance"]["evidence_without_raw_refs"] == []
+    empty = result["evidence_chain"][1]
+    assert empty["raw_refs"] == [] and empty["empty_result_call"] == 2
+    assert result["provenance"]["empty_result_evidence"] == [empty["evidence_id"]]
+    assert result["evidence_chain"][0]["empty_result_call"] is None
+    assert result["statistics"]["confidence_increase"] == pytest.approx(0.25)  # 기여는 그대로 반영
+    assert "[도구 호출 #2 0건 확인]" in format_text_report(result)
+    assert '"sequence": 2' in llm.prompts[2]  # LLM이 보는 관측에 호출 번호가 있다
+
+
+@pytest.mark.parametrize("claimed", [1, 3, 9, "x", True])  # 결과 있음 / 실패 / 없는 호출 / 형식 오류
+def test_unverified_empty_result_evidence_stays_incomplete(claimed):
+    result, _ = _empty_result_run(claimed)
+    assert result["provenance"]["status"] == "incomplete"
+    empty = result["evidence_chain"][1]
+    assert empty["empty_result_call"] is None
+    assert result["provenance"]["evidence_without_raw_refs"] == [empty["evidence_id"]]
+    assert result["statistics"]["confidence_increase"] == pytest.approx(0.25)
+
+
 def test_process_tree_refs_and_multiline_groups(tmp_path, monkeypatch):
     epoch = int(datetime(2026, 9, 21, tzinfo=timezone.utc).timestamp())
     path = local_log(tmp_path, monkeypatch, "audit",
