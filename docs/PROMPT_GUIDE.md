@@ -367,6 +367,17 @@ LLM은 매 턴 이 JSON 하나로 답한다.
 - 원칙 9의 기준값(POST 10회, 경로 20개)은 팀 판정 정책으로 정한 값이다. 실제 로그 분포를 보고 조정할 수 있다.
 - `/.git/config` 같은 민감 파일 탐색(8건, 404)은 원칙 9 수치로는 FALSE_POSITIVE지만 LLM은 일관되게 THREAT_CONFIRMED(LOW)로 판정한다 — 팀 정책 결정 후 원칙 9에 명시할 것.
 - "Jetpack 정상 연동" 같은 판단은 IP 소유를 확인하는 도구가 없어서 할 수 없다(현재는 횟수 기준만).
+- **원칙 9 미충족 + 다른 계층 로그 미확보 → FALSE_POSITIVE인가 INCONCLUSIVE인가** (2026-09-27, 1차 탐지 통합 회의에서 결정):
+  - 사례: 1차 탐지 샘플 사건 `INC-960a3db8`(IP 하나가 `GET /.env` 404, `POST /` 503 두 건). web에는 기록이 있지만 그 시간대
+    audit·network 로그가 비어 있다(`window_total` 0). 같은 사건을 4번 실행해 INCONCLUSIVE 2번, FALSE_POSITIVE 2번이 나왔다.
+  - 원인: 원칙 9는 "소량 요청이고 침해 신호가 없으면 FALSE_POSITIVE, INCONCLUSIVE로 판정하지 말 것"이고, 원칙 1은 "로그가
+    없는 것은 활동 없음이 아니다"라서 이 경우에 서로 다른 판정을 가리킨다. `_verdict_conflicts()`는 조회한 **모든** 계층이
+    0건일 때만 INCONCLUSIVE를 강제하므로 web에 기록이 있으면 둘 다 통과한다.
+  - 함께 볼 표현 문제: FALSE_POSITIVE 판정의 reasoning에 로그가 없던 audit·network를 "확인 결과 후속 침해 징후 없음"으로
+    적었다(unknowns에는 "로그 미확보"로 맞게 적음). 기준과 무관하게 "미확보"로 써야 하는 부분이라 기준을 정할 때 같이 고친다.
+  - 회의에서 정할 것: (1) 이 조합의 판정 (2) 1차 탐지가 이런 단발성 사건을 조사 대상으로 넘길지(triage 변경으로 줄어들 수 있음).
+  - 정하면 고칠 곳: `investigation.yaml` 원칙 1·9, `_verdict_conflicts()`·`_rule_determined_verdict()`, 반복 측정
+    (`python -m tests.test_consistency`). 샘플은 계층마다 날짜가 달라 이 상황이 과장되게 나온다 — EC2 실로그로도 확인할 것.
 
 ### 정합성 정리 — 남은 후보 (2026-09-25 검토)
 - **B′. 코드와 중복된 기준 숫자 → 코드 상수를 프롬프트에 자동으로 채우기** (다음에 할 것): 원칙 7(실패 5회·계정 2개·
