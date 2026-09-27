@@ -49,6 +49,11 @@ LOG_TOOLS = frozenset({"fetch_web_log", "fetch_auth_log", "fetch_audit_log", "fe
                        "fetch_event_logs", "get_process_tree"})
 # 로그인 성공 뒤 후속 행위를 볼 수 있는 도구 (종료 관문 (e))
 AUDIT_TOOLS = frozenset({"fetch_audit_log", "get_process_tree"})
+# 1차 탐지 탐지 계층(detection.rules[].layer, system = audit) → 그 계층 원본을 확인하는 도구 (종료 관문 (g))
+DETECTION_LAYER_TOOLS = {
+    "web": ("fetch_web_log",), "auth": ("fetch_auth_log",),
+    "audit": ("fetch_audit_log", "get_process_tree"), "network": ("fetch_network_log",),
+}
 
 
 def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -326,6 +331,10 @@ class InvestigationAgent:
           (f) audit 명령 인자에 등장한 외부 IP(state.command_external_ips)를 network로 조회하지 않음
               (fetch_network_log의 ip/src_ip/dst_ip 또는 fetch_event_logs의 filters.network).
               로그인 IP와 유출 목적지가 다른 시나리오에서 새 목적지를 "추가 조회 권장"으로만 남겼다(3/3).
+          (g) 1차 탐지가 넘긴 참조(seed detection.rules[].evidence_refs)를 도구 결과에서 관측하지 않은 채
+              증거로 인용했고, 그 참조의 계층을 도구로 한 번도 조회하지 않음(_unverified_detection_refs).
+              1차 탐지 Incident로 바꾼 첫 실제 실행(2026-09-27)에서 LLM이 detection의 명령 인자를 그대로
+              증거로 옮겨 audit을 한 번도 보지 않고 THREAT_CONFIRMED로 끝냈다.
         """
         attempted = {t.tool_name for t in state.tool_calls}
         queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
@@ -365,6 +374,17 @@ class InvestigationAgent:
                 + "로 조회해 경보·통신을 확인하십시오"
             )
 
+        # (g) 1차 탐지 정보는 조사 단서다. 그 참조를 인용한 증거는 해당 계층 원본을 도구로 본 뒤에만 인정한다.
+        unverified = self._unverified_detection_refs(state)
+        if self.strict_termination and unverified:
+            reasons.append(
+                "1차 탐지가 넘긴 참조를 도구로 조회하지 않고 증거로 인용함("
+                + ", ".join(f"{layer}: {', '.join(refs[:3])}" for layer, refs in unverified.items())
+                + "). detection 정보는 단서일 뿐이므로 "
+                + " / ".join(DETECTION_LAYER_TOOLS[layer][0] for layer in unverified)
+                + "로 그 원본을 조회해 raw_observations에서 확인한 뒤 판단하십시오"
+            )
+
         if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
             successful = {t.tool_name for t in chosen if t.success}
             distinct = max(len(successful), len(chosen_layers))
@@ -395,6 +415,34 @@ class InvestigationAgent:
                     + self._untried_tool_hint(attempted)
                 )
         return reasons
+
+    def _unverified_detection_refs(self, state: AgentState) -> Dict[str, list]:
+        """종료 관문 (g): 증거가 인용한 1차 탐지 참조 중, 도구 결과에서 관측되지 않았고 그 계층을
+        도구로 한 번도 조회하지 않은 것을 계층별로 돌려준다. 계층을 알 수 없는 참조(직접 작성한 사건의
+        evidence_refs)나 등록되지 않은 도구의 계층은 보지 않는다. 조회는 시도만 해도 인정한다(조건이
+        맞지 않아 원본이 안 보여도 LLM이 결과를 보고 판단한 것으로 본다)."""
+        ref_layers: Dict[str, str] = {}
+        for rule in (state.seed.get("detection") or {}).get("rules") or []:
+            layer = "audit" if rule.get("layer") == "system" else rule.get("layer")
+            for ref in rule.get("evidence_refs") or []:
+                ref_layers.setdefault(ref, layer)
+        if not ref_layers:
+            return {}
+        registered = {spec.name for spec in self.tool_registry.list_tools()}
+        attempted = {t.tool_name for t in state.tool_calls}
+        queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
+        observed = {ref for t in state.tool_calls for ref in t.raw_refs}
+        unverified: Dict[str, list] = {}
+        for evidence in state.evidence + state.contradicting_evidence:
+            for ref in evidence.raw_refs:
+                layer = ref_layers.get(ref)
+                tools = DETECTION_LAYER_TOOLS.get(layer, ())
+                if (ref in observed or not (registered & set(tools))
+                        or attempted & set(tools) or layer in queried_layers):
+                    continue
+                if ref not in unverified.setdefault(layer, []):
+                    unverified[layer].append(ref)
+        return unverified
 
     # 거부 사유에 붙이는 "다음에 볼 도구" 안내. 예전 문구("도구 1종류만 사용됨")만으로는 LLM이
     # 무엇을 더 봐야 할지 몰라 같은 종료를 반복했다(EC2 xmlrpc 사건).

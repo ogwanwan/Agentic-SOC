@@ -95,6 +95,8 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
   - (c) seed에 src_ip가 있는데 network 조회를 한 번도 시도하지 않음(사전 조회 포함, 실패해도 시도로 인정)
   - (d) strict: `no_more_evidence`인데 도구를 1종류만 시도했고 안 본 로그 도구가 남음
   - (e) strict: seed src_ip의 로그인 성공(`ssh_accepted`)이 보이는데 audit을 시도하지 않음. 거부 사유에 `ppid=<sshd pid>`를 적어준다
+  - (f) strict: audit 명령 인자에 나온 공인 IP를 network로 조회하지 않음
+  - (g) strict: 증거가 인용한 1차 탐지 참조(`detection.rules[].evidence_refs`)를 도구 결과에서 관측하지 않았고 그 계층(system = audit)을 도구로 한 번도 조회하지 않음(`_unverified_detection_refs()`). 조회 시도만 해도 인정. 계층을 알 수 없는 참조(직접 작성한 사건)는 보지 않는다. 1차 탐지 Incident 첫 실제 실행에서 LLM이 detection의 명령 인자를 그대로 증거로 옮겨 audit 없이 확정한 사례 때문
   - 판정-원칙 충돌 (`_verdict_conflicts()`, strict): 조회한 모든 계층의 `window_total`이 0인데 INCONCLUSIVE가 아님 / 원칙 9 기준 충족인데 FALSE_POSITIVE / audit에 웹 서버 계정 의심 명령이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만 / 원칙 7 무차별 대입인데 FALSE_POSITIVE·INCONCLUSIVE / 원칙 7 단발성·탐침이고 다른 위협 기준이 없는데 THREAT_CONFIRMED·INCONCLUSIVE
   - 거부 사유에는 아직 안 본 도구와 확인 목적이 적힌다(`UNTRIED_TOOL_PURPOSE`).
 - **강제 종료**: 같은 사유(숫자 제외 비교)로 연속 2회 거부될 때만 강제 종료 턴으로 전환한다. 거부 사이에 새 도구가 실행되면 횟수를 초기화한다. 강제 종료 턴에서 LLM이 원칙과 어긋나게 판정을 뒤집으면 앞서 LLM이 낸 원칙에 맞는 판정을 쓴다(`_settle_forced_verdict()`). 그래도 충돌이 남으면 판정은 바꾸지 않고 notes에 "⚠ 판정-원칙 불일치"를 남긴다.

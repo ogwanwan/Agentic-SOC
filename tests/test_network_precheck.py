@@ -580,3 +580,42 @@ def test_command_external_ip_must_be_checked_on_network_before_termination():
     network_ips = [t["input"].get("ip") for t in result["tools_called"] if t["tool_name"] == "fetch_network_log"]
     assert "185.220.101.47" in network_ips
     assert result["statistics"]["termination_reason"] == "confidence_sufficient"
+
+
+def test_detection_refs_require_their_layer_before_termination():
+    """1차 탐지 사건: detection의 audit 참조를 증거로 인용했으면 audit을 조회하기 전까지 종료를 거부한다.
+
+    2026-09-27 실제 Gemini 실행에서 LLM이 detection.rules[].detail의 명령을 그대로 증거로 옮기고
+    web·auth만 조회한 뒤 THREAT_CONFIRMED로 끝냈다(audit 미조회).
+    """
+    from agent.incident_input import load_incidents, to_investigation_seed
+    from tests.test_pipeline import FIXTURE
+
+    incident = next(i for i in load_incidents(FIXTURE) if i["incident_id"] == "INC-7d29ffde")
+    seed = {**to_investigation_seed(incident, host="web-01"), "confidence_initial": 0.9}
+    copied = {"description": "php-fpm이 웹루트에 is.php 작성", "layer": "process",
+              "raw_refs": ["sample_audit.log:6"], "confidence_contribution": 0.05}
+    first = {**_call("fetch_web_log"), "new_evidence": [copied]}
+    done = _terminate("confidence_sufficient", 0.95)
+    llm = RecordingLLM([first, _call("fetch_auth_log"), done, _call("fetch_audit_log"), done])
+    registry = build_default_registry(handlers=MOCK_HANDLERS)
+    result = InvestigationAgent(llm, registry, strict_termination=True).run(seed)
+    rejected = [n for n in result["investigation_notes"] if "1차 탐지가 넘긴 참조를 도구로 조회하지 않고" in n]
+    assert len(rejected) == 1
+    assert "audit: sample_audit.log:6" in rejected[0] and "fetch_audit_log" in rejected[0]
+    assert [t["tool_name"] for t in result["tools_called"]] == ["fetch_web_log", "fetch_auth_log", "fetch_audit_log"]
+    assert result["statistics"]["termination_reason"] == "confidence_sufficient"
+
+    # 그 계층을 이미 조회했거나, 계층을 알 수 없는 참조(직접 작성한 사건)면 조건이 아니다
+    for case_seed, decisions in [
+        (seed, [{**_call("fetch_audit_log"), "new_evidence": [copied]}, _call("fetch_auth_log"), done]),
+        ({"incident_id": "HAND", "host": "web-01", "evidence_refs": ["sample_audit.log:6"], "confidence_initial": 0.9},
+         [{**_call("fetch_web_log"), "new_evidence": [copied]}, _call("fetch_auth_log"), done]),
+    ]:
+        other = InvestigationAgent(RecordingLLM(decisions), registry, strict_termination=True).run(case_seed)
+        assert not any("1차 탐지가 넘긴 참조" in n for n in other["investigation_notes"])
+        assert other["statistics"]["termination_reason"] == "confidence_sufficient"
+
+    # strict_termination=False(데모·기존 단위 테스트 조건)에서는 적용하지 않는다
+    loose = InvestigationAgent(RecordingLLM([first, _call("fetch_auth_log"), done]), registry).run(seed)
+    assert [t["tool_name"] for t in loose["tools_called"]] == ["fetch_web_log", "fetch_auth_log"]

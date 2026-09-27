@@ -70,13 +70,20 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
   - "이 구간에는 로그 기록 자체가 없습니다"는 "활동 없음"이 아니라 **로그 미확보** → INCONCLUSIVE.
   - IP 평판("악성으로 알려진 IP")은 그걸 조회하는 도구가 없으면 말하지 않는다. 행위로만 판단한다.
   - 도구 결과에 없는 지명·조직명·평판을 만들어내지 않는다.
-  - seed의 `severity_hint`, `confidence_initial`은 힌트일 뿐 근거가 아니다.
+  - seed의 `severity_hint`, `confidence_initial`, `trigger_description`, `detection`(1차 탐지 룰·detail), `llm_reason`은
+    1차 탐지가 준 단서일 뿐 근거가 아니다.
+  - `detection.rules[].detail`의 명령·경로를 그대로 증거로 옮기지 않는다. 그 룰의 계층 도구로 원본을 조회해
+    records에서 확인한 뒤 그 raw_ref를 인용한다(2026-09-27).
 
 **왜 생겼나**
 - **severity_hint 오염**: 0918에 실제 자동 생성 seed(INC-001)로 반복 실행했더니, seed의 초기 추정치가
   최종 판정을 끌고 가서 같은 증거로 재현성이 50%까지 떨어졌다. "힌트일 뿐"을 명시해 100%로 회복했다.
 - **IP 평판 지어내기**: 평판 조회 도구가 없는데 "악성 IP로 알려진"처럼 쓰는 사례를 막는다.
 - **로그 미확보**: 로그가 없는 날짜의 seed를 LLM이 "활동 없음"으로 읽고 4번 중 3번 FALSE_POSITIVE로 판정했다.
+- **1차 탐지 detail 받아 적기**: 입력을 1차 탐지 Incident로 바꾼 첫 실제 실행(Gemini, 웹셸 → 권한 상승 사건)에서
+  LLM이 `detection`의 `sh -c curl ...`, `sudo su`, `useradd ...`를 첫 턴에 그대로 증거로 적어 신뢰도 1.0을 채우고,
+  audit은 한 번도 조회하지 않은 채 THREAT_CONFIRMED로 끝냈다. 1차 탐지 참조는 관측된 참조로 등록되므로 원본
+  추적도 passed였다. 판정은 맞았지만 1차 탐지 결과를 다시 확인하지 않고 받아 적은 것이라 종료 관문 (g)로 막는다.
 
 **코드 뒷받침**
 - 도구가 `window_total`(필터 전 구간 전체 건수)을 돌려주고, 0이면 summary에 "로그 기록 자체가 없음"을 붙인다.
@@ -86,7 +93,9 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
 
 **지시**
 - 모든 로그를 다 보지 말고, 부족한 증거에 맞는 도구만 고른다.
-- 첫 도구는 seed 단서로: 웹 단서(URI·업로드·메서드) → `fetch_web_log`, 인증 단서(SSH·로그인) → `fetch_auth_log`.
+- 첫 도구는 seed 단서(`trigger_description`, `detection.rules[].layer`)로: 웹 단서(URI·업로드·메서드) → `fetch_web_log`,
+  인증 단서(SSH·로그인) → `fetch_auth_log`, 명령 실행·프로세스·서버 파일 변경(system) → `fetch_audit_log`
+  (`detection.rules[].detail`의 pid·ppid로 조회, 2026-09-27 추가).
 - **조회 구간**: 각 계층의 첫 호출은 `query_windows` 구간을 그대로 쓴다(web ±1시간, audit -30분~+1시간,
   network ±30분, auth 24시간). 다른 구간은 두 번째 호출부터 실제 기록 시각을 근거로 바꾼다.
 - audit은 넓은 구간을 필터 없이 조회하지 않는다. 먼저 `[후속 침해 확인]` 집계를 보고, 원본이 필요하면
@@ -327,6 +336,7 @@ LLM은 매 턴 이 JSON 하나로 답한다.
 |---|---|---|---|
 | 1 로그 미확보 | 원칙 1 | 도구 `window_total`, `log_source.filtered_out_hint()` | `loop._verdict_conflicts()` |
 | 2 조회 구간 | 원칙 2 | `prompts.layer_query_windows()` | — |
+| 1 1차 탐지 단서 확인 | 원칙 1·2·4 | `incident_input.to_investigation_seed()`(detection 요약) | `_termination_rejections()` (g) `_unverified_detection_refs()` |
 | 4 종료 조건·사전 조회 | 원칙 4 | `loop.network_precheck_args()`, `fetch_audit_log.command_external_ips()` | `loop._termination_rejections()` (a)–(d), (f) |
 | 5 로그인 후 audit | 원칙 5 | — | `_termination_rejections()` (e) |
 | 7 SSH | 원칙 7 | `fetch_auth_log.principle7_check()` | `_verdict_conflicts()`, `_rule_determined_verdict()` |
