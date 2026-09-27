@@ -621,7 +621,7 @@ class InvestigationAgent:
                 contribution = 0.0
             # "조회 결과 0건" 증거는 인용할 원본 줄이 없다. LLM이 적은 empty_result_call이 실제로
             # 성공한 0건 조회인지 코드가 확인한 경우에만 원본 누락으로 세지 않는다(2026-09-27: 이 증거들
-            # 때문에 provenance가 incomplete가 되어 ATT&CK 매핑이 partial·판정 문구 매칭 꺼짐으로 바뀌었다).
+            # 때문에 원본 추적에 문제가 없는데도 provenance가 incomplete로 나왔다).
             empty_call = None
             if not raw_refs and not unknown_refs and ev.get("empty_result_call") is not None:
                 empty_call = _verified_empty_call(state, ev["empty_result_call"])

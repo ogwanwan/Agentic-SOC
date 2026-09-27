@@ -217,7 +217,7 @@ Agentic-SOC/
 2. `.env.example`을 `.env`로 복사하고 선택한 모델의 API 키를 입력한다.
 3. `HOST`, `LOG_LOCAL_HOST`, 계층별 `*_LOG_LOCAL_PATH`를 내 수집 서버와 파일에 맞춘다.
 4. auth가 연도 없는 syslog이면 `AUTH_LOG_YEAR`를 실제 로그 연도로 맞춘다.
-5. `python main.py`를 실행한다. 조사 결과가 있으면 `results/investigation_agent/`에 JSON이 저장되고, 이어서 ATT&CK 매핑 결과가 `results/attack_mapping/`에 저장된다.
+5. `python main.py`를 실행한다. 조사 결과가 있으면 `results/investigation_agent/`에 JSON이 저장된다.
 
 Windows의 복사 명령은 `Copy-Item .env.example .env`, macOS/Linux는 `cp .env.example .env`다.
 이미 `.env`가 있으면 필요한 항목만 수정한다. 키가 들어간 `.env`는 커밋하지 않는다.

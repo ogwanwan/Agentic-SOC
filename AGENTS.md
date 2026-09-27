@@ -4,10 +4,9 @@
 대화 기억에만 의존하지 말고 실제 코드, Git 변경 사항, 해당 작업의 요청을 기준으로 작업한다.
 이 문서는 저장소 공통 규칙이며, 사용자가 명시한 작업 범위와 Git 반영 방식을 우선한다.
 
-이 파일은 조사 에이전트와 ATT&CK 매핑을 합친 `feature/investigation-attack-mapping`의 현재 코드를
-기준으로 한다. 2026-09-27부터 조사 에이전트 수정도 이 브랜치에서 한다. `feature/Agentic-SOC-Investigation-Agent`는
-통합 전 조사 에이전트 단독 기준점으로 두고 수정하지 않는다. `feature/agent-final`과는 일부 동작이 다르다.
-다른 브랜치의 설명이나 이전 대화만으로 현재 동작을 단정하지 말고, 체크아웃한 브랜치와 실제 구현을 확인한다.
+이 파일은 `feature/Agentic-SOC-Investigation-Agent`의 현재 코드를 기준으로 한다.
+`feature/agent-final`과 일부 동작이 다르다. 다른 브랜치의 설명이나 이전 대화만으로
+현재 동작을 단정하지 말고, 체크아웃한 브랜치와 실제 구현을 확인한다.
 
 ## 작업 시작과 동시 편집
 
@@ -33,9 +32,6 @@
 - D 원본 추적: `agent/provenance.py`, `models.py`, `loop.py`, `report.py`.
   입력 → seed → 도구 결과 → 조사 증거 → 최종 보고서까지 원본 참조를 전달·검증한다.
 - 전체 흐름은 `agent/pipeline.py`, 운영 진입점은 `main.py`다.
-- ATT&CK 매핑: `attack_mapping/`(엔진·규칙·Kill Chain·CLI)과 `reporting/`(최종 보고서)은
-  어택 매핑 팀 코드다. 조사 쪽에서는 `main.py`의 `run_attack_mapping()`으로 연결만 하고,
-  이 폴더들은 어택 매핑 팀과 합의한 경우에만 수정한다. `agent/`는 `attack_mapping/`을 import하지 않는다.
 
 ## 데이터와 호환성
 
@@ -81,9 +77,8 @@ Windows에서 가상환경을 활성화하지 않았다면 `python` 대신
 
 ## Git 반영과 인계
 
-- 이 파일의 대상 브랜치는 `feature/investigation-attack-mapping`(개인 저장소 `integrate-attack-mapping`)이다.
-  통합 전 기준점인 `feature/Agentic-SOC-Investigation-Agent`나 자매 브랜치 `feature/agent-final`로
-  변경을 자동 전파하지 않고, 통합 브랜치를 그쪽으로 merge하지 않는다. 사용자가 지정한 저장소·브랜치·커밋
+- 이 파일의 대상 브랜치는 `feature/Agentic-SOC-Investigation-Agent`다. 자매 브랜치인
+  `feature/agent-final`로 변경을 자동 전파하지 않는다. 사용자가 지정한 저장소·브랜치·커밋
   메시지와 직접 push/PR 방식을 따른다. `pull` 또는 PR 금지 요청을 임의로 바꾸지 않는다.
 - 원격에 반영하기 전에 최신 대상 커밋을 확인한다. 다른 사람의 커밋이 추가되었다면 보존하여
   통합하고, 충돌 해결로 코드가 바뀐 경우 필요한 검증을 다시 수행한다.

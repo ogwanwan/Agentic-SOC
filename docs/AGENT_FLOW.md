@@ -1,7 +1,6 @@
 # 조사 에이전트 동작 흐름
 
 `python main.py` 한 번이 어떤 파일·함수를 어떤 순서로 거치는지 정리한 문서다.
-조사 이후 ATT&CK 매핑·최종 보고서까지의 전체 흐름과 두 단계의 연결부는 [AGENT_ATTACK_MAPPING_FLOW.md](AGENT_ATTACK_MAPPING_FLOW.md)를 본다.
 코드 주석의 `[1]`, `[2]` … 번호가 이 문서의 번호와 같다. 코드를 읽을 때 번호를 따라가면 된다.
 하위 단계는 `[25-1]`처럼 붙였다.
 
@@ -27,8 +26,7 @@ main.py
                          ├─ [25]      종료 요청이면 → 종료 관문 → 통과하면 끝
                          └─ [27]~[39] 도구 요청이면 → 도구 실행 → 결과를 다음 턴에 LLM에게
                    └─ [41] 결과 JSON 만들기                agent/report.py
- ├─ [45] 텍스트 보고서 출력 + results/investigation_agent/*.json 저장
- └─ [46] ATT&CK 매핑 (저장된 JSON으로)     attack_mapping/cli.py process_file() → reporting/final_report.py
+ └─ [45] 텍스트 보고서 출력 + results/investigation_agent/*.json 저장
 ```
 
 LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고, 코드는 **조회 실행·숫자 세기·기준 계산·조기 종료 차단**을 맡는다.
@@ -110,7 +108,6 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 | [41] | `report.build_investigation_result()`로 결과 JSON |
 | [42]·[43]·[44] | loop → pipeline → main으로 반환 |
 | [45] | `report.format_text_report()`로 텍스트 보고서 출력, JSON은 `results/investigation_agent/<investigation_id>_<UTC시각>.json` |
-| [46] | `main.run_attack_mapping()` → 어택 매핑 팀 `attack_mapping/cli.py` `process_file()`: 저장된 JSON을 규칙(`attack_mapping/rules/`)과 비교해 기법·Kill Chain을 만들고 `results/attack_mapping/<incident_id>_attack_mapping.json`, `_final_report.json` 저장(같은 사건이면 `__2`, `__3` …). LLM 호출 없음. FALSE_POSITIVE → `not_applicable`, INCONCLUSIVE·provenance `unavailable` → `deferred`, provenance `incomplete` → 원본 참조가 확인된 증거만 쓰는 `partial`. 매핑이 실패해도 조사 결과 JSON은 이미 저장돼 있고 다음 사건은 계속 |
 
 ### 도구 내부 — `agent/tools/real/fetch_*_log.py`
 

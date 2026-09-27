@@ -208,8 +208,8 @@ def _empty_result_run(empty_result_call):
 
 
 def test_verified_empty_result_evidence_keeps_provenance_passed():
-    # 2026-09-27: "조회 0건 → 활동 없음" 증거가 원본 누락으로 세져 provenance가 incomplete가 되고,
-    # ATT&CK 매핑이 partial·판정 문구 매칭 꺼짐으로 바뀌던 문제. 성공한 0건 호출로 확인되면 누락이 아니다.
+    # 2026-09-27: "조회 0건 → 활동 없음" 증거가 원본 누락으로 세져 provenance가 incomplete가 되던 문제.
+    # 성공한 0건 호출로 확인되면 누락이 아니다.
     result, llm = _empty_result_run(2)
     assert result["provenance"]["status"] == "passed"
     assert result["provenance"]["evidence_without_raw_refs"] == []
