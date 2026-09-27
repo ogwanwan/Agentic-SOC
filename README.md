@@ -19,6 +19,8 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로
   → agent/pipeline.py            우선순위 순서로 사건마다 조사 루프 실행
   → agent/loop.py                LLM 판단 → 도구 실행 → 결과 관찰 반복, 종료 관문 통과 시 종료
   → agent/report.py              결과 JSON(results/*.json) + 텍스트 보고서
+  → attack_mapping/ (어택 매핑 팀) 저장된 JSON → ATT&CK 기법·Kill Chain (LLM 호출 없음, 규칙 기반)
+  → reporting/final_report.py    조사 결과 + 매핑 결과 = 최종 보고서 (results/attack_mapping/)
 ```
 
 | 역할 | 쉽게 말하면 | 위치 |
@@ -47,6 +49,8 @@ agent/
     normalizer_adapter.py 1차 탐지팀 정규화 코드와의 연결 지점
     real/                실제 조사 도구
 primary_detection/normalizer/   1차 탐지팀 공통 정규화 코드 (수정 금지, 원본 그대로 복사)
+attack_mapping/          어택 매핑 팀 코드: 매핑 엔진·규칙(rules/)·Kill Chain·CLI
+reporting/               최종 보고서 합치기 (어택 매핑 팀 코드, 이후 대응 단계 결과도 여기서 합칠 예정)
 scenarios/               로컬 재현 시험용 합성 공격 로그 생성
 scripts/                 점검·데모 스크립트 (verify_all_tools, demo_abcd 등)
 tests/                   오프라인 테스트 (test_consistency.py = 실제 LLM 재현성 측정)
@@ -76,8 +80,10 @@ RAW_LOG_LOCAL_MAX_LINES=50
 ```
 
 ```bash
-python main.py                                  # 전체 실행 → 보고서 출력, results/에 JSON 저장
+python main.py                                  # 전체 실행 → 보고서 출력, results/에 JSON 저장 → ATT&CK 매핑(results/attack_mapping/)
+python -m attack_mapping.cli results/<파일>.json  # 저장된 조사 결과만 다시 매핑 (--all-in-dir results 로 일괄)
 python -m pytest -q                             # 오프라인 테스트 (API 키 불필요)
+python -m scripts.verify_attack_mapping_abc     # 어택 매핑 A/B/C 통합 검증
 python -m tests.test_normalizer_parity          # 1차 탐지 정규화 결과와 동일성 검증
 python -m scripts.verify_all_tools              # .env 로그 경로로 도구 일괄 점검
 python -m tests.test_consistency --runs 3 --seed-json seed.json   # 같은 seed 반복 판정 재현성 (실제 LLM)

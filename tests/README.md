@@ -39,6 +39,7 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 | `test_attack_mapping_cli.py` | ATT&CK 결과 저장, 같은 사건의 여러 조사·반복 실행 보존, 비객체 JSON 뒤의 배치 처리, 출력 폴더 이탈·파일명 충돌 방지 |
 | `test_attack_mapping_killchain.py` | 공격 단계 우선 정렬, UTC 환산 순서·대표 시각, 동일 시각의 안정 정렬, 원래 시각·입력 보존 |
 | `test_attack_mapping_e2e.py` | ATT&CK 매핑 → Kill Chain → CLI 저장 → 최종 보고서 연결 |
+| `test_main_attack_mapping.py` | `main.py`가 저장한 조사 결과 JSON(`report.py` 형식)으로 바로 매핑·최종 보고서 저장, FALSE_POSITIVE 처리, 재조사 파일 보존, 매핑 실패 시 조사 계속 |
 | `test_attack_mapping_review_regressions.py` | 실제 Catalog의 명령어 대소문자·부정/도움말·C2 조건, CP949/콘솔 장애·깊은 JSON·BOM·대문자 확장자, 생성물 재입력 차단, 저장 장애 정리·동시 저장 재시도 |
 
 ATT&CK 저장·입력·시간대 회귀 사례의 발생 원인과 수정 전후 결과는

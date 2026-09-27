@@ -32,6 +32,9 @@
 - D 원본 추적: `agent/provenance.py`, `models.py`, `loop.py`, `report.py`.
   입력 → seed → 도구 결과 → 조사 증거 → 최종 보고서까지 원본 참조를 전달·검증한다.
 - 전체 흐름은 `agent/pipeline.py`, 운영 진입점은 `main.py`다.
+- ATT&CK 매핑: `attack_mapping/`(엔진·규칙·Kill Chain·CLI)과 `reporting/`(최종 보고서)은
+  어택 매핑 팀 코드다. 조사 쪽에서는 `main.py`의 `run_attack_mapping()`으로 연결만 하고,
+  이 폴더들은 어택 매핑 팀과 합의한 경우에만 수정한다. `agent/`는 `attack_mapping/`을 import하지 않는다.
 
 ## 데이터와 호환성
 

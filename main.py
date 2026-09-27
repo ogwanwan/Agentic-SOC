@@ -13,6 +13,7 @@
   [3] agent/gemini_client.py    GeminiClient()             LLM 클라이언트 (LLM_PROVIDER=anthropic이면 claude_client.py)
   [4] agent/pipeline.py         run_investigation_pipeline() 전체 파이프라인 실행
   [45] agent/report.py          format_text_report()       JSON → 사람이 읽는 텍스트 보고서
+  [46] attack_mapping/cli.py    process_file()             저장된 조사 JSON → ATT&CK 매핑·Kill Chain·최종 보고서
 
 실행 준비
   1. `pip install -r requirements.txt`
@@ -23,21 +24,38 @@
 결과 저장
   텍스트 보고서는 따로 저장하지 않는다. format_text_report()가 JSON으로 언제든 다시 만들 수
   있어서 JSON만 "원본"으로 results/<investigation_id>_<UTC시각>.json에 보관한다.
+  저장 직후 그 파일로 ATT&CK 매핑을 돌려 results/attack_mapping/에
+  <incident_id>_attack_mapping.json과 <incident_id>_final_report.json을 만든다
+  (어택 매핑 팀 CLI `python -m attack_mapping.cli`와 같은 처리, 같은 사건이면 __2, __3 …).
   전체 동작 흐름은 docs/AGENT_FLOW.md 참고.
 """
 
 import json
 import os
 from datetime import datetime, timezone
+from typing import Optional
 
 from dotenv import load_dotenv
 
 from agent import ClaudeClient, GeminiClient, build_default_registry, run_investigation_pipeline
 from agent.report import format_text_report
+from attack_mapping.cli import process_file
+from attack_mapping.rules import ALL_RULES
 
 load_dotenv()  # .env 파일에서 GEMINI_API_KEY / ANTHROPIC_API_KEY / HOST 등을 읽어온다
 
 RESULTS_DIR = "results"
+ATTACK_MAPPING_DIR = os.path.join(RESULTS_DIR, "attack_mapping")
+
+# 어택 매핑 결과 상태(mapping_status)를 콘솔에 보여 줄 때의 설명
+MAPPING_STATUS_TEXT = {
+    "mapped": "매핑 완료",
+    "partial": "일부 매핑 (원본 참조가 확인된 증거만 사용)",
+    "no_techniques_matched": "규칙에 맞는 기법 없음",
+    "not_applicable": "매핑 안 함 (FALSE_POSITIVE)",
+    "deferred": "매핑 보류 (INCONCLUSIVE 또는 원본 추적 불가)",
+    "error": "매핑 오류",
+}
 
 
 def build_llm_client():
@@ -71,6 +89,45 @@ def save_investigation_result(result: dict, output_dir: str = RESULTS_DIR) -> st
     return filepath
 
 
+def run_attack_mapping(saved_path: str, output_dir: str = ATTACK_MAPPING_DIR) -> Optional[dict]:
+    """[46] 저장된 조사 결과 JSON 파일로 ATT&CK 매핑을 실행하고 매핑 결과를 반환한다.
+
+    메모리의 dict가 아니라 저장된 파일을 넘겨, 나중에 CLI로 다시 돌린 결과와 같게 한다.
+    매핑 결과에는 "kill_chain"과 이번에 만든 파일 경로 "output_paths"가 붙는다.
+    매핑이 실패해도 조사 결과는 이미 저장돼 있으므로 안내만 하고 None을 반환한다
+    (다음 사건 조사·매핑은 계속된다).
+    """
+    before = set(os.listdir(output_dir)) if os.path.isdir(output_dir) else set()
+    try:
+        mapping_result = process_file(saved_path, ALL_RULES, output_dir)
+    except (OSError, ValueError, RecursionError) as exc:
+        print(f"[ATT&CK] 매핑 실패 — 조사 결과 JSON은 저장됨({saved_path}): {exc}")
+        return None
+    created = sorted(set(os.listdir(output_dir)) - before)
+    mapping_result["output_paths"] = [os.path.join(output_dir, name) for name in created]
+    return mapping_result
+
+
+def format_attack_mapping(mapping_result: dict) -> str:
+    """매핑 결과를 콘솔용 몇 줄로 만든다: 상태, Kill Chain 순서의 기법, 저장 파일."""
+    status = mapping_result["mapping_status"]
+    lines = [f"ATT&CK Mapping: {status} — {MAPPING_STATUS_TEXT.get(status, status)}"]
+    if status == "error":
+        lines.extend(f"  - {error}" for error in mapping_result["errors"])
+    for step in mapping_result.get("kill_chain", []):
+        time = f" ({step['time']})" if step["time"] else ""
+        evidence = f" ← {', '.join(step['evidence_ids'])}" if step["evidence_ids"] else ""
+        lines.append(
+            f"  {step['step']}. [{step['tactic_name']}] {step['technique_id']} "
+            f"{step['technique_name']}{time}{evidence}"
+        )
+    if mapping_result.get("excluded_evidence_ids"):
+        lines.append(f"  원본 참조 미확인으로 제외한 증거: {', '.join(mapping_result['excluded_evidence_ids'])}")
+    for path in mapping_result.get("output_paths", []):
+        lines.append(f"  [저장] {path}")
+    return "\n".join(lines)
+
+
 def main() -> None:
     # 조사 결과·seed에 기록되는 수집 서버 이름 (EC2: `hostname` 결과)
     host = os.environ.get("HOST") or "web-01"  # .env에 HOST= 로 비워 둔 경우도 기본값 사용
@@ -101,7 +158,9 @@ def main() -> None:
 
     # [45] 결과 출력·저장 → agent/report.py format_text_report()로 텍스트 보고서를 만들어 출력하고,
     #      원본 JSON은 results/에 저장해 콘솔에는 파일명만 참고 자료로 보여 준다.
+    # [46] 저장된 JSON으로 바로 ATT&CK 매핑 → results/attack_mapping/에 매핑 결과·최종 보고서 저장
     saved_paths = []
+    mapping_paths = []
     for i, result in enumerate(results, start=1):
         saved_path = save_investigation_result(result)
         saved_paths.append(saved_path)
@@ -109,8 +168,16 @@ def main() -> None:
         print(format_text_report(result))
         print(f"\n[참고 자료] 원본 조사 결과 JSON: {saved_path}")
 
+        mapping_result = run_attack_mapping(saved_path)
+        if mapping_result is not None:
+            print(f"\n{format_attack_mapping(mapping_result)}")
+            mapping_paths.extend(mapping_result["output_paths"])
+
     print(f"\n--- 저장된 조사 결과 JSON {len(saved_paths)}건 ---")
     for path in saved_paths:
+        print(f"  {path}")
+    print(f"\n--- 저장된 ATT&CK 매핑·최종 보고서 JSON {len(mapping_paths)}건 ---")
+    for path in mapping_paths:
         print(f"  {path}")
 
 

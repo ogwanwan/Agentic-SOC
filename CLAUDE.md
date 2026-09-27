@@ -27,6 +27,8 @@ python -m scripts.demo_abcd                          # 실제 도구를 연결�
 python -m scripts.demo_event_window                  # C/D 사건 조회 데모 → results/cd_demo.json
 python -m scripts.verify_all_tools                   # 조사 도구 + raw_log_ingestion 로컬 샘플 일괄 점검
 python -m tests.test_normalizer_parity                # 1차 탐지팀 정규화 결과와 동일성 검증
+python -m scripts.verify_attack_mapping_abc           # 어택 매핑 A/B/C 통합 검증 → results/attack_mapping_abc_<시각>/
+python -m attack_mapping.cli results/<파일>.json       # 저장된 조사 결과만 다시 ATT&CK 매핑 (--all-in-dir results 로 일괄)
 
 # 실제 LLM 실행
 cp .env.example .env                                  # 키/경로 채워넣기 (Windows: Copy-Item .env.example .env)
@@ -39,7 +41,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 주의:
 - `pytest.ini`가 `tests/test_consistency.py`를 자동 실행에서 제외한다(실제 API 호출).
 - `No module named agent`/`scripts` 에러가 나면 저장소 루트에서 `python -m ...` 형태로 실행했는지 확인한다.
-- `main.py`는 보고서만 콘솔에 출력하고, 원본 investigation_result JSON은 `results/<investigation_id>_<UTC시각>.json`에 저장한 뒤 파일명을 표시한다.
+- `main.py`는 보고서만 콘솔에 출력하고, 원본 investigation_result JSON은 `results/<investigation_id>_<UTC시각>.json`에 저장한 뒤 파일명을 표시한다. 저장 직후 그 파일로 ATT&CK 매핑을 돌려 `results/attack_mapping/<incident_id>_attack_mapping.json`·`_final_report.json`을 만든다(같은 사건 재조사는 `__2`, `__3` …).
 - EC2 운영 환경은 Python 3.10이다. 시각 파싱처럼 버전에 따라 동작이 다른 부분은 3.10에서 확인한다.
 
 ## Architecture
@@ -53,6 +55,8 @@ raw log (.env의 <계층>_LOG_LOCAL_PATH 파일 — EC2는 /var/log/..., 로컬�
   → agent/loop.py                     ReAct 루프: 매 사이클 LLM 호출 1회로 facts/hypotheses/evidence
                                        갱신 + 다음 행동(call_tool | terminate) 동시 결정 (InvestigationAgent.run)
   → agent/report.py                   최종 investigation_result JSON + 텍스트 리포트
+  → main.run_attack_mapping()          저장된 JSON 파일 → attack_mapping/cli.py process_file()
+                                       (엔진 + rules/ ALL_RULES + killchain → reporting/final_report.py)
 ```
 코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다. `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
@@ -117,6 +121,14 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 ### 로컬 개발용 우회
 로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일에서만 읽는다(S3 읽기 코드는 삭제됨, 경로가 없으면 설정 오류). 로컬 개발은 이 경로를 `sample_logs/*.log`로 둔다. 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다. `sample_logs/`는 EC2 실제 트래픽이 들어 있어 **git으로 추적하지 않는다**(`.gitignore`) — 실험 전에 `sample_logs_orig/`로 백업해 두고 실험 후 그 백업으로 원복한다(`scenarios/README.md`). 새로 clone한 저장소에는 샘플이 없으니 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받는다.
 
+### ATT&CK 매핑 — `attack_mapping/`, `reporting/` (어택 매핑 팀 코드)
+`feature/ATT&CK-test`를 병합해 들어왔다. LLM을 부르지 않는 규칙 기반 매핑이다: `final_verdict.attack_type`과 `evidence_chain`의 `description`/`event_type`을 `attack_mapping/rules/`의 키워드와 비교한다. 따라서 LLM이 쓴 문장 표현이 매핑 결과를 좌우한다.
+- 게이트: FALSE_POSITIVE → `not_applicable`, INCONCLUSIVE 또는 provenance `unavailable` → `deferred`, provenance `incomplete` → `evidence_without_raw_refs`·`ambiguous_raw_refs`·`issues`에 걸린 증거를 빼고 verdict 매칭도 끈 `partial`. 이 브랜치의 provenance 규칙(raw_ref 누락도 기여는 반영)이 그대로 매핑 입력이 된다.
+- 연결은 `main.py`의 `run_attack_mapping()`만 한다. 메모리 dict가 아니라 **저장된 파일 경로**를 넘겨 CLI 재실행과 결과를 같게 하고, 매핑 예외(OSError/ValueError/RecursionError)는 출력만 하고 다음 사건으로 넘어간다. `agent/`는 `attack_mapping/`을 import하지 않는다.
+- `reporting/`은 최상위에 둔다: 이후 대응(Response) 단계 결과까지 합칠 최종 보고서 자리라서 `attack_mapping/` 아래에 두면 의존 방향이 꼬인다. 대응 단계가 생기면 `build_final_report()` 호출을 `attack_mapping/cli.py`에서 `main.py`로 옮기는 것을 팀과 정한다.
+- `report.py`의 결과 JSON 필드(evidence_chain의 `evidence_id`·`sequence`·`time`·`raw_refs`, `provenance`, `raw_ref_locations`, `final_verdict.attack_type`)를 바꾸면 매핑 엔진 입력 검증에 걸린다. `tests/test_main_attack_mapping.py`, `tests/test_attack_mapping_engine.py::test_actual_investigation_report_contract`로 확인할 것.
+
 ### 건드리지 않는 영역
 - `primary_detection/normalizer/` — 1차 탐지팀 산출물 (위 참조)
+- `attack_mapping/`, `reporting/` — 어택 매핑 팀 산출물. 수정은 어택 매핑 팀과 합의한 경우에만
 - `backend/` — 기존 Flask 백엔드 자리. 에이전트 개발 범위에서는 미사용.
