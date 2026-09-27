@@ -7,7 +7,8 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로
 이 브랜치(`feature/investigation-attack-mapping`)는 조사 에이전트에 어택 매핑 팀의 ATT&CK 매핑을 합친 통합 브랜치다.
 조사 결과가 저장되면 바로 ATT&CK 기법·Kill Chain을 붙인 최종 보고서까지 만든다. 조사 에이전트 수정도 이 브랜치에서 한다.
 
-- **동작 흐름(파일·함수 순서, 코드 주석 `[N]` 번호 대응)**: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
+- **전체 흐름(조사 → ATT&CK 매핑 → 최종 보고서, 두 단계 연결부)**: [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md)
+- **조사 단계 동작 흐름(파일·함수 순서, 코드 주석 `[N]` 번호 대응)**: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
 - **조사 프롬프트 설명(원칙별 역할·생긴 이유·코드 대응)**: [docs/PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md)
 - 변경 이력과 검증 결과: [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)
 - A·B·C·D 연결과 테스트 안내: [docs/ABCD_TEST_GUIDE.md](docs/ABCD_TEST_GUIDE.md), [docs/C_D_IMPLEMENTATION.md](docs/C_D_IMPLEMENTATION.md)

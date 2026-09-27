@@ -61,7 +61,7 @@ raw log (.env의 <계층>_LOG_LOCAL_PATH 파일 — EC2는 /var/log/..., 로컬�
   → main.run_attack_mapping()          저장된 JSON 파일 → attack_mapping/cli.py process_file()
                                        (엔진 + rules/ ALL_RULES + killchain → reporting/final_report.py)
 ```
-코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다. `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
+코드 주석의 `[1]`~`[46]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에, 조사 → 매핑 → 최종 보고서 전체와 연결부(매핑이 읽는 필드, 게이트, 조사 결과가 매핑을 바꾸는 지점)는 [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md)에 있다. `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
 ### 정규화(A) — `primary_detection/normalizer/`는 우리 코드가 아니다
 1차 탐지팀이 만든 공통 정규화 코드가 이 저장소에 vendor(복사)되어 있다. **내용 수정 금지** — 갱신은 1차 탐지팀 원본을 그대로 다시 복사하는 방식으로만 한다. 조사 에이전트는 이걸 직접 import하지 않고 `agent/tools/normalizer_adapter.py`를 거친다. `primary_detection/normalizer/vendor_sync_check.py`로 원본과의 동일성을 확인한다.
