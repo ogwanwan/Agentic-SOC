@@ -174,11 +174,24 @@ def test_verified_empty_result_evidence_keeps_provenance_passed():
 
 @pytest.mark.parametrize("claimed", [1, 3, 9, "x", True])  # 결과 있음 / 실패 / 없는 호출 / 형식 오류
 def test_unverified_empty_result_evidence_stays_incomplete(claimed):
+    # 2026-09-27: 호출하지 않은 도구의 "0건"을 없는 번호로 인용해 신뢰도를 채운 실제 사례 이후,
+    # 확인에 실패한 번호는 지어낸 참조와 같이 신뢰도 기여를 0으로 막는다.
     result, _ = _empty_result_run(claimed)
     assert result["provenance"]["status"] == "incomplete"
     empty = result["evidence_chain"][1]
     assert empty["empty_result_call"] is None
+    assert empty["confidence_contribution"] == 0.0
     assert result["provenance"]["evidence_without_raw_refs"] == [empty["evidence_id"]]
+    assert {"sequence": 2, "unverified_empty_result_call": claimed} in result["provenance"]["issues"]
+    assert result["statistics"]["confidence_increase"] == pytest.approx(0.2)
+
+
+def test_empty_result_evidence_without_call_number_keeps_contribution():
+    # 번호를 아예 안 적은 것은 raw_ref 누락과 같은 복사 실수로 보고 기여는 반영한다(provenance만 미완료)
+    result, _ = _empty_result_run(None)
+    assert result["provenance"]["status"] == "incomplete"
+    assert result["evidence_chain"][1]["confidence_contribution"] == 0.05
+    assert result["provenance"]["issues"] == []
     assert result["statistics"]["confidence_increase"] == pytest.approx(0.25)
 
 

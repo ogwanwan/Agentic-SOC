@@ -706,13 +706,21 @@ class InvestigationAgent:
             # "조회 결과 0건" 증거는 인용할 원본 줄이 없다. LLM이 적은 empty_result_call이 실제로
             # 성공한 0건 조회인지 코드가 확인한 경우에만 원본 누락으로 세지 않는다(2026-09-27: 이 증거들
             # 때문에 원본 추적에 문제가 없는데도 provenance가 incomplete로 나왔다).
+            # 확인에 실패한 번호(없는 호출·실패한 호출·결과가 있던 호출)는 지어낸 참조와 같이 기여를 0으로
+            # 막는다 — 2026-09-27 실제 실행에서 호출하지 않은 fetch_auth_log의 "0건"을 없는 번호로 인용해
+            # 신뢰도를 임계값까지 채우고 FALSE_POSITIVE로 끝냈다. 번호를 아예 안 적은 경우는 복사 실수로 보고
+            # 위 raw_ref 누락과 같이 기여를 반영한다.
             empty_call = None
             if not raw_refs and not unknown_refs and ev.get("empty_result_call") is not None:
                 empty_call = _verified_empty_call(state, ev["empty_result_call"])
                 if empty_call is None:
+                    contribution = 0.0
+                    state.provenance_issues.append(
+                        {"sequence": sequence, "unverified_empty_result_call": ev["empty_result_call"]})
                     state.notes.append(f"증거 {sequence}: empty_result_call={ev['empty_result_call']!r}은 "
-                                       "성공한 0건 조회가 아니어서 확인하지 못했습니다(provenance 미완료).")
-            if not raw_refs and not unknown_refs and empty_call is None and state.raw_refs:
+                                       "성공한 0건 조회가 아니어서 신뢰도 기여를 제외했습니다(provenance 미완료).")
+            if (not raw_refs and not unknown_refs and ev.get("empty_result_call") is None
+                    and state.raw_refs):
                 state.notes.append(f"증거 {sequence}: raw_ref 인용이 없습니다(신뢰도 기여는 반영, provenance 미완료).")
             # 같은 로그를 다시 인용한 증거는 신뢰도에 두 번 반영하지 않는다. 종료 관문이 거부된 뒤 LLM이
             # 이미 기록한 사실을 새 evidence로 다시 만들어 임계값을 채우는 사례가 main.py 실행에서

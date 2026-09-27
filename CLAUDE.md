@@ -82,7 +82,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
   - raw_ref 누락·형식 오류 → 기여는 **반영**하고 provenance만 미완료로 기록.
   - 관측되지 않은 참조(`unknown_refs`), 위치가 모호한 참조 → 기여 0.
   - 이미 인용된 raw_ref만 다시 인용한 증거 → 기여 0(같은 사실 중복 반영 차단).
-  - "조회 0건 → 활동 없음" 증거는 LLM이 `empty_result_call`에 도구 호출 sequence를 적고, `_verified_empty_call()`이 그 호출이 성공한 0건이면 원본 누락으로 세지 않는다(`provenance.empty_result_evidence`). 확인 실패는 기존대로 누락. 기여는 어느 쪽이든 반영. LLM이 인용할 수 있게 `pending_observations`에 `sequence`를 넣는다.
+  - "조회 0건 → 활동 없음" 증거는 LLM이 `empty_result_call`에 도구 호출 sequence를 적고, `_verified_empty_call()`이 그 호출이 성공한 0건이면 원본 누락으로 세지 않는다(`provenance.empty_result_evidence`). 확인 실패(없는 번호·실패한 호출·결과가 있던 호출)는 누락으로 세고 **기여 0**, `provenance.issues`에 `unverified_empty_result_call` 기록 — 호출하지 않은 fetch_auth_log의 "0건"을 없는 번호로 인용해 임계값을 채운 실제 사례(0927) 때문. 번호를 아예 안 적은 경우는 raw_ref 누락처럼 기여 반영. LLM이 인용할 수 있게 `pending_observations`에 `sequence`를 넣는다.
   - audit 다중 줄 이벤트는 raw_ref 하나만 인용해도 같은 이벤트의 나머지 줄이 자동으로 연결된다(`raw_ref_groups`).
 - `update_confidence`가 반올림하는 이유: 0.6+0.25=0.8499…가 임계값 0.85에 미달로 거부되던 버그.
 

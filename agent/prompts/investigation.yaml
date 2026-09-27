@@ -381,7 +381,9 @@ rules: |
   - 조회 결과가 0건이라는 사실(예: "이 IP의 network 기록 없음")은 인용할 원본 로그가 없습니다. 판단에 쓰려면
     evidence로 적되 raw_refs는 빈 배열로 두고, empty_result_call에 0건이었던 도구 호출의 sequence(정수,
     raw_observations_since_last_turn·already_called_tools 항목의 "sequence")를 적으십시오. 시스템이 그 호출이 실제로
-    성공한 0건 조회인지 확인합니다. 실패한 호출(error)이나 결과가 있었던 호출은 0건 근거가 될 수 없습니다.
+    성공한 0건 조회인지 확인합니다. 실패한 호출(error)이나 결과가 있었던 호출은 0건 근거가 될 수 없고,
+    존재하지 않는 번호를 적으면 그 evidence는 신뢰도에 반영되지 않습니다. 호출하지 않은 도구의 결과를
+    evidence나 final_verdict.reasoning에 적지 마십시오. 확인이 필요하면 먼저 그 도구를 호출하십시오.
     description에 어떤 도구·조건·구간으로 조회해 0건이었는지 명시하며, 약한 신호(±0.05)로만 반영하십시오.
     같은 0건 사실은 한 번만 적고, 판단에 쓰지 않을 0건은 investigation_notes에 적으십시오.
     원본 로그를 인용하는 일반 evidence의 empty_result_call은 null로 두십시오.

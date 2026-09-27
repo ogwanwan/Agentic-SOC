@@ -307,8 +307,12 @@ LLM은 매 턴 이 JSON 하나로 답한다.
     따라 0건을 증거로 적고 있었다. 실제 동작에 맞춰 문장을 통일했다(2026-09-25).
   - **`empty_result_call`에 0건이었던 도구 호출의 sequence를 적는다**(2026-09-27). `loop._verified_empty_call()`이
     그 호출이 성공했고 결과가 0건인지 확인하면 원본 누락으로 세지 않는다(보고서 `[도구 호출 #N 0건 확인]`,
-    JSON `provenance.empty_result_evidence`). 실패한 호출·결과가 있던 호출·없는 번호면 지금처럼 `incomplete`.
-    신뢰도 기여(±0.05)는 확인 여부와 관계없이 그대로다.
+    JSON `provenance.empty_result_evidence`). 실패한 호출·결과가 있던 호출·없는 번호면 `incomplete`이고
+    **신뢰도 기여도 0**이다(`provenance.issues`에 `unverified_empty_result_call`). 번호를 아예 안 적으면 기여는 반영한다.
+    호출하지 않은 도구의 결과를 evidence·reasoning에 적지 않는다.
+  - 왜(기여 0): 1차 탐지 사건 재실행(2026-09-27)에서 LLM이 호출하지 않은 fetch_auth_log에 대해 "이 IP의 인증 시도
+    없음"을 없는 호출 번호(#4)로 인용하고 reasoning에도 "추가로 수행한 auth 로그 조회"라고 적었다. 확인 실패여도
+    +0.05가 반영돼 0.80 → 0.85로 임계값을 넘었고 FALSE_POSITIVE로 종료됐다. 지어낸 참조(unknown_refs)와 같은 기준으로 막는다.
   - 왜: 성공한 0건 조회는 원본 추적 오류가 아닌데 `incomplete`로 나와, 후속 단계(당시 연결했던 이전 ATT&CK 매핑,
     이후 폐기)가 이 결과를 원본 미확인으로 취급했다. 기존 결과의 `incomplete`는 전부 이 경우였다. 같은 SSH seed가
     `incomplete` → `passed`(실제 Gemini 2/2).
