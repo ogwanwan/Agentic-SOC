@@ -133,4 +133,3 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 
 ### 건드리지 않는 영역
 - `primary_detection/normalizer/` — 1차 탐지팀 산출물 (위 참조)
-- `backend/` — 기존 Flask 백엔드 자리. 에이전트 개발 범위에서는 미사용.
