@@ -1,4 +1,7 @@
 .env
+# .env 백업(.env.bak 등)에도 API 키가 들어 있다 — 예시 파일만 추적한다
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.pyc
