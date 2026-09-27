@@ -10,7 +10,7 @@
   이 파일은 파싱 로직을 갖지 않는다. 1차 탐지팀 코드는 수정하지 않는다.
 
 누가 부르나
-  [9]·[34] agent/tools/log_source.py normalize_documents()   → normalize_log_documents()
+  [34] agent/tools/log_source.py normalize_documents()   → normalize_log_documents()
   tests/test_normalizer_parity.py, scripts/verify_all_tools.py → normalize_auth/audit/web/network()
 
 무엇을 부르나
@@ -102,7 +102,7 @@ def _local_path(env_name: str) -> str:
 
 
 # 아래 normalize_* 4개는 계층별로 1차 탐지팀 함수를 필터 인자와 함께 직접 부르는 예전 진입점이다.
-# 조사 도구·수집은 normalize_log_documents()를 쓰고, 이 함수들은 정규화 동일성 검증
+# 조사 도구는 normalize_log_documents()를 쓰고, 이 함수들은 정규화 동일성 검증
 # (tests/test_normalizer_parity.py)과 scripts/verify_all_tools.py만 쓴다. 로컬 파일을 그대로
 # 넘기므로 raw_ref가 실제 로그 파일 이름을 가리킨다.
 

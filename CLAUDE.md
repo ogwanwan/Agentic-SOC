@@ -27,12 +27,12 @@ python -m pytest tests/test_loop.py::test_name       # 단일 테스트
 python -m pytest -q tests/test_network_precheck.py   # 사전 조회·종료 관문·도구 집계
 python -m scripts.demo_abcd                          # 실제 도구를 연결한 A/B/C/D 데모 → results/investigation_agent/abcd_demo.json
 python -m scripts.demo_event_window                  # C/D 사건 조회 데모 → results/investigation_agent/cd_demo.json
-python -m scripts.verify_all_tools                   # 조사 도구 + raw_log_ingestion 로컬 샘플 일괄 점검
+python -m scripts.verify_all_tools                   # 조사 도구 로컬 샘플 일괄 점검
 python -m tests.test_normalizer_parity                # 1차 탐지팀 정규화 결과와 동일성 검증
 
 # 실제 LLM 실행
 cp .env.example .env                                  # 키/경로 채워넣기 (Windows: Copy-Item .env.example .env)
-python main.py                                         # 기본 Gemini. LLM_PROVIDER=anthropic 로 Claude 전환
+python main.py <사건 파일>                             # 기본 Gemini. LLM_PROVIDER=anthropic 로 Claude 전환. 사건 파일 = 1차 탐지 Incident JSONL 또는 사건 JSON
 python -m tests.test_consistency --runs 8              # 실제 API로 판정 재현성 반복 측정 (수동, 과금 발생)
 python -m tests.test_consistency --runs 4 --seed-json seed.json   # 임의 seed 파일로 반복 측정
 python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조회·강화 관문 없음)으로 비교
@@ -48,15 +48,15 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 
 ### 전체 흐름
 ```
-raw log (.env의 <계층>_LOG_LOCAL_PATH 파일 — EC2는 /var/log/..., 로컬은 sample_logs/)
-  → agent/raw_log_ingestion.py        4계층(web/auth/audit/network) 정규화 수집
-  → agent/seed_generation.py          경량 LLM triage로 "조사할 사건" 후보 + 우선순위 추출 (SeedGenerator)
-  → agent/pipeline.py                 우선순위 순서로 각 seed를 조사 루프에 투입 (run_investigation_pipeline)
+사건 파일 (1차 탐지 Incident JSONL 또는 직접 작성한 사건 JSON) — main.py <사건 파일>
+  → agent/incident_input.py           load_incidents() 읽기, to_investigation_seed()로 조사 루프 입력(src_ip·window·
+                                       trigger_time·evidence_refs·detection 요약)으로 변환
+  → agent/pipeline.py                 받은 순서대로 각 사건을 조사 루프에 투입 (run_investigation_pipeline)
   → agent/loop.py                     ReAct 루프: 매 사이클 LLM 호출 1회로 facts/hypotheses/evidence
                                        갱신 + 다음 행동(call_tool | terminate) 동시 결정 (InvestigationAgent.run)
   → agent/report.py                   최종 investigation_result JSON (main.py가 results/investigation_agent/에 저장)
 ```
-코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다. `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
+코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다(`[7]`~`[15]`는 삭제된 수집·seed 생성 단계라 비어 있음). `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
 ### 정규화(A) — `primary_detection/normalizer/`는 우리 코드가 아니다
 1차 탐지팀이 만든 공통 정규화 코드가 이 저장소에 vendor(복사)되어 있다. **내용 수정 금지** — 갱신은 1차 탐지팀 원본을 그대로 다시 복사하는 방식으로만 한다. 조사 에이전트는 이걸 직접 import하지 않고 `agent/tools/normalizer_adapter.py`를 거친다. `primary_detection/normalizer/vendor_sync_check.py`로 원본과의 동일성을 확인한다.
@@ -104,7 +104,15 @@ raw log (.env의 <계층>_LOG_LOCAL_PATH 파일 — EC2는 /var/log/..., 로컬�
 ### 원본 추적/Provenance (D) — `agent/provenance.py`
 evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations()`로 `state.raw_refs`(seed+도구 결과에서 실제 관측된 참조 집합)와 대조된다. 최종 보고서의 `provenance.status`(`passed`/`incomplete`/`unavailable`)는 "참조가 유효했는가"의 검증이지 "판정이 맞는가"의 검증이 아니다. 사람이 읽는 텍스트 보고서는 만들지 않는다(0927 제거) — 최종 보고서는 이후 단계(ATT&CK 매핑·대응 권고) 결과까지 합쳐 따로 만든다.
 
-### 프롬프트 — `agent/prompts/` (패키지), `agent/seed_prompts.py`
+### 사건 입력 — `agent/incident_input.py`
+사건을 찾고 고르는 일(로그 수집·Sigma 탐지·사건 묶기·triage)은 1차 탐지(팀 저장소 `develop`의 `run_pipeline.py`)가 한다. 0927에 조사 에이전트 자체의 로그 수집(`raw_log_ingestion.py`)과 LLM seed 생성(`seed_generation.py`, `seed_prompts.py`)을 삭제했다.
+- `to_investigation_seed()`는 1차 탐지 필드 중 바뀔 가능성이 적은 것(`incident_id`, `entity`, `window`, `layers`, `seeds[]`의 `reason`·`evidence_refs`·`rule_severity`·`detail`)만 쓴다. `triage_score`·`priority`·`route`·`llm_investigate`는 사건을 고르는 값이라 보지 않고, `llm_reason`은 있으면 넘긴다. `entity`·`seeds`가 없는 dict(직접 작성한 사건, `test_consistency --seed-json`)는 그대로 쓴다.
+- `members`(최대 500개)·`join_path` 원본은 프롬프트에 사건 dict가 통째로 들어가므로 싣지 않고 `detection` 요약만 싣는다.
+- 1차 탐지 Incident에는 host가 없어 `.env`의 `HOST`로 채운다. 조사 루프 안에서는 이 dict를 계속 `seed`라고 부른다(1차 탐지의 `seeds[]` = 탐지 룰 결과와 다른 뜻).
+- 테스트 고정 데이터 `tests/fixtures/primary_detection_incidents.jsonl`은 1차 탐지 `develop`(`e9b733c`)을 그쪽 샘플 로그(= `primary_detection/normalizer/samples/`)로 실행한 실제 출력이다. 1차 탐지 출력 형식이 바뀌면 다시 만들 것.
+- 조사 대상 선택·순서·조사 상태 관리(DB 또는 파일)는 1차 탐지와 통합할 때 정한다. 지금은 파일의 모든 사건을 적힌 순서대로 조사한다.
+
+### 프롬프트 — `agent/prompts/` (패키지)
 조사 루프 시스템 프롬프트는 `agent/prompts/investigation.yaml`에 있고 `agent/prompts/__init__.py`가 조립한다(계층별 첫 조회 구간 `query_windows`와 auth 24시간 조회창 `auth_lookback_window`를 코드가 계산해 주입). 판정 재현성을 위한 원칙 중 코드 관문과 짝을 이루는 것:
 - 원칙 1: 조회 구간 로그 자체가 0건이면 데이터 공백 → INCONCLUSIVE.
 - 원칙 4: 사전 조회 결과 반영, 새 외부 IP가 나오면 network 재조회, 집계에 경보가 있는데 records에 없으면 `alert_only`로 재조회.
@@ -112,7 +120,7 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 - 원칙 7: SSH 판정 기준(도구 summary의 `[원칙 7 기준]`을 따름), invalid user 1회 후 공개키 로그인은 정상.
 - 원칙 9: 웹 요청 반복·스캔. User-Agent와 5xx/2xx 응답은 정상 근거가 아니다. 도구 summary의 `[원칙 9 기준]`과 audit `[후속 침해 확인]` 결과를 쓴다.
 
-프롬프트의 판정 기준을 바꿀 때는 `fetch_*_log`의 `rule_checks` 계산과 `_verdict_conflicts()`를 함께 맞출 것 — 한쪽만 바꾸면 관문이 LLM의 판정을 계속 거부한다. Seed 생성용 프롬프트는 `seed_prompts.py`에 따로 있다.
+프롬프트의 판정 기준을 바꿀 때는 `fetch_*_log`의 `rule_checks` 계산과 `_verdict_conflicts()`를 함께 맞출 것 — 한쪽만 바꾸면 관문이 LLM의 판정을 계속 거부한다.
 
 ### LLM 클라이언트 — `agent/gemini_client.py`, `agent/claude_client.py`
 `GeminiClient`(기본값, 무료 티어)와 `ClaudeClient`는 같은 인터페이스(`.reason(state, tool_registry, confidence_threshold, force_terminate, gate_rejection_reason)`, `.complete_json()`)·같은 설정(출력 8192, temperature 0)이라 `LLM_PROVIDER` 환경변수로 교체한다. Claude는 `CLAUDE_MODEL`(기본 `claude-sonnet-5`), SDK `max_retries`로 429·529·연결 오류 재시도, 시스템 프롬프트 캐시 표시, `usage_totals`에 토큰 누적(오프라인 테스트 `tests/test_claude_client.py`, 실제 API 재현성은 미검증). Gemini는 `max_output_tokens=8192`이고, 503과 연결 오류(`OSError`, `httpx.TransportError`)를 5·10·15초 간격으로 재시도한다. 무료 티어의 일일 요청 제한(429)과 간헐적 503은 코드 문제가 아니다 — 반복 측정(`test_consistency`)은 한도를 고려해 나눠 돌린다.

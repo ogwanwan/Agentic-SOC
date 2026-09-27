@@ -1,9 +1,8 @@
 """조사 에이전트(Investigation Agent) 패키지 — main.py 등이 `from agent import ...`로 쓰는 공개 목록.
 
 파일별 역할 (실행 순서, 번호는 docs/AGENT_FLOW.md와 각 파일 주석의 [N])
-  pipeline.py           [5]~[16]  전체 파이프라인: 수집 → seed 생성 → 사건별 조사
-  raw_log_ingestion.py  [7]~[9]   seed 생성용 로그 수집 (파일 끝 N건씩)
-  seed_generation.py    [11]~[14] LLM triage로 seed 후보 + 우선순위 (seed_prompts.py = 그 프롬프트)
+  incident_input.py     [4]·[6]   1차 탐지 사건(Incident) 파일 읽기 → 조사 루프 입력으로 변환
+  pipeline.py           [5]·[16]  사건들을 받은 순서대로 조사
   loop.py               [17]~[42] 조사 루프(ReAct) + 종료 관문 + 원본 참조 검증
   models.py             [19]      조사 상태(AgentState)·증거 데이터 구조
   gemini_client.py      [20]~[23] LLM 호출 (claude_client.py = Claude 버전)
@@ -38,8 +37,7 @@ from .claude_client import ClaudeClient, ClaudeDecisionError
 from .gemini_client import GeminiClient, GeminiDecisionError
 from .loop import InvestigationAgent
 from .report import build_investigation_result
-from .raw_log_ingestion import fetch_recent_raw_logs
-from .seed_generation import SeedGenerator
+from .incident_input import load_incidents, to_investigation_seed
 from .pipeline import run_investigation_pipeline
 
 __all__ = [
@@ -59,7 +57,7 @@ __all__ = [
     "GeminiDecisionError",
     "InvestigationAgent",
     "build_investigation_result",
-    "fetch_recent_raw_logs",
-    "SeedGenerator",
+    "load_incidents",
+    "to_investigation_seed",
     "run_investigation_pipeline",
 ]

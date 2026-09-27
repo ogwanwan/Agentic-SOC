@@ -7,10 +7,9 @@
   추측하거나, 인용하지 않은 주장에 로그를 몰래 붙이지 않는다.
 
 누가 부르나
-  [13-2] agent/seed_generation.py      references()                 seed의 evidence_refs 검증
   [18]·[24]·[37] agent/loop.py         references(), validate_citations(), observed_*()
   [41] agent/report.py                 provenance_report()
-  agent/prompts/, agent/seed_prompts.py strip_trace_fields()        LLM에게 보여줄 사본 정리
+  agent/prompts/                       strip_trace_fields()        LLM에게 보여줄 사본 정리
 
 무엇을 부르나
   없음 (표준 라이브러리만)

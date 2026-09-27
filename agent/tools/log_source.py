@@ -1,4 +1,4 @@
-"""로그 읽기·정규화 공용 계층 — 수집(seed 생성)과 조사 도구가 같은 경로로 로그를 읽게 한다.
+"""로그 읽기·정규화 공용 계층 — 조사 도구들이 같은 경로로 로그를 읽게 한다.
 
 역할
   .env의 <계층>_LOG_LOCAL_PATH 파일을 원본 그대로(파일명·줄 번호 보존) 읽고, 1차 탐지팀 공통 정규화로
@@ -6,7 +6,6 @@
   여기서 만든다. 탐지 규칙이나 판정은 하지 않는다.
 
 누가 부르나
-  [8]·[9] agent/raw_log_ingestion.py         → read_documents(), normalize_documents()
   [33] agent/tools/real/fetch_*_log.py, get_process_tree.py → load_window_events(), pagination(), filtered_out_hint()
   agent/tools/real/fetch_event_logs.py        → event_time(), pagination(), query_window()
 
@@ -41,7 +40,7 @@ class LogPathNotConfigured(RuntimeError):
     """`<계층>_LOG_LOCAL_PATH`가 설정되지 않음 — 설정 오류라 0건과 구분해 알린다."""
 
 
-# [8]·[33] 경유 — 로그 파일 원본 텍스트를 읽는다
+# [33] 경유 — 로그 파일 원본 텍스트를 읽는다
 def read_documents(layer: str, host: str, start: datetime, end: datetime) -> List[LogDocument]:
     """`.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2라면 /var/log/...)을 원본 그대로 읽는다.
 
@@ -64,7 +63,7 @@ def read_documents(layer: str, host: str, start: datetime, end: datetime) -> Lis
     return [LogDocument(path.as_posix(), text)]
 
 
-# [9]·[34] → normalizer_adapter.normalize_log_documents() → 1차 탐지팀 정규화, 결과를 한 단계 펼친다
+# [34] → normalizer_adapter.normalize_log_documents() → 1차 탐지팀 정규화, 결과를 한 단계 펼친다
 def normalize_documents(layer: str, documents: Iterable[LogDocument],
                         start: datetime, end: datetime) -> List[Dict[str, Any]]:
     """Flatten the shared primary-detection schema, retaining trace metadata."""

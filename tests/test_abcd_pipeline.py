@@ -5,9 +5,8 @@ import socket
 import pytest
 
 from agent.pipeline import run_investigation_pipeline
-from agent.provenance import strip_trace_fields
 from agent.tools import build_default_registry
-from scripts.demo_abcd import LAYERS, ROOT, WINDOW, ScriptedDemoClient, run_demo, sample_environment
+from scripts.demo_abcd import LAYERS, ROOT, WINDOW, ScriptedDemoClient, demo_incident, run_demo, sample_environment
 
 EXPECTED_REFS = {
     "web": ["web.txt:1"], "auth": ["auth.txt:1"],
@@ -29,7 +28,9 @@ def test_real_pipeline_preserves_input_query_evidence_and_report(layers):
     demo = run_demo(layers)
     result = demo["results"][0]
     expected = {ref for layer in layers for ref in EXPECTED_REFS[layer]}
-    assert len(demo["seed_input"]) == 4
+    assert len(demo["incident_input"]["seeds"]) == len(layers)
+    assert result["incident_id"] == "INC-ABCD-DEMO"
+    assert result["initial_seed"]["host"] == "web-01"
     assert result["initial_seed"]["evidence_refs"] == [EXPECTED_REFS[layer][0] for layer in layers]
     assert result["initial_seed"]["window"] == WINDOW
     assert result["provenance"]["status"] == "passed"
@@ -66,15 +67,6 @@ def test_real_pipeline_preserves_input_query_evidence_and_report(layers):
         assert page["args"]["host"] == "web-01"
         assert page["result"]["total_matched"] == len(layers)
         assert page["result"]["errors"] == {}
-    original = {r["raw_ref"]: {k: v for k, v in r.items() if k != "_source_type"}
-                for r in demo["seed_input"]}
-    for observation in observations:
-        if observation["tool_name"] == "get_process_tree":
-            continue
-        for record in observation["result"]["records"]:
-            # seed 프롬프트는 추적용 필드(raw_ref_locations 등)를 뺀 사본이라 같은 기준으로 비교
-            assert strip_trace_fields(record) == original[record["raw_ref"]]
-
     # Follow every final report reference back to an actual physical sample line.
     for ref, locations in result["raw_ref_locations"].items():
         name, line = ref.rsplit(":", 1)
@@ -83,20 +75,6 @@ def test_real_pipeline_preserves_input_query_evidence_and_report(layers):
         assert path.read_text(encoding="utf-8").splitlines()[int(line) - 1]
     roundtrip = json.loads(json.dumps(result))
     assert roundtrip["raw_ref_locations"] == result["raw_ref_locations"]
-
-
-def test_pipeline_rejects_fabricated_seed_before_investigation():
-    class BadSeedClient(ScriptedDemoClient):
-        def complete_json(self, system_prompt, user_prompt):
-            decision = super().complete_json(system_prompt, user_prompt)
-            decision["candidates"][0]["evidence_refs"] = ["invented.log:999"]
-            return decision
-
-        def reason(self, *args, **kwargs):
-            pytest.fail("Invalid seed must be rejected before investigation")
-
-    with sample_environment(), pytest.raises(ValueError, match="evidence_refs"):
-        run_investigation_pipeline("web-01", BadSeedClient(), build_default_registry())
 
 
 def test_pipeline_marks_fabricated_evidence_incomplete_without_confidence_increase():
@@ -109,8 +87,8 @@ def test_pipeline_marks_fabricated_evidence_incomplete_without_confidence_increa
             return decision
 
     with sample_environment():
-        result = run_investigation_pipeline("web-01", BadEvidenceClient(), build_default_registry(),
-                                            max_calls=12)[0]
+        result = run_investigation_pipeline([demo_incident()], BadEvidenceClient(), build_default_registry(),
+                                            host="web-01", max_calls=12)[0]
     assert result["provenance"]["status"] == "incomplete"
     assert result["provenance"]["issues"]
     assert result["statistics"]["confidence_increase"] == 0
@@ -123,7 +101,6 @@ def test_demo_is_independent_of_existing_environment_and_restores_it(monkeypatch
     monkeypatch.setenv("HOST", "different-host")
     monkeypatch.setenv("LOG_LOCAL_HOST", "different-host")
     monkeypatch.setenv("AUTH_LOG_YEAR", "1999")
-    monkeypatch.setenv("RAW_LOG_LOCAL_MAX_LINES", "0")
     monkeypatch.setenv("WEB_LOG_LOCAL_PATH", "missing-file.txt")
     before = dict(os.environ)
     assert run_demo()["results"][0]["provenance"]["status"] == "passed"

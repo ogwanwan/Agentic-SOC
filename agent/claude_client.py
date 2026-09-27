@@ -10,7 +10,6 @@
 누가 부르나
   main.py build_llm_client()                 → ClaudeClient()    생성 (LLM_PROVIDER=anthropic)
   [20] agent/loop.py _safe_reason()          → reason()          조사 루프 매 턴
-  [13-1] agent/seed_generation.py generate() → complete_json()   seed 후보 뽑기
 
 무엇을 부르나
   [21] agent/prompts/__init__.py  build_system_prompt(), build_user_prompt()
@@ -94,7 +93,7 @@ class ClaudeClient:
         # [22] → complete_json()으로 실제 호출 / [23] ← 파싱된 결정 dict를 loop.py로 돌려준다
         return self.complete_json(system_prompt, user_prompt)
 
-    # [22] 실제 Claude 호출 — 조사 루프와 seed 생성([13-1]) 둘 다 여기로 온다
+    # [22] 실제 Claude 호출 — 조사 루프의 reason()이 여기로 온다
     def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         """범용 호출: 어떤 system/user 프롬프트든 받아서 JSON으로 파싱해 돌려준다."""
         response = self._client.messages.create(

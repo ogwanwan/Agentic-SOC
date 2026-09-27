@@ -1,7 +1,8 @@
 """Offline ABCD pipeline demonstration: python -m scripts.demo_abcd.
 
-Only LLM decisions are scripted. Ingestion, seed validation, the registry,
-normalizers, investigation tools, pagination and report generation are real.
+Only LLM decisions are scripted. The input is an incident in the primary-detection
+format; incident conversion, the registry, normalizers, investigation tools,
+pagination and report generation are real.
 """
 from __future__ import annotations
 
@@ -21,15 +22,36 @@ ROOT = Path(__file__).resolve().parents[1]
 LAYERS = ("web", "auth", "audit", "network")
 WINDOW = ["2026-09-21T00:00:00Z", "2026-09-21T00:01:00Z"]
 SAMPLES = {"web": "web.txt", "auth": "auth.txt", "audit": "audit.txt", "network": "network.jsonl"}
+# 1차 탐지가 각 계층 샘플의 첫 이벤트를 탐지 근거로 넘겼다고 가정한 원본 참조
+DETECTION_REFS = {"web": "web.txt:1", "auth": "auth.txt:1", "audit": "audit.txt:1", "network": "network.jsonl:1"}
+NORMALIZED_LAYER = {"web": "web", "auth": "auth", "audit": "system", "network": "network"}
+
+
+def demo_incident(layers=LAYERS):
+    """1차 탐지 Incident 형식의 데모 사건 (entity·window·layers·members·seeds)."""
+    return {
+        "incident_id": "INC-ABCD-DEMO",
+        "entity": {"type": "pid", "value": "200"},
+        "window": list(WINDOW),
+        "layers": sorted(NORMALIZED_LAYER[layer] for layer in layers),
+        "members": [DETECTION_REFS[layer] for layer in layers],
+        "member_count": len(layers), "oversized": False, "join_path": [],
+        "seeds": [{
+            "entity": {"type": "pid", "value": "200"}, "window": list(WINDOW),
+            "layer": NORMALIZED_LAYER[layer], "source": ["sigma"],
+            "reason": "합성 로그로 A·B·C·D 연결 확인",
+            "score_parts": {"rule_severity": None, "deviation": None, "layer_count": 1},
+            "signal_tags": [], "evidence_refs": [DETECTION_REFS[layer]],
+        } for layer in layers],
+    }
 
 
 @contextmanager
 def sample_environment():
-    """Pin paths, host, year and replay limit; restore the caller's environment."""
+    """Pin paths, host and year; restore the caller's environment."""
     env = {LOCAL_PATH_ENV[layer]: str(ROOT / "examples" / "cd" / name)
            for layer, name in SAMPLES.items()}
-    env.update(HOST="web-01", LOG_LOCAL_HOST="web-01", AUTH_LOG_YEAR="2026",
-               RAW_LOG_LOCAL_MAX_LINES="30")
+    env.update(HOST="web-01", LOG_LOCAL_HOST="web-01", AUTH_LOG_YEAR="2026")
     with patch.dict(os.environ, env):
         yield
 
@@ -39,19 +61,7 @@ class ScriptedDemoClient:
 
     def __init__(self, layers=LAYERS):
         self.layers = list(layers)
-        self.seed_input = []
         self.observations = []
-
-    def complete_json(self, system_prompt, user_prompt):
-        payload = json.loads(user_prompt.split("\n\n", 1)[1])
-        self.seed_input = deepcopy(payload["raw_logs"])
-        records = [r for r in self.seed_input if r["_source_type"] in self.layers]
-        return {"candidates": [{
-            "incident_id": "INC-ABCD-DEMO", "host": payload["host"],
-            "priority": 1, "window": list(WINDOW), "trigger_time": WINDOW[0],
-            "trigger_description": "합성 로그로 A·B·C·D 연결 확인", "confidence_initial": 0.0,
-            "evidence_refs": [record["raw_ref"] for record in records],
-        }]}
 
     def reason(self, state, registry, **kwargs):
         evidence = []
@@ -102,6 +112,7 @@ def run_demo(layers=LAYERS):
     if not layers or len(layers) != len(set(layers)) or set(layers) - set(LAYERS):
         raise ValueError("layers must be unique web/auth/audit/network values")
     client = ScriptedDemoClient(layers)
+    incident = demo_incident(layers)
     with sample_environment():
         registry = build_default_registry(exclude=["resolve_ip_geo"])
         names = [f"fetch_{layer}_log" for layer in layers] + ["fetch_event_logs", "get_process_tree"]
@@ -109,7 +120,7 @@ def run_demo(layers=LAYERS):
             if registry.get(name).handler.__module__ != f"agent.tools.real.{name}":
                 raise RuntimeError(f"{name} is not connected to the real implementation")
         results = run_investigation_pipeline(
-            host="web-01", llm_client=client, tool_registry=registry, max_calls=12,
+            [incident], llm_client=client, tool_registry=registry, host="web-01", max_calls=12,
         )
     if len(results) != 1:
         raise RuntimeError("Expected one demo incident")
@@ -119,7 +130,7 @@ def run_demo(layers=LAYERS):
             or result["statistics"]["evidence_count"] != len(layers)
             or len(result["raw_refs"]) != len(layers) + ("audit" in layers)):
         raise RuntimeError("Demo did not preserve the expected evidence and references")
-    return {"mode": "offline_scripted_llm", "seed_input": client.seed_input,
+    return {"mode": "offline_scripted_llm", "incident_input": incident,
             "tool_observations": client.observations, "results": results}
 
 
@@ -133,7 +144,8 @@ def main():
     pages = [o["result"] for o in demo["tool_observations"] if o["tool_name"] == "fetch_event_logs"]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(demo, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[A] Normalized seed input: {len(demo['seed_input'])} events")
+    print(f"[A] Incident input: {len(demo['incident_input']['seeds'])} detections / "
+          f"{len(result['initial_seed']['evidence_refs'])} raw references")
     print(f"[B] Real investigation tools: {len(result['tools_called']) - len(pages)} calls")
     print(f"[C] Incident window query: {sum(p['count'] for p in pages)} events / {len(pages)} pages")
     print(f"[D] Provenance: {result['provenance']['status']} / {len(result['raw_refs'])} raw references")

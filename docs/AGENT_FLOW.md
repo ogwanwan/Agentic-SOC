@@ -1,8 +1,8 @@
 # 조사 에이전트 동작 흐름
 
-`python main.py` 한 번이 어떤 파일·함수를 어떤 순서로 거치는지 정리한 문서다.
+`python main.py <사건 파일>` 한 번이 어떤 파일·함수를 어떤 순서로 거치는지 정리한 문서다.
 코드 주석의 `[1]`, `[2]` … 번호가 이 문서의 번호와 같다. 코드를 읽을 때 번호를 따라가면 된다.
-하위 단계는 `[25-1]`처럼 붙였다.
+하위 단계는 `[25-1]`처럼 붙였다. `[7]`~`[15]`는 삭제된 로그 수집·seed 생성 단계의 번호라 비워 두었다(0927, 사건 입력은 1차 탐지가 넘긴다).
 
 기준: `integrate-investigation` 브랜치(= 팀 저장소 `feature/Agentic-SOC-Investigation-Agent`), 2026-09-25.
 
@@ -14,10 +14,10 @@
 main.py
  ├─ [2]  도구 레지스트리 만들기            agent/tools/registry.py
  ├─ [3]  LLM 클라이언트 만들기             agent/gemini_client.py (또는 claude_client.py)
- └─ [4]  파이프라인 실행                   agent/pipeline.py
-          ├─ [6]  로그 수집                agent/raw_log_ingestion.py → tools/log_source.py → 1차 탐지 정규화
-          ├─ [10] 조사할 사건(seed) 고르기   agent/seed_generation.py  (LLM 1회)
-          └─ [16] seed마다 조사 루프         agent/loop.py
+ ├─ [4]  사건 파일 읽기                    agent/incident_input.py load_incidents()
+ └─ [5]  사건별 조사 실행                  agent/pipeline.py
+          ├─ [6]  조사 입력으로 변환         agent/incident_input.py to_investigation_seed()
+          └─ [16] 사건마다 조사 루프         agent/loop.py
                    ├─ [18]   조사 상태 만들기            agent/models.py
                    ├─ [19-1] network 사전 조회           (src_ip가 있을 때, 코드가 직접)
                    └─ [20]~[40] 반복 (최대 도구 8회)
@@ -40,32 +40,32 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 
 | 번호 | 위치 | 하는 일 |
 |---|---|---|
-| [1] | `main.py` 맨 아래 | `python main.py` → `main()` |
+| [1] | `main.py` 맨 아래 | `python main.py <사건 파일>` → `main()` |
 | [2] | `registry.build_default_registry()` | 7개 도구 등록. `agent/tools/real/<도구이름>.py`에 같은 이름 함수가 있으면 그걸 쓰고, 없으면 목업. `resolve_ip_geo`는 제외 |
 | [3] | `build_llm_client()` | `.env`의 `LLM_PROVIDER`(기본 gemini)로 클라이언트 생성 |
-| [4] | `pipeline.run_investigation_pipeline()` | 아래 전체 실행. `network_precheck=True`, `strict_termination=True`, `max_calls=8`, `confidence_threshold=0.85` |
+| [4] | `incident_input.load_incidents()` | 사건 파일 읽기. JSON 객체 하나, JSON 배열, 한 줄에 한 건인 JSONL(1차 탐지 출력)을 받음. 각 사건에 `incident_id` 필수 |
+| [5] | `pipeline.run_investigation_pipeline()` | 사건을 받은 순서대로 조사. `network_precheck=True`, `strict_termination=True`, `max_calls=8`, `confidence_threshold=0.85` |
 
-### 로그 수집 — `agent/raw_log_ingestion.py`
+### 사건 입력 — `agent/incident_input.py`
 
-| 번호 | 위치 | 하는 일 |
-|---|---|---|
-| [5]·[6] | `pipeline.py` | 수집 호출 |
-| [7] | `fetch_recent_raw_logs()` | web/auth/audit/network 4계층을 차례로 |
-| [8] | `log_source.read_documents()` | `.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2: `/var/log/...`)을 원본 그대로 읽음. 경로가 없으면 설정 오류 |
-| [9] | `log_source.normalize_documents()` → `normalizer_adapter.normalize_log_documents()` → `primary_detection/normalizer/tools/fetch_*_log.py` | 1차 탐지팀 정규화 코드로 구조화. 각 이벤트에 `raw_ref`(예: `auth.log:9190`) |
-| | | 계층마다 **파일 끝 `RAW_LOG_LOCAL_MAX_LINES`건**(EC2 `.env` 50)만 남김. 시각으로 거르지 않음 |
-
-### 조사할 사건 고르기(seed 생성) — `agent/seed_generation.py`
+사건을 찾고 고르는 일(로그 수집·Sigma 탐지·사건 묶기·우선순위)은 1차 탐지가 한다. 조사 에이전트는 받은 사건만 조사한다.
 
 | 번호 | 위치 | 하는 일 |
 |---|---|---|
-| [10]·[11] | `SeedGenerator.generate()` | 수집 이벤트를 받음 |
-| [12]·[13] | `seed_prompts.build_seed_user_prompt()` | 이벤트를 프롬프트로 (추적용 필드는 LLM 사본에서만 뺌) |
-| [13-1] | `llm_client.complete_json()` | LLM이 `candidates`(incident_id, src_ip, window, evidence_refs, priority …) 반환 |
-| [13-2] | `provenance.references()` | 후보가 인용한 `evidence_refs`가 실제 입력 로그에 있는지 확인. 없으면 오류로 멈춤 |
-| [14]·[15] | | priority 순으로 정렬해 pipeline으로 |
+| [6] | `to_investigation_seed()` | 1차 탐지 Incident → 조사 루프 입력(아래 표). `entity`·`seeds`가 없는 dict(직접 작성한 사건 JSON)는 `host`만 채워 그대로 씀 |
 
-> 1차 탐지팀이 seed를 만들어 폴더에 넣는 방식으로 바뀌면 [6]~[15]가 "seed 폴더 읽기"로 대체되고, [16] 이후는 그대로다.
+| 조사 루프 입력 | 1차 탐지 Incident에서 가져오는 값 |
+|---|---|
+| `incident_id` | `incident_id` (`incident_key`가 있으면 함께 보관) |
+| `host` | 사건에 없으면 `.env`의 `HOST` |
+| `src_ip` | `entity.type == "src_ip"`이면 그 값, 아니면 탐지 결과 중 IP entity. pid 사건은 없음(network 사전 조회 안 함) |
+| `window` / `trigger_time` | `window` / 가장 이른 탐지 이벤트 시각(`seeds[].detail.timestamp`) |
+| `evidence_refs` | 모든 `seeds[].evidence_refs`. 탐지가 없는 사건만 `members` 앞 50개 |
+| `trigger_description`, `severity_hint` | `seeds[].reason`들 / `rule_severity` 최댓값 |
+| `detection` | 계층, 멤버 수, 연결 종류별 개수, 탐지 룰별 이름·사유·원본 참조·`detail`(최대 20개) |
+| `llm_reason` | 있으면 그대로 |
+
+`members`(최대 500개)와 `join_path` 원본은 프롬프트 크기 때문에 싣지 않는다. `triage_score`·`priority`·`route`·`llm_investigate`는 조사할 사건을 고르는 데 쓰는 값이라 보지 않는다.
 
 ### 조사 루프 — `agent/loop.py` `InvestigationAgent.run(seed)`
 
@@ -170,9 +170,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 
 ## 4. 조회 구간 — 계층별로 어디까지 보나
 
-**seed 생성(1단계)**: 계층마다 로그 파일 끝 N건(시각 무관).
-
-**조사(2단계)**: 코드가 사건 구간 기준으로 계산해 프롬프트(`query_windows`)로 준다. 각 계층의 **첫 조회는 이 구간 그대로** 쓰고, 다른 구간은 두 번째 호출부터 실제 기록 시각을 근거로 바꾼다.
+코드가 사건 구간(1차 탐지 Incident의 `window`) 기준으로 계산해 프롬프트(`query_windows`)로 준다. 각 계층의 **첫 조회는 이 구간 그대로** 쓰고, 다른 구간은 두 번째 호출부터 실제 기록 시각을 근거로 바꾼다.
 
 | 계층 | 첫 조회 구간 |
 |---|---|
@@ -233,9 +231,8 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 | 변수 | 뜻 |
 |---|---|
 | `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`, `LLM_PROVIDER`, `CLAUDE_MODEL` | LLM (기본 gemini, Claude 모델 기본 claude-sonnet-5) |
-| `HOST` | 결과·seed에 기록되는 수집 서버 이름 (비우면 web-01) |
+| `HOST` | 사건에 host가 없을 때 채우는 수집 서버 이름 (비우면 web-01). 1차 탐지 Incident에는 host가 없다 |
 | `WEB/AUTH/AUDIT/NETWORK_LOG_LOCAL_PATH` | 읽을 로그 파일 경로 (EC2: `/var/log/...`). **필수** |
-| `RAW_LOG_LOCAL_MAX_LINES` | seed 생성 때 계층별로 볼 파일 끝 이벤트 수 |
 | `AUTH_LOG_YEAR`, `LOG_LOCAL_HOST` | 선택 (로컬 샘플용) |
 
 ---
@@ -243,6 +240,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 ## 9. 알려진 한계
 
 - `LLM_PROVIDER=anthropic`(Claude)은 오프라인 테스트로만 확인했다. 실제 Claude의 판정 재현성·비용은 API 키로 측정해야 한다(`ClaudeClient.usage_totals`에 토큰 합계).
-- seed 생성은 파일 끝 N건을 보므로 새 로그가 없으면 같은 사건을 다시 고를 수 있다(1차 탐지 seed 연동 시 해소 예정).
+- 조사 도구는 `.env`의 로그 파일 하나만 읽는다. 1차 탐지가 로테이트된 파일(`access.log.1`, `.N.gz`)에서 찾은 사건은 그 참조를 도구로 다시 조회하지 못해 원본 추적이 `incomplete`가 될 수 있다(1차 탐지 정규화 코드 갱신과 함께 해결할 과제).
+- 어떤 사건을 어떤 순서로 조사할지(우선순위, 조사 상태 관리)는 1차 탐지·사건 저장소 방식이 정해지면 붙인다. 지금은 사건 파일에 적힌 순서대로 전부 조사한다.
 - `get_process_tree`는 관측된 audit 기반 추정이라 확정된 프로세스 트리가 아니다.
 - 원칙 9 기준값(POST 10회, 경로 20개)과 `.git/config` 같은 민감 파일 탐색의 판정은 팀 정책으로 정할 사항이다.

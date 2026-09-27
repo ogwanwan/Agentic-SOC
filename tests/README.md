@@ -27,14 +27,14 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 
 | 파일 | 확인 내용 |
 | --- | --- |
-| `test_abcd_pipeline.py` | 실제 수집 → seed 생성·검증 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 가짜 참조 거부, 환경변수 복원 |
-| `test_cd_normalizer_integration.py` | A의 벤더 직접 호출과 입력 수집/B 개별 도구/C 사건 조회 결과 비교. audit 분할 객체, gzip, 원본 위치·모호성 |
+| `test_abcd_pipeline.py` | 1차 탐지 형식 Incident 입력 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 가짜 증거 참조 incomplete, 환경변수 복원 |
+| `test_cd_normalizer_integration.py` | A의 벤더 직접 호출과 B 개별 도구/C 사건 조회 결과 비교. audit 분할 객체, gzip, 원본 위치·모호성 |
 | `test_normalizer_parity.py` | 기존 A 어댑터 API와 벤더 결과 비교. `_run()`을 위 통합 테스트에서 호출하므로 전체 pytest에도 포함 |
 | `test_event_window.py` | C의 시간 양끝·시간대·연도 경계·필터·전역 페이지·입력 오류·파일 누락/권한 |
 | `test_provenance.py` | D의 seed/지지·반박 증거/JSON·텍스트 참조 유지, audit 여러 줄, 미등록 참조, 도구 실패 이후 참조 유지, "조회 0건" 증거의 `empty_result_call` 확인(성공한 0건 호출만 인정) |
 | `test_fetch_*_log.py`, `test_get_process_tree.py` | B의 계층별 필터와 프로세스 연결 |
-| `test_raw_log_ingestion.py`, `test_seed_generation.py` | 로그 수집과 사건 후보 우선순위 |
-| `test_pipeline.py` | 여러 seed가 우선순위대로 조사에 전달되는지 검사 |
+| `test_incident_input.py` | 1차 탐지 Incident(실제 출력 `fixtures/primary_detection_incidents.jsonl`) → 조사 루프 입력 변환, 사건 파일 형식(JSONL·배열·객체) |
+| `test_pipeline.py` | 사건 파일의 사건들이 받은 순서대로 조사되고 탐지 근거 참조가 결과까지 이어지는지 |
 | `test_loop.py` | 종료 조건·중복 호출 방지·최대 호출 수·도구 오류 처리 |
 
 `test_abcd_pipeline.py`는 네트워크 연결을 차단한 상태에서 실행합니다. LLM 응답만

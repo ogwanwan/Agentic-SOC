@@ -15,7 +15,7 @@ Tool 연결·실행 계층입니다. `registry.py`가 LLM이 고른 도구 이�
   필터(`load_window_events`), 페이지네이션, 0건 안내를 제공하는 공용 계층. S3 읽기는 삭제됨(EC2 로컬 경로만 사용).
 - **`normalizer_adapter.py`** — 우리(에이전트팀)가 짠 얇은 어댑터. 원본 텍스트를
   `primary_detection/normalizer/`(1차 탐지팀 벤더 코드, 레포 루트에 있음)의 정규화 함수에
-  그대로 넘깁니다. `real/*.py`와 `raw_log_ingestion.py`가 `log_source.py`를 통해 여기를 거칩니다.
+  그대로 넘깁니다. `real/*.py`가 `log_source.py`를 통해 여기를 거칩니다.
 - **`time_utils.py`** — 시간 문자열 파싱 등 공용 유틸.
 - **`mock_tools.py`** — `real/`에 아직 구현이 없는 도구용 목업. 개발 초기 단계에서
   전체 파이프라인을 끊김 없이 돌리기 위한 폴백입니다.

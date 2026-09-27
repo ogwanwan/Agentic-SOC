@@ -14,7 +14,6 @@
   agent/provenance.py strip_trace_fields()       LLM에게 보여줄 사본에서 추적용 필드 제거
 
 프롬프트 "내용"(yaml)과 "조립 로직"(이 파일)을 나눠 두어 원칙을 고칠 때 코드를 건드리지 않게 했다.
-seed 생성 프롬프트는 1차 탐지 연동 뒤 빠질 예정이라 agent/seed_prompts.py에 따로 둔다.
 """
 
 from __future__ import annotations

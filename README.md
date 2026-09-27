@@ -1,8 +1,8 @@
 # Agentic-SOC — 조사 에이전트 (Investigation Agent)
 
-LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로그에서 조사할 사건(seed)을 고르고,
-사건마다 LLM이 로그 조회 도구를 골라 가며 증거를 모아 `THREAT_CONFIRMED` / `FALSE_POSITIVE` /
-`INCONCLUSIVE`로 판정하고 보고서를 만든다.
+LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 1차 탐지가 넘긴 사건(Incident)마다 LLM이 로그 조회
+도구를 골라 가며 증거를 모아 `THREAT_CONFIRMED` / `FALSE_POSITIVE` / `INCONCLUSIVE`로 판정하고 결과 JSON을 만든다.
+사건을 찾고 고르는 일(로그 수집·탐지·사건 묶기·우선순위)은 1차 탐지가 한다.
 
 - **동작 흐름(파일·함수 순서, 코드 주석 `[N]` 번호 대응)**: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
 - **조사 프롬프트 설명(원칙별 역할·생긴 이유·코드 대응)**: [docs/PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md)
@@ -13,11 +13,10 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로
 ## 전체 흐름
 
 ```
-로그 파일 (.env의 <계층>_LOG_LOCAL_PATH — EC2는 /var/log/...)
-  → agent/raw_log_ingestion.py   4계층(web/auth/audit/network) 파일 끝 N건을 1차 탐지팀 정규화로 구조화
-  → agent/seed_generation.py     LLM triage로 조사할 사건 후보 + 우선순위
-  → agent/pipeline.py            우선순위 순서로 사건마다 조사 루프 실행
-  → agent/loop.py                LLM 판단 → 도구 실행 → 결과 관찰 반복, 종료 관문 통과 시 종료
+사건 파일 (1차 탐지 Incident JSONL 또는 직접 작성한 사건 JSON)
+  → agent/incident_input.py      사건 읽기 → 조사 루프 입력으로 변환 (IP·구간·탐지 근거 원본 참조·탐지 사유)
+  → agent/pipeline.py            받은 순서대로 사건마다 조사 루프 실행
+  → agent/loop.py                LLM 판단 → 도구 실행(.env의 로그 파일을 다시 읽음) → 결과 관찰 반복, 종료 관문 통과 시 종료
   → agent/report.py              결과 JSON(results/investigation_agent/*.json)
 ```
 
@@ -32,9 +31,8 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로
 
 ```
 agent/
-  pipeline.py            전체 파이프라인 (수집 → seed → 조사)
-  raw_log_ingestion.py   seed 생성용 로그 수집
-  seed_generation.py     LLM triage (seed_prompts.py = 그 프롬프트)
+  incident_input.py      사건 파일 읽기 + 1차 탐지 Incident → 조사 루프 입력 변환
+  pipeline.py            사건별 조사 실행
   loop.py                조사 루프 + 종료 관문 + 원본 참조 검증
   models.py              조사 상태(AgentState)·증거 구조
   prompts/               조사 프롬프트 — 판정 원칙 본문은 investigation.yaml
@@ -72,11 +70,11 @@ WEB_LOG_LOCAL_PATH=/var/log/apache2/access.log
 AUTH_LOG_LOCAL_PATH=/var/log/auth.log
 AUDIT_LOG_LOCAL_PATH=/var/log/audit/audit.log
 NETWORK_LOG_LOCAL_PATH=/var/log/suricata/eve.json
-RAW_LOG_LOCAL_MAX_LINES=50
 ```
 
 ```bash
-python main.py                                  # 전체 실행 → results/investigation_agent/에 JSON 저장 (콘솔에는 경로만)
+python main.py <사건 파일>                      # 사건별 조사 → results/investigation_agent/에 JSON 저장 (콘솔에는 경로만)
+python main.py tests/fixtures/primary_detection_incidents.jsonl   # 예: 1차 탐지 샘플 출력 (로그 경로는 primary_detection/normalizer/samples/)
 python -m pytest -q                             # 오프라인 테스트 (API 키 불필요)
 python -m tests.test_normalizer_parity          # 1차 탐지 정규화 결과와 동일성 검증
 python -m scripts.verify_all_tools              # .env 로그 경로로 도구 일괄 점검

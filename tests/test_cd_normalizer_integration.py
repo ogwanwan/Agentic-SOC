@@ -10,7 +10,6 @@ from unittest.mock import patch
 
 import pytest
 
-from agent.raw_log_ingestion import fetch_recent_raw_logs
 from agent.tools.log_source import LOCAL_PATH_ENV
 from agent.tools.real.fetch_event_logs import fetch_event_logs
 from tests.test_event_window import WINDOW, local_log, query
@@ -30,17 +29,15 @@ def isolated_env(monkeypatch):
     ("audit", "fetch_audit_log", "sample_audit.log"),
     ("network", "fetch_network_log", "sample_eve.json"),
 ])
-def test_all_vendor_fields_and_refs_match_query_and_ingestion(monkeypatch, layer, module, sample):
+def test_all_vendor_fields_and_refs_match_query_and_tools(monkeypatch, layer, module, sample):
     source = SAMPLES / sample
     monkeypatch.setenv(LOCAL_PATH_ENV[layer], str(source))
     monkeypatch.setenv("AUTH_LOG_YEAR", "2026")
-    monkeypatch.setenv("RAW_LOG_LOCAL_MAX_LINES", "10000")
     vendor = getattr(import_module(f"primary_detection.normalizer.tools.{module}"), module)
     window = ["2026-01-01T00:00:00Z", "2026-12-31T23:59:59Z"]
     expected = vendor(str(source), time_window=window)
     assert expected
     fetched = fetch_event_logs({"host": "web-01", "window": window, "layers": [layer]})["records"]
-    ingested = fetch_recent_raw_logs("web-01", source_types=[layer])
     from agent.tools import build_default_registry
     registry = build_default_registry()
     tool_name = f"fetch_{layer}_log"
@@ -52,7 +49,7 @@ def test_all_vendor_fields_and_refs_match_query_and_ingestion(monkeypatch, layer
         return event["timestamp"], event["raw_ref"]
 
     expected = [{**{k: v for k, v in e.items() if k != "layer_data"}, **e["layer_data"]} for e in expected]
-    for actual in (fetched, ingested, individual):
+    for actual in (fetched, individual):
         stripped = [{k: v for k, v in e.items() if k not in ("raw_refs", "raw_ref_locations", "_source_type")} for e in actual]
         assert sorted(stripped, key=key) == sorted(expected, key=key)
         for event in actual:

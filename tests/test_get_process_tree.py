@@ -26,10 +26,8 @@ from typing import Any, Dict
 from tests._log_files import install_log_files, uninstall_log_files
 
 # normalizer 벤더 코드가 import 시점에 load_dotenv()를 호출하는 문제 회피
-# (tests/test_fetch_auth_log.py 상단 주석 참고). agent 패키지의 __init__.py가
-# raw_log_ingestion을 즉시 import하는데, 2026-09-22 C 작업으로 raw_log_ingestion이
-# normalizer.tools.fetch_auth_log를 쓰게 되면서, "agent."로 시작하는 그 무엇을
-# import하든(이 파일처럼 get_process_tree만 써도) 전부 이 영향을 받게 됐다.
+# (tests/test_fetch_auth_log.py 상단 주석 참고). 조사 도구가 벤더 정규화 코드를 쓰므로
+# "agent."로 시작하는 모듈을 import하면(이 파일처럼 get_process_tree만 써도) 이 영향을 받는다.
 #
 # 2026-09-22 추가 수정: 그런데 `import agent`만으로는 auth/audit 쪽 load_dotenv()만
 # 실행되고, apache/network 쪽(fetch_apache_log.py/fetch_network_log.py)은
