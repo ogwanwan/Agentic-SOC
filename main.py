@@ -3,7 +3,7 @@
 역할
   .env 설정을 읽고, 도구 레지스트리와 LLM 클라이언트를 만든 뒤 전체 조사 파이프라인
   (로그 수집 → 조사할 사건(seed) 고르기 → 사건별 조사 → 보고서)을 한 번 실행한다.
-  결과는 콘솔에 텍스트 보고서로 보여 주고, 원본 JSON은 results/에 저장한다.
+  결과는 콘솔에 텍스트 보고서로 보여 주고, 원본 JSON은 results/investigation_agent/에 저장한다.
 
 누가 부르나
   사람이 직접 실행한다 (EC2: `python3 main.py`).
@@ -23,7 +23,7 @@
 
 결과 저장
   텍스트 보고서는 따로 저장하지 않는다. format_text_report()가 JSON으로 언제든 다시 만들 수
-  있어서 JSON만 "원본"으로 results/<investigation_id>_<UTC시각>.json에 보관한다.
+  있어서 JSON만 "원본"으로 results/investigation_agent/<investigation_id>_<UTC시각>.json에 보관한다.
   저장 직후 그 파일로 ATT&CK 매핑을 돌려 results/attack_mapping/에
   <incident_id>_attack_mapping.json과 <incident_id>_final_report.json을 만든다
   (어택 매핑 팀 CLI `python -m attack_mapping.cli`와 같은 처리, 같은 사건이면 __2, __3 …).
@@ -45,6 +45,8 @@ from attack_mapping.rules import ALL_RULES
 load_dotenv()  # .env 파일에서 GEMINI_API_KEY / ANTHROPIC_API_KEY / HOST 등을 읽어온다
 
 RESULTS_DIR = "results"
+# 단계별 결과 폴더: 조사 결과(원본 JSON)와 ATT&CK 매핑 결과(매핑·최종 보고서)를 나눠 둔다
+INVESTIGATION_DIR = os.path.join(RESULTS_DIR, "investigation_agent")
 ATTACK_MAPPING_DIR = os.path.join(RESULTS_DIR, "attack_mapping")
 
 # 어택 매핑 결과 상태(mapping_status)를 콘솔에 보여 줄 때의 설명
@@ -68,7 +70,7 @@ def build_llm_client():
     raise ValueError(f"알 수 없는 LLM_PROVIDER입니다: {provider} (gemini 또는 anthropic만 지원)")
 
 
-def save_investigation_result(result: dict, output_dir: str = RESULTS_DIR) -> str:
+def save_investigation_result(result: dict, output_dir: str = INVESTIGATION_DIR) -> str:
     """조사 결과(investigation_result JSON)를 파일로 저장하고 저장된 경로를 반환한다.
 
     파일명은 {investigation_id}_{저장시각 UTC}.json 형태다. investigation_id만으로는
@@ -157,7 +159,7 @@ def main() -> None:
         return
 
     # [45] 결과 출력·저장 → agent/report.py format_text_report()로 텍스트 보고서를 만들어 출력하고,
-    #      원본 JSON은 results/에 저장해 콘솔에는 파일명만 참고 자료로 보여 준다.
+    #      원본 JSON은 results/investigation_agent/에 저장해 콘솔에는 파일명만 참고 자료로 보여 준다.
     # [46] 저장된 JSON으로 바로 ATT&CK 매핑 → results/attack_mapping/에 매핑 결과·최종 보고서 저장
     saved_paths = []
     mapping_paths = []

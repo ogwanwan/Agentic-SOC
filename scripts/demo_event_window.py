@@ -44,7 +44,7 @@ class DemoInvestigator:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "results" / "cd_demo.json")
+    parser.add_argument("--output", type=Path, default=ROOT / "results" / "investigation_agent" / "cd_demo.json")
     args = parser.parse_args()
     names = {"web": "web.txt", "auth": "auth.txt", "audit": "audit.txt", "network": "network.jsonl"}
     env = {LOCAL_PATH_ENV[layer]: str(ROOT / "examples" / "cd" / name) for layer, name in names.items()}

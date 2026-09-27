@@ -46,7 +46,7 @@ python3 -m venv .venv
 [C] Incident window query: 4 events / 2 pages
 [D] Provenance: passed / 5 raw references
 LLM: scripted offline responses; threat classification not evaluated.
-Saved: .../results/abcd_demo.json
+Saved: .../results/investigation_agent/abcd_demo.json
 ```
 
 - **4개 이벤트:** web/auth/audit/network에서 각각 한 개씩 읽었다.
@@ -62,7 +62,7 @@ JSON에는 입력(`seed_input`), 도구별 응답(`tool_observations`), 최종 �
 웹 계층만 조사하려면 마지막 명령 대신 다음을 실행한다.
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.demo_abcd --layers web --output results/abcd_web_demo.json
+.\.venv\Scripts\python.exe -m scripts.demo_abcd --layers web --output results/investigation_agent/abcd_web_demo.json
 ```
 
 이 경우 수집 입력은 4계층 그대로이고, 사건 후보와 조사는 web만 선택한다.
@@ -217,7 +217,7 @@ Agentic-SOC/
 2. `.env.example`을 `.env`로 복사하고 선택한 모델의 API 키를 입력한다.
 3. `HOST`, `LOG_LOCAL_HOST`, 계층별 `*_LOG_LOCAL_PATH`를 내 수집 서버와 파일에 맞춘다.
 4. auth가 연도 없는 syslog이면 `AUTH_LOG_YEAR`를 실제 로그 연도로 맞춘다.
-5. `python main.py`를 실행한다. 조사 결과가 있으면 `results/`에 JSON이 저장된다.
+5. `python main.py`를 실행한다. 조사 결과가 있으면 `results/investigation_agent/`에 JSON이 저장되고, 이어서 ATT&CK 매핑 결과가 `results/attack_mapping/`에 저장된다.
 
 Windows의 복사 명령은 `Copy-Item .env.example .env`, macOS/Linux는 `cp .env.example .env`다.
 이미 `.env`가 있으면 필요한 항목만 수정한다. 키가 들어간 `.env`는 커밋하지 않는다.

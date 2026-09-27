@@ -126,7 +126,7 @@ def run_demo(layers=LAYERS):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--layers", nargs="+", choices=LAYERS, default=list(LAYERS))
-    parser.add_argument("--output", type=Path, default=ROOT / "results" / "abcd_demo.json")
+    parser.add_argument("--output", type=Path, default=ROOT / "results" / "investigation_agent" / "abcd_demo.json")
     args = parser.parse_args()
     demo = run_demo(args.layers)
     result = demo["results"][0]

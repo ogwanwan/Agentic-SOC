@@ -23,12 +23,12 @@ pip install -r requirements.txt                      # 테스트용 pytest 포�
 python -m pytest -q                                 # 전체 오프라인 테스트
 python -m pytest tests/test_loop.py::test_name       # 단일 테스트
 python -m pytest -q tests/test_network_precheck.py   # 사전 조회·종료 관문·도구 집계
-python -m scripts.demo_abcd                          # 실제 도구를 연결한 A/B/C/D 데모 → results/abcd_demo.json
-python -m scripts.demo_event_window                  # C/D 사건 조회 데모 → results/cd_demo.json
+python -m scripts.demo_abcd                          # 실제 도구를 연결한 A/B/C/D 데모 → results/investigation_agent/abcd_demo.json
+python -m scripts.demo_event_window                  # C/D 사건 조회 데모 → results/investigation_agent/cd_demo.json
 python -m scripts.verify_all_tools                   # 조사 도구 + raw_log_ingestion 로컬 샘플 일괄 점검
 python -m tests.test_normalizer_parity                # 1차 탐지팀 정규화 결과와 동일성 검증
 python -m scripts.verify_attack_mapping_abc           # 어택 매핑 A/B/C 통합 검증 → results/attack_mapping_abc_<시각>/
-python -m attack_mapping.cli results/<파일>.json       # 저장된 조사 결과만 다시 ATT&CK 매핑 (--all-in-dir results 로 일괄)
+python -m attack_mapping.cli results/investigation_agent/<파일>.json   # 저장된 조사 결과만 다시 ATT&CK 매핑 (--all-in-dir results/investigation_agent 로 일괄)
 
 # 실제 LLM 실행
 cp .env.example .env                                  # 키/경로 채워넣기 (Windows: Copy-Item .env.example .env)
@@ -41,7 +41,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 주의:
 - `pytest.ini`가 `tests/test_consistency.py`를 자동 실행에서 제외한다(실제 API 호출).
 - `No module named agent`/`scripts` 에러가 나면 저장소 루트에서 `python -m ...` 형태로 실행했는지 확인한다.
-- `main.py`는 보고서만 콘솔에 출력하고, 원본 investigation_result JSON은 `results/<investigation_id>_<UTC시각>.json`에 저장한 뒤 파일명을 표시한다. 저장 직후 그 파일로 ATT&CK 매핑을 돌려 `results/attack_mapping/<incident_id>_attack_mapping.json`·`_final_report.json`을 만든다(같은 사건 재조사는 `__2`, `__3` …).
+- `main.py`는 보고서만 콘솔에 출력하고, 원본 investigation_result JSON은 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장한 뒤 파일명을 표시한다(`results/`는 단계별 폴더: `investigation_agent/`, `attack_mapping/`). 저장 직후 그 파일로 ATT&CK 매핑을 돌려 `results/attack_mapping/<incident_id>_attack_mapping.json`·`_final_report.json`을 만든다(같은 사건 재조사는 `__2`, `__3` …).
 - EC2 운영 환경은 Python 3.10이다. 시각 파싱처럼 버전에 따라 동작이 다른 부분은 3.10에서 확인한다.
 
 ## Architecture

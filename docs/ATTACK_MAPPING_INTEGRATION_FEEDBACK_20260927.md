@@ -17,7 +17,7 @@
 
 ```
 python main.py
-  → 조사 (agent/)                         → results/<investigation_id>_<UTC시각>.json 저장
+  → 조사 (agent/)                         → results/investigation_agent/<investigation_id>_<UTC시각>.json 저장
   → main.run_attack_mapping(저장 경로)     → attack_mapping/cli.py process_file(경로, ALL_RULES, results/attack_mapping)
        → engine.map_investigation → killchain.build_kill_chain → reporting.build_final_report
        → results/attack_mapping/<incident_id>_attack_mapping.json, <incident_id>_final_report.json
@@ -42,7 +42,7 @@ python main.py
 | 로컬 (5장 수정 후) | `python -m pytest -q` | 317 passed (0건 증거 확인 테스트 6개, 매핑 연결 테스트 1개 추가) |
 | 로컬 + 실제 Gemini (5장 수정 후) | 유출 3회·웹셸 1회·0건 증거 SSH seed 2회 | 모두 provenance `passed`·`mapped`. 유출 3/3 T1560, 웹셸 T1505.003, SSH 2/2 T1110 (이전 같은 seed는 `partial`) |
 
-위 표의 EC2 행은 5장 수정 전 코드 기준입니다.
+| EC2 + 실제 Gemini (5장 수정 후) | pytest / verify / `python3 main.py` (실제 트래픽 2건) | 317 passed / 297 passed·0 failed / SSH 대입(성공 0회) → network 0건 증거가 `[도구 호출 #1 0건 확인]`, provenance `passed` → `mapped` T1110. 정상 개발 작업 → FALSE_POSITIVE → `not_applicable` |
 
 ## 4. 규칙(B) 보완 요청
 
@@ -129,5 +129,10 @@ python main.py
 
   한쪽에서 바꾸면 다른 쪽 검증에 걸리니 미리 알려 주세요. 조사 쪽은 `tests/test_attack_mapping_engine.py::test_actual_investigation_report_contract`와 `tests/test_main_attack_mapping.py`로 확인합니다.
 - **규칙을 바꾸면** `tests/test_main_attack_mapping.py`도 같이 돌려 주세요. 이 테스트는 실제 `ALL_RULES`로 웹셸 사건이 T1059.004 → T1505.003 순서로 나오는지 봅니다(`/dev/tcp`, "역방향 셸" 문장 사용).
+- **결과 폴더:** `results/`를 단계별 폴더로 나눴습니다.
+  - `results/investigation_agent/`: 조사 결과 JSON과 조사 쪽 데모 출력
+  - `results/attack_mapping/`: 매핑 결과·최종 보고서 (CLI 기본값 그대로)
+
+  CLI로 일괄 재매핑할 때는 `--all-in-dir results/investigation_agent`를 쓰면 됩니다. `scripts/verify_attack_mapping_abc.py`의 기본 출력(`results/attack_mapping_abc_<시각>/`)은 여러분 코드라 그대로 두었습니다. 가능하면 `results/attack_mapping/` 아래(예: `results/attack_mapping/verify_<시각>/`)로 옮겨 주세요. CLI 일괄 처리는 하위 폴더를 읽지 않으므로 섞이지 않습니다.
 - **작업 기준 브랜치:** 이 통합 브랜치가 팀 레포에 올라간 뒤에는 이 브랜치를 기준으로 작업해 주시면 병합이 편합니다.
 - **파일 이름(선택):** 조사 결과는 `INV-<incident>-<날짜>-001_<UTC시각>.json`인데 매핑 결과는 `<incident_id>__N_*.json`이라 이름만으로는 짝이 안 맞습니다. 파일 안의 `investigation_id`로 연결은 됩니다. 입력 파일 이름 기준으로 바꿀지는 편하신 대로 정해 주세요.

@@ -24,7 +24,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m scripts.demo_event_window
 ```
 
-데모는 `examples/cd/`의 합성 로그 4계층을 조회하고 `results/cd_demo.json`을 만든다.
+데모는 `examples/cd/`의 합성 로그 4계층을 조회하고 `results/investigation_agent/cd_demo.json`을 만든다.
 총 4개 이벤트, 원본 5줄(audit 2줄 포함)의 참조가 유지되는 것을 확인할 수 있다.
 데모의 판단 응답은 고정 Python 객체이며 실제 위협 판정 성능을 검증하는 용도가 아니다.
 운영 실행에는 기존 `requirements.txt`와 `.env` 설정을 사용한다.
