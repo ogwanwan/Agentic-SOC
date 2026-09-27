@@ -9,11 +9,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Agentic-SOC: LLM 기반 SOC(보안관제) 파이프라인을 만드는 팀 프로젝트. **완전히 다른 에이전트가 서로 다른 브랜치에 있고, 조사 에이전트만도 여러 브랜치에서 병렬로 발전 중이다** — 작업 전 반드시 `git branch --show-current`로 확인할 것.
 
 - **1차 탐지 에이전트** (`main` / `feature/agent`, `feature/primary-detection`): Apache+auth 로그를 IP별로 집계해 `malicious_bot`/`benign_bot`/`human`/`undetermined`로 분류하고, 조사가 필요한 IP만 골라 조사 에이전트로 넘긴다. 공통 정규화(`primary_detection/normalizer`)의 원본이 여기 있다.
+- **조사 에이전트 + ATT&CK 매핑 통합** — `feature/investigation-attack-mapping` (**이 문서가 다루는 브랜치**, 개인 저장소 `integrate-attack-mapping`과 같은 내용). 2026-09-27부터 **조사 에이전트 수정도 이 브랜치에서 한다** — 조사 결과의 증거 문장·provenance가 매핑 결과를 바로 바꾸므로 매핑까지 같이 검증해야 한다. 어택 매핑 팀도 이 브랜치를 기준으로 작업한다.
 - **조사 에이전트(Investigation Agent)** — 여러 브랜치에 존재:
-  - `feature/Agentic-SOC-Investigation-Agent` (**이 문서가 다루는 브랜치**). 개인 저장소의 `integrate-investigation`과 같은 내용으로 유지한다.
+  - `feature/Agentic-SOC-Investigation-Agent` (개인 저장소 `integrate-investigation`) — 통합 전 조사 에이전트 단독 기준점(`76182f4`, 0927). 더 이상 수정하지 않고, 통합 브랜치에 문제가 생기면 돌아갈 기준으로 둔다. 통합 브랜치를 이 브랜치로 merge하지 않는다(어택 매핑 코드가 섞임).
   - `feature/agent-final` — 같은 `cb5005d`에서 갈라진 자매 브랜치. 0924 이후의 provenance·재현성 수정(아래 "상태와 신뢰도", "종료 관문")이 **없다**. raw_ref 미인용 시 신뢰도 기여를 0으로 만드는 이전 규칙을 쓴다. 이 브랜치의 변경을 그쪽으로 자동 전파하지 않는다.
 
-브랜치마다 폴더 구조와 세부 로직이 다르므로, 한쪽에서 읽은 코드/동작 지식을 다른 쪽에 그대로 적용하면 안 된다. 0918 이후 이 브랜치의 변경 이력과 검증 결과는 [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)에 있다.
+브랜치마다 폴더 구조와 세부 로직이 다르므로, 한쪽에서 읽은 코드/동작 지식을 다른 쪽에 그대로 적용하면 안 된다. 0918 이후 조사 에이전트의 변경 이력과 검증 결과는 [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)에, 0927 통합 결과와 이후 조사 쪽 수정은 [docs/ATTACK_MAPPING_INTEGRATION_FEEDBACK_20260927.md](docs/ATTACK_MAPPING_INTEGRATION_FEEDBACK_20260927.md)에 있다.
+
+Git 원격: `origin` = 개인 저장소, `upstream` = 팀 저장소(`ogwanwan/Agentic-SOC`). 팀 저장소 push 주소는 평소 `DISABLED`로 막아 두고, 사용자가 팀 저장소 push를 요청할 때만 잠깐 복구했다가 다시 막는다.
 
 ## Commands
 

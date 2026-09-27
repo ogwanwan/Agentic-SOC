@@ -134,5 +134,6 @@ python main.py
   - `results/attack_mapping/`: 매핑 결과·최종 보고서 (CLI 기본값 그대로)
 
   CLI로 일괄 재매핑할 때는 `--all-in-dir results/investigation_agent`를 쓰면 됩니다. `scripts/verify_attack_mapping_abc.py`의 기본 출력(`results/attack_mapping_abc_<시각>/`)은 여러분 코드라 그대로 두었습니다. 가능하면 `results/attack_mapping/` 아래(예: `results/attack_mapping/verify_<시각>/`)로 옮겨 주세요. CLI 일괄 처리는 하위 폴더를 읽지 않으므로 섞이지 않습니다.
+- **조사 에이전트 작업 위치:** 조사 쪽 수정도 앞으로 이 통합 브랜치(`feature/investigation-attack-mapping`)에서 합니다. 조사 결과가 매핑 결과를 바로 바꾸기 때문에 매핑까지 같이 검증하기 위해서입니다. `feature/Agentic-SOC-Investigation-Agent`는 통합 전 기준점으로 남겨 두고 더 수정하지 않습니다.
 - **작업 기준 브랜치:** 이 통합 브랜치가 팀 레포에 올라간 뒤에는 이 브랜치를 기준으로 작업해 주시면 병합이 편합니다.
 - **파일 이름(선택):** 조사 결과는 `INV-<incident>-<날짜>-001_<UTC시각>.json`인데 매핑 결과는 `<incident_id>__N_*.json`이라 이름만으로는 짝이 안 맞습니다. 파일 안의 `investigation_id`로 연결은 됩니다. 입력 파일 이름 기준으로 바꿀지는 편하신 대로 정해 주세요.
