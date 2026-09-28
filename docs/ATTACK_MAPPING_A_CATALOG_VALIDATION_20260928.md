@@ -4,7 +4,7 @@
 작성: 담당 A (희진)
 브랜치: 개인 레포 `zhrldnpftl/WHS4-Agentic-SOC-Investigation-Agent`의 `integrate-attack-mapping-rag`
 (조사 에이전트 최신 `integrate-investigation` = `051dda7` 위에 매핑 코드를 되살리고 A 작업을 올림.
-팀 레포 반영 브랜치는 확인 후 정해서 알려 드립니다. B·C는 이 브랜치의 `attack_mapping/schema.py`를 계약 기준으로 써 주세요.)
+팀 레포는 다른 팀원이 사용 중이라 반영하지 않고 개인 레포에만 올립니다. B·C는 이 브랜치의 `attack_mapping/schema.py`를 계약 기준으로 써 주세요.)
 
 ## 1. 요약
 

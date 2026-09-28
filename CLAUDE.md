@@ -9,14 +9,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Agentic-SOC: LLM 기반 SOC(보안관제) 파이프라인을 만드는 팀 프로젝트. **완전히 다른 에이전트가 서로 다른 브랜치에 있고, 조사 에이전트만도 여러 브랜치에서 병렬로 발전 중이다** — 작업 전 반드시 `git branch --show-current`로 확인할 것.
 
 - **1차 탐지 에이전트** (`main` / `feature/agent`, `feature/primary-detection`): Apache+auth 로그를 IP별로 집계해 `malicious_bot`/`benign_bot`/`human`/`undetermined`로 분류하고, 조사가 필요한 IP만 골라 조사 에이전트로 넘긴다. 공통 정규화(`primary_detection/normalizer`)의 원본이 여기 있다.
-- **조사 에이전트 + ATT&CK 매핑 통합** — 개인 저장소 `integrate-attack-mapping-rag` (**이 문서가 다루는 브랜치**, 2026-09-28~). 조사 에이전트 최신(`integrate-investigation` = 팀 `feature/Agentic-SOC-Investigation-Agent`, `051dda7`) 위에 `d802dbb`에서 지운 ATT&CK 매핑(`attack_mapping/`, `reporting/`, 매핑 테스트·문서)을 `a1e60ce`에서 되살리고, `main.py`에 매핑 연결을 다시 붙이고, RAG 전환 담당 A 작업을 올렸다. 조사 코드 수정은 조사 브랜치에서 하고 이 브랜치로 merge해 온다(`d802dbb`의 삭제는 이미 이 브랜치 이력에 있어서 그 뒤 조사 커밋을 merge해도 매핑 파일이 지워지지 않는다). 팀 저장소 반영 여부·브랜치는 아직 정하지 않았다. 옛 팀 브랜치 `feature/investigation-attack-mapping`(`a1e60ce`)은 그대로 둔다.
+- **조사 에이전트 + ATT&CK 매핑 통합** — 개인 저장소 `integrate-attack-mapping-rag` (**이 문서가 다루는 브랜치**, 2026-09-28~). 조사 에이전트 최신(`integrate-investigation` = 팀 `feature/Agentic-SOC-Investigation-Agent`, `051dda7`) 위에 `d802dbb`에서 지운 ATT&CK 매핑(`attack_mapping/`, `reporting/`, 매핑 테스트·문서)을 `a1e60ce`에서 되살리고, `main.py`에 매핑 연결을 다시 붙이고, RAG 전환 담당 A 작업을 올렸다. 조사 코드 수정은 조사 브랜치에서 하고 이 브랜치로 merge해 온다(`d802dbb`의 삭제는 이미 이 브랜치 이력에 있어서 그 뒤 조사 커밋을 merge해도 매핑 파일이 지워지지 않는다). 개인 저장소에만 올리고 팀 저장소에는 반영하지 않는다. 옛 팀 브랜치 `feature/investigation-attack-mapping`(`a1e60ce`)은 그대로 둔다.
 - **조사 에이전트(Investigation Agent)** — 여러 브랜치에 존재:
   - `feature/Agentic-SOC-Investigation-Agent` (조사 에이전트 단독 기준). 개인 저장소의 `integrate-investigation`과 같은 내용으로 유지한다. `d802dbb`에서 ATT&CK 매핑을 지웠으므로 이 브랜치를 그대로 받아(fast-forward) 매핑 브랜치에 덮지 않는다.
   - `feature/agent-final` — 같은 `cb5005d`에서 갈라진 자매 브랜치. 0924 이후의 provenance·재현성 수정(아래 "상태와 신뢰도", "종료 관문")이 **없다**. raw_ref 미인용 시 신뢰도 기여를 0으로 만드는 이전 규칙을 쓴다. 이 브랜치의 변경을 그쪽으로 자동 전파하지 않는다.
 
 브랜치마다 폴더 구조와 세부 로직이 다르므로, 한쪽에서 읽은 코드/동작 지식을 다른 쪽에 그대로 적용하면 안 된다. 0918 이후 이 브랜치의 변경 이력과 검증 결과는 [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)에 있다.
 
-Git 원격 이름은 작업 폴더마다 다르다(조사 폴더: `origin` = 개인 저장소, `upstream` = 팀 저장소 / 매핑 통합 폴더: `origin` = 팀 저장소(`ogwanwan/Agentic-SOC`), `personal` = 개인 저장소). push 전에 `git remote -v`로 확인할 것. 어느 폴더든 팀 저장소 push 주소는 평소 `DISABLED`로 막아 두고, 사용자가 팀 저장소 push를 요청할 때만 잠깐 복구했다가 다시 막는다.
+이 브랜치는 **개인 저장소(`zhrldnpftl/WHS4-Agentic-SOC-Investigation-Agent`) 기준으로만** 작업한다. 팀 저장소(`ogwanwan/Agentic-SOC`)는 다른 팀원이 쓰고 있어 건드리지 않는다. 개인 저장소의 `integrate-attack-mapping`(`a1e60ce`)은 0927 작업물로 따로 남겨 두고 이 브랜치와 합치지 않는다.
+Git 원격 이름은 작업 폴더마다 다르다(조사 폴더: `origin` = 개인 저장소, `upstream` = 팀 저장소 / 매핑 통합 폴더: `origin` = 개인 저장소, `team` = 팀 저장소). push 전에 `git remote -v`로 확인할 것. 어느 폴더든 팀 저장소 push 주소는 `DISABLED`로 막아 두고, 사용자가 팀 저장소 push를 요청할 때만 잠깐 복구했다가 다시 막는다.
 
 ## Commands
 
