@@ -2,7 +2,9 @@
 
 - 조사 루프가 넘기는 인자(confidence_threshold/force_terminate/gate_rejection_reason)를 받아
   InvestigationAgent가 끝까지 도는지 (예전엔 첫 턴에 TypeError)
-- 호출 설정: max_tokens 8192, temperature 0, 시스템 프롬프트 캐시 표시, SDK 재시도 설정
+- 호출 설정: max_tokens 16000, sampling 인자(temperature 등) 없음, 시스템 프롬프트 캐시 표시, SDK 재시도 설정
+- 보내는 인자가 설치된 실제 SDK의 messages.create()가 받는 인자인지 (가짜 클라이언트만으로는
+  2026-09-28 EC2의 `temperature` TypeError를 잡지 못했다)
 - 출력 한도에서 잘린 응답은 ClaudeDecisionError, 토큰 사용량 누적
 """
 from __future__ import annotations
@@ -17,6 +19,13 @@ import pytest
 from agent.claude_client import ClaudeClient, ClaudeDecisionError
 from agent.loop import InvestigationAgent
 from agent.tools import build_default_registry
+
+
+@pytest.fixture(autouse=True)
+def isolated_env(monkeypatch):
+    # 실행하는 셸에 CLAUDE_MODEL·CLAUDE_EFFORT가 있어도 기본값을 확인할 수 있게 비운다
+    for name in ("CLAUDE_MODEL", "CLAUDE_EFFORT"):
+        monkeypatch.delenv(name, raising=False)
 
 
 class _FakeMessages:
@@ -77,7 +86,10 @@ def test_claude_client_runs_investigation_loop(monkeypatch):
     assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
     assert [t["tool_name"] for t in result["tools_called"]] == ["fetch_auth_log"]
     call = created["messages"].calls[0]
-    assert call["max_tokens"] == 8192 and call["temperature"] == 0.0
+    assert call["max_tokens"] == 16000
+    # anthropic SDK 1.x는 sampling 인자를 없앴고(TypeError), claude-sonnet-5도 받지 않는다(400)
+    assert not {"temperature", "top_p", "top_k"} & set(call)
+    assert "output_config" not in call  # CLAUDE_EFFORT가 없으면 API 기본값
     assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert created["max_retries"] == ClaudeClient.MAX_RETRIES
     assert client.usage_totals["calls"] == 2 and client.usage_totals["cache_read_input_tokens"] == 160
@@ -100,3 +112,30 @@ def test_model_from_env(monkeypatch):
     _install_fake_anthropic(monkeypatch, [])
     monkeypatch.setenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
     assert ClaudeClient(api_key="k").model == "claude-haiku-4-5-20251001"
+
+
+def test_effort_from_env_goes_to_output_config(monkeypatch):
+    created = _install_fake_anthropic(monkeypatch, [{"text": "{}"}])
+    monkeypatch.setenv("CLAUDE_EFFORT", "Medium")
+    ClaudeClient(api_key="k").complete_json("sys", "user")
+    assert created["messages"].calls[0]["output_config"] == {"effort": "medium"}
+    monkeypatch.setenv("CLAUDE_EFFORT", "fast")
+    with pytest.raises(ValueError, match="CLAUDE_EFFORT"):
+        ClaudeClient(api_key="k")
+
+
+def test_request_arguments_are_accepted_by_installed_sdk(monkeypatch):
+    # 가짜 클라이언트는 어떤 인자든 받아서, SDK가 삭제한 인자(temperature)를 보내도 통과했다.
+    # 설치된 실제 anthropic의 messages.create() 시그니처와 대조한다.
+    sdk = pytest.importorskip("anthropic")
+    import inspect
+
+    from anthropic.resources.messages import Messages
+
+    accepted = set(inspect.signature(Messages.create).parameters)
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    created = _install_fake_anthropic(monkeypatch, [{"text": "{}"}])
+    ClaudeClient(api_key="k").complete_json("sys", "user")
+    sent = set(created["messages"].calls[0])
+    assert sent <= accepted, f"anthropic {sdk.__version__}가 받지 않는 인자: {sent - accepted}"
+

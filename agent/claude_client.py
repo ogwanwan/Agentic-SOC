@@ -2,7 +2,10 @@
 
 역할
   프롬프트를 받아 Claude를 호출하고 응답을 JSON(dict)으로 파싱해 돌려준다. GeminiClient와 같은
-  인터페이스·설정(출력 한도 8192, temperature 0.0)이라 LLM_PROVIDER만 바꾸면 그대로 교체된다.
+  인터페이스라 LLM_PROVIDER만 바꾸면 그대로 교체된다.
+  temperature는 보내지 않는다: anthropic SDK 1.x에서 인자가 삭제됐고(보내면 TypeError), 기본 모델
+  claude-sonnet-5도 sampling 인자를 받지 않는다(400). 판정 재현성은 프롬프트 원칙과 코드 관문이 맡는다.
+  claude-sonnet-5는 thinking이 기본으로 켜져 있어 thinking 토큰도 max_tokens에 포함된다 → 출력 한도 16000.
   일시 오류(429 한도, 529 과부하, 연결 끊김)는 anthropic SDK가 서버 안내 시간만큼 기다렸다 재시도한다.
   시스템 프롬프트는 매 턴 같으므로 프롬프트 캐싱으로 표시해 반복 호출 비용을 줄이고, 호출마다 쓴 토큰을
   usage_totals에 누적한다(조사 1건 비용 측정용).
@@ -16,6 +19,7 @@
   [22] anthropic  messages.create()
 
 필요 환경변수: ANTHROPIC_API_KEY. 모델은 CLAUDE_MODEL(없으면 claude-sonnet-5).
+선택 환경변수: CLAUDE_EFFORT(low|medium|high|xhigh|max) — 없으면 API 기본값(high).
 테스트에서는 같은 인터페이스의 가짜 클라이언트로 바꿔 쓴다(tests/test_loop.py, tests/test_claude_client.py).
 """
 
@@ -29,6 +33,7 @@ from typing import Any, Dict, Optional
 from .prompts import build_system_prompt, build_user_prompt
 
 DEFAULT_MODEL = "claude-sonnet-5"
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
 class ClaudeDecisionError(Exception):
@@ -43,10 +48,11 @@ class ClaudeClient:
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        # GeminiClient와 같은 값. 2000이면 LLM이 원본 참조를 옮겨 적다 응답이 잘려 조사가 멈춘다.
-        max_tokens: int = 8192,
-        # 같은 증거에 같은 판정이 나오도록 결정성을 우선한다 (GeminiClient와 동일).
-        temperature: float = 0.0,
+        # 2000이면 LLM이 원본 참조를 옮겨 적다 응답이 잘려 조사가 멈췄다(Gemini는 8192).
+        # claude-sonnet-5는 thinking 토큰도 이 한도에 들어가므로 더 크게 잡는다. 스트리밍 없이 부를 수 있는
+        # 범위(SDK의 10분 제한 안)로 둔다.
+        max_tokens: int = 16000,
+        effort: Optional[str] = None,
     ) -> None:
         # anthropic 패키지는 실제 API 호출 시에만 필요하므로 지연 import한다.
         from anthropic import Anthropic
@@ -61,7 +67,9 @@ class ClaudeClient:
         self._client = Anthropic(api_key=resolved_key, max_retries=self.MAX_RETRIES)
         self.model = model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL
         self.max_tokens = max_tokens
-        self.temperature = temperature
+        self.effort = (effort or os.environ.get("CLAUDE_EFFORT") or "").strip().lower() or None
+        if self.effort is not None and self.effort not in EFFORT_LEVELS:
+            raise ValueError(f"CLAUDE_EFFORT는 {', '.join(EFFORT_LEVELS)} 중 하나여야 합니다: {self.effort}")
         # 이 클라이언트로 한 모든 호출의 토큰 합계 (비용 추정용)
         self.usage_totals: Dict[str, int] = {
             "calls": 0, "input_tokens": 0, "output_tokens": 0,
@@ -96,13 +104,14 @@ class ClaudeClient:
     # [22] 실제 Claude 호출 — 조사 루프의 reason()이 여기로 온다
     def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         """범용 호출: 어떤 system/user 프롬프트든 받아서 JSON으로 파싱해 돌려준다."""
+        extra: Dict[str, Any] = {"output_config": {"effort": self.effort}} if self.effort else {}
         response = self._client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            temperature=self.temperature,
             # 시스템 프롬프트(원칙·도구 목록·출력 형식)는 매 턴 같아서 캐시해 두고 다시 읽는다.
             system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_prompt}],
+            **extra,
         )
         self._add_usage(getattr(response, "usage", None))
         text = "".join(getattr(block, "text", "") for block in response.content if block.type == "text")
