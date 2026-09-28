@@ -56,7 +56,7 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 
 | 조사 루프 입력 | 1차 탐지 Incident에서 가져오는 값 |
 |---|---|
-| `incident_id` | `incident_id` (`incident_key`가 있으면 함께 보관) |
+| `incident_id` | `incident_id` (`incident_key`·`updated_at`이 있으면 함께 보관 → 결과 최상위 `incident_key`·`incident_snapshot`) |
 | `host` | 사건에 없으면 `.env`의 `HOST` |
 | `src_ip` | `entity.type == "src_ip"`이면 그 값, 아니면 탐지 결과 중 IP entity. pid 사건은 없음(network 사전 조회 안 함) |
 | `window` / `trigger_time` | `window` / 가장 이른 탐지 이벤트 시각(`seeds[].detail.timestamp`) |

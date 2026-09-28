@@ -123,6 +123,15 @@ def build_investigation_result(
 
     return {
         "incident_id": state.incident_id,
+        # 사건과 이후 단계(ATT&CK 매핑·최종 보고서)를 잇는 키. incident_id는 1차 탐지 사건이 커지면
+        # 바뀌므로 안정 키를 최상위에 둔다(없는 사건 파일은 null → 연결은 incident_id로).
+        "incident_key": state.seed.get("incident_key"),
+        # 어느 판의 사건을 조사했는지 — 사건이 커져 재조사할 때 이전 결과와 구분한다
+        "incident_snapshot": {
+            "incident_id": state.incident_id,
+            "member_count": (state.seed.get("detection") or {}).get("member_count"),
+            "updated_at": state.seed.get("updated_at"),
+        },
         "investigation_id": investigation_id,
         "investigation_status": "COMPLETE",
         "timestamp": _now_iso(),

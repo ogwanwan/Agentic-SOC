@@ -120,7 +120,10 @@
 
 ## 5. 이 필드가 없는 이전 결과
 
-2026-09-28 이전에 만든 결과 JSON에는 이 필드가 없습니다. 그때는 아래처럼 직접 계산해 주세요(같은 규칙입니다).
+2026-09-28 이전에 만든 결과 JSON에는 이 필드가 없습니다. 그때는 아래처럼 직접 계산해 주세요.
+규칙은 **참조 단위**입니다 — 증거의 참조 중 seed에만 있는 것이 **하나라도** 있으면 표시합니다
+(예: `[audit.log:6(도구 관측), auth.log:5(seed에만 있음)]`를 인용한 증거도 표시 대상).
+"모든 참조가 seed 참조일 때만"으로 계산하면 결과 파일 형식에 따라 판정이 달라지니 주의해 주세요.
 
 ```python
 seed_refs = set(result["provenance"].get("seed_raw_refs") or [])
@@ -130,14 +133,35 @@ def seed_only(evidence):
     return [r for r in evidence.get("raw_refs") or [] if r not in tool_refs and r in seed_refs]
 ```
 
-참고: 2026-09-27 21:15(KST) 이전 결과(예: `INC-7d29ffde`의 `T115708`, `T120704`)는
-"1차 탐지 참조를 도구로 확인하라"는 종료 관문이 생기기 전이라 seed만 인용한 증거가 많습니다.
-테스트 샘플로 쓸 때 구분해 주세요.
+참고: "1차 탐지 참조를 도구로 확인하라"는 종료 관문 (g)(커밋 `8213a2c`, 2026-09-27 21:15:53 KST = 12:15:53 UTC)와
+(h)(`95bcb50`, 21:24:55 KST = 12:24:55 UTC) 전후로 결과가 다릅니다. 결과 파일명의 시각은 **UTC**입니다.
+커밋 시각 경계로 자르지 말고 결과별로 구분해 주세요(`INC-7d29ffde` 기준):
 
-## 6. 예정된 변경
+| 결과 | 구분 |
+|---|---|
+| `T115708`, `T120704` | (g) 도입 전 — seed만 인용한 증거가 많음 |
+| `T121505` | (g) 커밋 48초 전(경계). 첫 도구는 `fetch_audit_log(pid=1200)` |
+| `T122331`, `T122929` | (h) 도입 후 |
 
-결과 JSON과 사건을 잇는 키를 `incident_key`(1차 탐지 DB의 안정 키)로 바꿀 예정입니다.
-1차 탐지 DB 연결(2026-09-30) 뒤 확정해서 다시 공유하겠습니다.
+## 6. 사건 연결 키 — `incident_key`
+
+결과 JSON 최상위에 사건 연결 키를 추가했습니다(2026-09-28).
+
+```json
+{
+  "incident_id": "INC-7d29ffde",
+  "incident_key": "K-3f9a",
+  "incident_snapshot": {"incident_id": "INC-7d29ffde", "member_count": 5, "updated_at": "2026-09-27T10:00:00Z"},
+  "investigation_id": "INV-INC-7d29ffde-20260928-001"
+}
+```
+
+- `incident_key`: 1차 탐지 DB의 안정 키(사건이 커져도 안 바뀜). `incident_id`는 사건이 커지면 바뀝니다.
+  **매핑·최종 보고서는 `incident_key`로 사건을 잇고, `null`이면 `incident_id`를 씁니다.**
+  지금 1차 탐지 출력(사건 파일)에는 `incident_key`가 없어 `null`입니다. 1차 탐지 DB 연결(2026-09-30) 뒤 채워집니다.
+- `incident_snapshot`: 어느 판의 사건을 조사했는지(사건이 커져 재조사할 때 이전 결과와 구분). `updated_at`은 DB 연결 전까지 `null`.
+- 같은 값이 `initial_seed.incident_key`에도 있지만 최상위 값을 써 주세요.
+- 결과 **파일명**은 아직 `<investigation_id>_<UTC시각>.json` 그대로입니다. 파일명 규칙에 기대지 말고 JSON 필드로 이어 주세요.
 
 ## 관련 코드
 
@@ -145,3 +169,5 @@ def seed_only(evidence):
 - `agent/report.py` — `build_investigation_result()`
 - `tests/test_provenance.py` — `test_evidence_ref_sources_mark_seed_only_refs_without_changing_status`,
   `test_empty_result_evidence_is_supported_by_its_verified_call`
+- `agent/incident_input.py` — `to_investigation_seed()`가 `incident_key`·`updated_at`을 넘김
+- `tests/test_pipeline.py` — `test_result_carries_incident_key_and_snapshot`

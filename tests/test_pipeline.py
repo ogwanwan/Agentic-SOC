@@ -52,5 +52,21 @@ def test_pipeline_investigates_incidents_in_given_order() -> None:
         assert refs <= set(result["raw_refs"])
 
 
+def test_result_carries_incident_key_and_snapshot() -> None:
+    # 2026-09-28: 1차 탐지 DB 큐는 사건이 커져도 안 바뀌는 incident_key로 사건을 잇는다(incident_id는 바뀜).
+    # ATT&CK 매핑·최종 보고서가 initial_seed 안을 뒤지지 않게 결과 최상위에 둔다.
+    first, second = load_incidents(FIXTURE)[:2]
+    keyed = {**first, "incident_key": "K-3f9a", "updated_at": "2026-09-27T10:00:00Z"}
+    results = run_investigation_pipeline([keyed, second], llm_client=_ImmediateTerminateLLM(),
+                                         tool_registry=ToolRegistry(), host="web-01")
+    assert results[0]["incident_key"] == "K-3f9a"
+    assert results[0]["incident_snapshot"] == {"incident_id": first["incident_id"],
+                                               "member_count": first["member_count"],
+                                               "updated_at": "2026-09-27T10:00:00Z"}
+    # 지금 1차 탐지 출력(e9b733c)에는 incident_key가 없다 → null, 연결은 incident_id로
+    assert results[1]["incident_key"] is None
+    assert results[1]["incident_snapshot"]["updated_at"] is None
+
+
 def test_pipeline_with_no_incidents_returns_empty() -> None:
     assert run_investigation_pipeline([], llm_client=_ImmediateTerminateLLM(), tool_registry=ToolRegistry()) == []

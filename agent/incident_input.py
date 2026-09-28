@@ -120,6 +120,9 @@ def to_investigation_seed(incident: Dict[str, Any], host: Optional[str] = None) 
     }
     if incident.get("llm_reason"):
         seed["llm_reason"] = incident["llm_reason"]
-    if incident.get("incident_key"):
-        seed["incident_key"] = incident["incident_key"]
+    # 사건 식별: incident_key는 사건이 커져도 안 바뀌는 안정 키, updated_at은 조사한 판의 갱신 시각
+    # (1차 탐지 DB 연결 후 채워짐). 결과 JSON 최상위 incident_key·incident_snapshot으로 옮겨진다.
+    for key in ("incident_key", "updated_at"):
+        if incident.get(key):
+            seed[key] = incident[key]
     return seed

@@ -109,7 +109,7 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 
 ### 사건 입력 — `agent/incident_input.py`
 사건을 찾고 고르는 일(로그 수집·Sigma 탐지·사건 묶기·triage)은 1차 탐지(팀 저장소 `develop`의 `run_pipeline.py`)가 한다. 0927에 조사 에이전트 자체의 로그 수집(`raw_log_ingestion.py`)과 LLM seed 생성(`seed_generation.py`, `seed_prompts.py`)을 삭제했다.
-- `to_investigation_seed()`는 1차 탐지 필드 중 바뀔 가능성이 적은 것(`incident_id`, `entity`, `window`, `layers`, `seeds[]`의 `reason`·`evidence_refs`·`rule_severity`·`detail`)만 쓴다. `triage_score`·`priority`·`route`·`llm_investigate`는 사건을 고르는 값이라 보지 않고, `llm_reason`은 있으면 넘긴다. `entity`·`seeds`가 없는 dict(직접 작성한 사건, `test_consistency --seed-json`)는 그대로 쓴다.
+- `to_investigation_seed()`는 1차 탐지 필드 중 바뀔 가능성이 적은 것(`incident_id`, `entity`, `window`, `layers`, `seeds[]`의 `reason`·`evidence_refs`·`rule_severity`·`detail`)만 쓴다. `triage_score`·`priority`·`route`·`llm_investigate`는 사건을 고르는 값이라 보지 않고, `llm_reason`은 있으면 넘긴다. `incident_key`(사건이 커져도 안 바뀌는 안정 키)·`updated_at`도 있으면 넘기고, 결과 JSON 최상위 `incident_key`(없으면 null)와 `incident_snapshot {incident_id, member_count, updated_at}`으로 옮겨진다 — ATT&CK 매핑·최종 보고서는 `incident_key`(null이면 `incident_id`)로 사건을 잇는다. `entity`·`seeds`가 없는 dict(직접 작성한 사건, `test_consistency --seed-json`)는 그대로 쓴다.
 - `members`(최대 500개)·`join_path` 원본은 프롬프트에 사건 dict가 통째로 들어가므로 싣지 않고 `detection` 요약만 싣는다.
 - 1차 탐지 Incident에는 host가 없어 `.env`의 `HOST`로 채운다. 조사 루프 안에서는 이 dict를 계속 `seed`라고 부른다(1차 탐지의 `seeds[]` = 탐지 룰 결과와 다른 뜻).
 - 테스트 고정 데이터 `tests/fixtures/primary_detection_incidents.jsonl`은 1차 탐지 `develop`(`e9b733c`)을 그쪽 샘플 로그(= `primary_detection/normalizer/samples/`)로 실행한 실제 출력이다. 1차 탐지 출력 형식이 바뀌면 다시 만들 것.

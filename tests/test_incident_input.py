@@ -49,10 +49,12 @@ def test_ip_incident_sets_src_ip(incidents):
 
 def test_optional_fields_are_passed_when_present(incidents):
     incident = {**incidents["INC-960a3db8"], "llm_reason": "반복 config 접근 — 스캐너 정찰",
-                "incident_key": "src_ip:64.137.37.166|web", "host": "web-02"}
+                "incident_key": "src_ip:64.137.37.166|web", "updated_at": "2026-09-27T10:00:00Z",
+                "host": "web-02"}
     seed = to_investigation_seed(incident, host="web-01")
     assert seed["llm_reason"] == "반복 config 접근 — 스캐너 정찰"
     assert seed["incident_key"] == "src_ip:64.137.37.166|web"
+    assert seed["updated_at"] == "2026-09-27T10:00:00Z"
     assert seed["host"] == "web-02"  # 사건에 host가 있으면 그 값을 쓴다
 
 
