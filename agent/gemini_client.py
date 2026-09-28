@@ -1,4 +1,4 @@
-"""Gemini API LLM 클라이언트 (기본값).
+"""Gemini API LLM 클라이언트 (LLM_PROVIDER=gemini일 때, 기본은 Claude).
 
 역할
   조사 루프와 seed 생성에서 LLM을 부르는 창구. 프롬프트를 받아 Gemini를 호출하고,
@@ -7,7 +7,7 @@
 
 누가 부르나
   [20] agent/loop.py _safe_reason()         → reason()          조사 루프 매 턴
-  main.py build_llm_client()                 → GeminiClient()    생성 (LLM_PROVIDER=gemini, 기본)
+  agent/llm_provider.py build_llm_client()   → GeminiClient()    생성 (LLM_PROVIDER=gemini)
 
 무엇을 부르나
   [21] agent/prompts/__init__.py  build_system_prompt(), build_user_prompt()   조사 프롬프트 조립
@@ -15,6 +15,7 @@
 
 claude_client.py의 ClaudeClient와 인터페이스(.reason / .complete_json)가 같아서
 LLM_PROVIDER 환경변수로 서로 바꿔 쓸 수 있다. 필요 환경변수: GEMINI_API_KEY.
+모델은 GEMINI_MODEL(없으면 gemini-3.5-flash-lite).
 """
 
 from __future__ import annotations
@@ -28,6 +29,9 @@ from .llm_errors import LLMUnavailableError
 from .prompts import build_system_prompt, build_user_prompt
 
 
+DEFAULT_MODEL = "gemini-3.5-flash-lite"  # 무료 티어 실습에서 지정한 모델
+
+
 class GeminiDecisionError(Exception):
     """Gemini 응답을 기대한 JSON 스키마로 파싱하지 못했을 때 발생."""
 
@@ -36,7 +40,9 @@ class GeminiClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-3.5-flash-lite",  # 무료 티어 실습에서 지정한 모델
+        # 없으면 GEMINI_MODEL 환경변수, 그것도 없으면 DEFAULT_MODEL. 특정 모델이 과부하(503)일 때
+        # .env만 바꿔 다른 모델로 돌릴 수 있게 한다(2026-09-28 EC2).
+        model: Optional[str] = None,
         # 2000이던 값을 8192로 올렸다. EC2에서 LLM이 raw_ref 109개를 evidence에 옮겨 적다
         # 2000 토큰에서 응답이 잘려 JSON 파싱이 실패했고, 그 예외로 main.py 전체가 멈췄다.
         max_output_tokens: int = 8192,
@@ -54,7 +60,7 @@ class GeminiClient:
             )
 
         self._client = genai.Client(api_key=resolved_key)
-        self.model = model
+        self.model = model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
 

@@ -1,4 +1,4 @@
-"""Claude(Anthropic API) LLM 클라이언트 — LLM_PROVIDER=anthropic일 때 GeminiClient 대신 쓴다.
+"""Claude(Anthropic API) LLM 클라이언트 — 기본 LLM(LLM_PROVIDER가 비었거나 anthropic일 때).
 
 역할
   프롬프트를 받아 Claude를 호출하고 응답을 JSON(dict)으로 파싱해 돌려준다. GeminiClient와 같은
@@ -12,7 +12,7 @@
   usage_totals에 누적한다(조사 1건 비용 측정용).
 
 누가 부르나
-  main.py build_llm_client()                 → ClaudeClient()    생성 (LLM_PROVIDER=anthropic)
+  agent/llm_provider.py build_llm_client()   → ClaudeClient()    생성 (기본, LLM_PROVIDER=anthropic)
   [20] agent/loop.py _safe_reason()          → reason()          조사 루프 매 턴
 
 무엇을 부르나

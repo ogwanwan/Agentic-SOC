@@ -86,10 +86,11 @@ python -m tests.test_consistency --runs 3 --seed-json seed.json   # 같은 seed 
 
 ## LLM
 
-기본은 Gemini(`gemini-3.5-flash-lite`, 무료 티어)다. 무료 티어의 429(요청 한도)·503(일시 과부하)은 코드가
-기다렸다 재시도하며, 하루 한도를 넘으면 다음 날(한국 시간 오후 4시경) 초기화된다.
-`LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`로 Claude로 바꿀 수 있다(모델은 `CLAUDE_MODEL`, 기본 `claude-sonnet-5`).
-출력 한도는 16000(claude-sonnet-5는 thinking 토큰 포함)이고, 추론 강도는 선택 `CLAUDE_EFFORT`로 정한다.
+기본은 Claude다(`ANTHROPIC_API_KEY`, 모델은 `CLAUDE_MODEL`, 기본 `claude-sonnet-5`).
+`LLM_PROVIDER=gemini` + `GEMINI_API_KEY`로 Gemini(무료 티어)로 바꿀 수 있다(모델은 `GEMINI_MODEL`, 기본
+`gemini-3.5-flash-lite`). Gemini 무료 티어의 429(요청 한도)·503(일시 과부하)은 코드가 기다렸다 재시도하며,
+하루 한도를 넘으면 다음 날(한국 시간 오후 4시경) 초기화된다. 특정 모델이 과부하면 `GEMINI_MODEL`을 바꾼다.
+Claude 출력 한도는 16000(claude-sonnet-5는 thinking 토큰 포함)이고, 추론 강도는 선택 `CLAUDE_EFFORT`로 정한다.
 `temperature`는 보내지 않는다(anthropic SDK 1.x에서 삭제, sonnet-5도 받지 않음). 429·5xx·529·연결 오류는 SDK가 재시도한다.
 두 LLM 모두 재시도 뒤에도 일시 오류면 그 사건만 조사 미완료(`investigation_status: INCOMPLETE`)로 저장하고
 다음 사건을 계속 조사한다. 시스템 프롬프트는

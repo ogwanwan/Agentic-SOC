@@ -11,14 +11,14 @@
 
 무엇을 부르나
   [2] agent/tools/registry.py   build_default_registry()   조사 도구 목록 만들기
-  [3] agent/gemini_client.py    GeminiClient()             LLM 클라이언트 (LLM_PROVIDER=anthropic이면 claude_client.py)
+  [3] agent/llm_provider.py     build_llm_client()         LLM 클라이언트 (기본 Claude, LLM_PROVIDER=gemini면 Gemini)
   [4] agent/incident_input.py   load_incidents()           사건 파일 읽기 (JSON 객체·배열 또는 JSONL)
   [5] agent/pipeline.py         run_investigation_pipeline() 사건별 조사
   [45] main.py                  save_investigation_result() 결과 JSON 저장
 
 실행 준비
   1. `pip install -r requirements.txt`
-  2. .env에 GEMINI_API_KEY(또는 LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY)
+  2. .env에 ANTHROPIC_API_KEY(기본 Claude) 또는 LLM_PROVIDER=gemini + GEMINI_API_KEY
   3. .env에 계층별 로그 파일 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)와 HOST(수집 서버 이름)
      — EC2라면 /var/log/... 경로 (.env.example 참고). 조사 도구가 원본 로그를 다시 읽을 때 쓴다.
   4. 사건 파일: 1차 탐지 출력(한 줄에 Incident 한 건인 JSONL) 또는 직접 작성한 사건 JSON
@@ -37,23 +37,14 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-from agent import ClaudeClient, GeminiClient, build_default_registry, load_incidents, run_investigation_pipeline
+from agent import build_default_registry, load_incidents, run_investigation_pipeline
+from agent.llm_provider import build_llm_client
 
 load_dotenv()  # .env 파일에서 GEMINI_API_KEY / ANTHROPIC_API_KEY / HOST 등을 읽어온다
 
 RESULTS_DIR = "results"
 # 단계별 결과 폴더: 이후 단계(ATT&CK 매핑 등)가 붙으면 results/ 아래에 단계별 폴더를 나란히 둔다
 INVESTIGATION_DIR = os.path.join(RESULTS_DIR, "investigation_agent")
-
-
-def build_llm_client():
-    """LLM_PROVIDER 환경변수로 Gemini/Claude를 선택한다. 기본값은 gemini."""
-    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
-    if provider == "anthropic":
-        return ClaudeClient()  # ANTHROPIC_API_KEY 환경변수 필요
-    if provider == "gemini":
-        return GeminiClient()  # GEMINI_API_KEY 환경변수 필요 (무료 티어 가능)
-    raise ValueError(f"알 수 없는 LLM_PROVIDER입니다: {provider} (gemini 또는 anthropic만 지원)")
 
 
 def save_investigation_result(result: dict, output_dir: str = INVESTIGATION_DIR) -> str:
@@ -95,7 +86,7 @@ def main(argv=None) -> None:
     #     agent/tools/real/ 폴더에서 "파일명 == 함수명"인 도구를 자동으로 찾아 등록한다.
     #     resolve_ip_geo는 구현은 있지만 지금 우선순위가 아니라서 뺀다.
     tool_registry = build_default_registry(exclude=["resolve_ip_geo"])
-    # [3] → LLM 클라이언트 생성 (위 build_llm_client: 기본 Gemini, LLM_PROVIDER=anthropic이면 Claude)
+    # [3] → agent/llm_provider.py build_llm_client(): 기본 Claude, LLM_PROVIDER=gemini면 Gemini
     llm_client = build_llm_client()
 
     # [45] 결과 저장 — 사건 하나가 끝날 때마다 바로 저장한다. 뒤 사건에서 예외(API 키 오류 등)로

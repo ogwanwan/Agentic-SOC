@@ -36,6 +36,7 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 | `test_incident_input.py` | 1차 탐지 Incident(실제 출력 `fixtures/primary_detection_incidents.jsonl`) → 조사 루프 입력 변환, 사건 파일 형식(JSONL·배열·객체) |
 | `test_pipeline.py` | 사건 파일의 사건들이 받은 순서대로 조사되고 탐지 근거 참조가 결과까지 이어지는지, 결과 최상위 `incident_key`·`incident_snapshot`, 한 사건의 LLM API 일시 오류는 그 사건만 조사 미완료로 두고 나머지를 조사·즉시 전달하는지, 설정 오류는 멈추되 앞 사건은 이미 전달됐는지 |
 | `test_claude_client.py` | Claude 클라이언트 호출 인자(sampling 인자 없음, 출력 한도, effort), 보내는 인자가 설치된 anthropic SDK 시그니처에 있는지, 일시 오류 → `LLMUnavailableError`, 설정 오류는 그대로 |
+| `test_llm_provider.py` | `LLM_PROVIDER` 기본값(Claude)·Gemini 선택·`GEMINI_MODEL`·알 수 없는 값 오류 |
 | `test_gemini_client.py` | Gemini 재시도: 일시 오류(503·429·연결)는 재시도 후 `LLMUnavailableError`, 설정 오류(400·401·403)는 재시도 없이 그대로 |
 | `test_loop.py` | 종료 조건·중복 호출 방지·최대 호출 수·도구 오류 처리 |
 
