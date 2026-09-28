@@ -9,13 +9,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Agentic-SOC: LLM 기반 SOC(보안관제) 파이프라인을 만드는 팀 프로젝트. **완전히 다른 에이전트가 서로 다른 브랜치에 있고, 조사 에이전트만도 여러 브랜치에서 병렬로 발전 중이다** — 작업 전 반드시 `git branch --show-current`로 확인할 것.
 
 - **1차 탐지 에이전트** (`main` / `feature/agent`, `feature/primary-detection`): Apache+auth 로그를 IP별로 집계해 `malicious_bot`/`benign_bot`/`human`/`undetermined`로 분류하고, 조사가 필요한 IP만 골라 조사 에이전트로 넘긴다. 공통 정규화(`primary_detection/normalizer`)의 원본이 여기 있다.
+- **조사 에이전트 + ATT&CK 매핑 통합** — 개인 저장소 `integrate-attack-mapping-rag` (**이 문서가 다루는 브랜치**, 2026-09-28~). 조사 에이전트 최신(`integrate-investigation` = 팀 `feature/Agentic-SOC-Investigation-Agent`, `051dda7`) 위에 `d802dbb`에서 지운 ATT&CK 매핑(`attack_mapping/`, `reporting/`, 매핑 테스트·문서)을 `a1e60ce`에서 되살리고, `main.py`에 매핑 연결을 다시 붙이고, RAG 전환 담당 A 작업을 올렸다. 조사 코드 수정은 조사 브랜치에서 하고 이 브랜치로 merge해 온다(`d802dbb`의 삭제는 이미 이 브랜치 이력에 있어서 그 뒤 조사 커밋을 merge해도 매핑 파일이 지워지지 않는다). 팀 저장소 반영 여부·브랜치는 아직 정하지 않았다. 옛 팀 브랜치 `feature/investigation-attack-mapping`(`a1e60ce`)은 그대로 둔다.
 - **조사 에이전트(Investigation Agent)** — 여러 브랜치에 존재:
-  - `feature/Agentic-SOC-Investigation-Agent` (**이 문서가 다루는 브랜치**). 개인 저장소의 `integrate-investigation`과 같은 내용으로 유지한다.
+  - `feature/Agentic-SOC-Investigation-Agent` (조사 에이전트 단독 기준). 개인 저장소의 `integrate-investigation`과 같은 내용으로 유지한다. `d802dbb`에서 ATT&CK 매핑을 지웠으므로 이 브랜치를 그대로 받아(fast-forward) 매핑 브랜치에 덮지 않는다.
   - `feature/agent-final` — 같은 `cb5005d`에서 갈라진 자매 브랜치. 0924 이후의 provenance·재현성 수정(아래 "상태와 신뢰도", "종료 관문")이 **없다**. raw_ref 미인용 시 신뢰도 기여를 0으로 만드는 이전 규칙을 쓴다. 이 브랜치의 변경을 그쪽으로 자동 전파하지 않는다.
 
 브랜치마다 폴더 구조와 세부 로직이 다르므로, 한쪽에서 읽은 코드/동작 지식을 다른 쪽에 그대로 적용하면 안 된다. 0918 이후 이 브랜치의 변경 이력과 검증 결과는 [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)에 있다.
 
-Git 원격: `origin` = 개인 저장소, `upstream` = 팀 저장소(`ogwanwan/Agentic-SOC`). 팀 저장소 push 주소는 평소 `DISABLED`로 막아 두고, 사용자가 팀 저장소 push를 요청할 때만 잠깐 복구했다가 다시 막는다.
+Git 원격 이름은 작업 폴더마다 다르다(조사 폴더: `origin` = 개인 저장소, `upstream` = 팀 저장소 / 매핑 통합 폴더: `origin` = 팀 저장소(`ogwanwan/Agentic-SOC`), `personal` = 개인 저장소). push 전에 `git remote -v`로 확인할 것. 어느 폴더든 팀 저장소 push 주소는 평소 `DISABLED`로 막아 두고, 사용자가 팀 저장소 push를 요청할 때만 잠깐 복구했다가 다시 막는다.
 
 ## Commands
 
@@ -29,6 +30,9 @@ python -m scripts.demo_abcd                          # 실제 도구를 연결�
 python -m scripts.demo_event_window                  # C/D 사건 조회 데모 → results/investigation_agent/cd_demo.json
 python -m scripts.verify_all_tools                   # 조사 도구 로컬 샘플 일괄 점검
 python -m tests.test_normalizer_parity                # 1차 탐지팀 정규화 결과와 동일성 검증
+python -m attack_mapping.cli results/investigation_agent/<파일>.json   # 저장된 조사 결과만 다시 ATT&CK 매핑 (--all-in-dir results/investigation_agent 로 일괄)
+python -m scripts.verify_attack_mapping_abc           # 어택 매핑 A/B/C(Rule) 통합 검증 → results/attack_mapping_abc_<시각>/
+python -m scripts.fetch_attack_catalog                # 공식 ATT&CK STIX(git 미추적, 54MB)를 manifest 버전·sha256대로 받기 (--verify: 네트워크 없이 확인)
 
 # 실제 LLM 실행
 cp .env.example .env                                  # 키/경로 채워넣기 (Windows: Copy-Item .env.example .env)
@@ -41,7 +45,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 주의:
 - `pytest.ini`가 `tests/test_consistency.py`를 자동 실행에서 제외한다(실제 API 호출).
 - `No module named agent`/`scripts` 에러가 나면 저장소 루트에서 `python -m ...` 형태로 실행했는지 확인한다.
-- `main.py`는 보고서를 콘솔에 출력하지 않는다. investigation_result JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장한 뒤 파일명을 표시한다.
+- `main.py`는 보고서를 콘솔에 출력하지 않는다. investigation_result JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장하고, 저장 직후 그 파일로 ATT&CK 매핑을 돌려 `results/attack_mapping/<incident_id>_attack_mapping.json`·`_final_report.json`을 만든다(같은 사건 재조사는 `__2`, `__3` …). 콘솔에는 저장 경로와 사건별 매핑 상태 한 줄만 표시한다.
 - EC2 운영 환경은 Python 3.10이다. 시각 파싱처럼 버전에 따라 동작이 다른 부분은 3.10에서 확인한다.
 
 ## Architecture
@@ -55,8 +59,10 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
   → agent/loop.py                     ReAct 루프: 매 사이클 LLM 호출 1회로 facts/hypotheses/evidence
                                        갱신 + 다음 행동(call_tool | terminate) 동시 결정 (InvestigationAgent.run)
   → agent/report.py                   최종 investigation_result JSON (main.py가 results/investigation_agent/에 저장)
+  → main.run_attack_mapping()          [46] 저장된 JSON 파일 → attack_mapping/cli.py process_file()
+                                       (엔진 + rules/ ALL_RULES + killchain → reporting/final_report.py)
 ```
-코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다(`[7]`~`[15]`는 삭제된 수집·seed 생성 단계라 비어 있음). `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
+코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다(`[7]`~`[15]`는 삭제된 수집·seed 생성 단계라 비어 있음). `[46]` 매핑 연결과 매핑 내부 흐름은 [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md) 맨 아래 "0928 기록"에 있다(본문은 0927 기준). `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
 ### 정규화(A) — `primary_detection/normalizer/`는 우리 코드가 아니다
 1차 탐지팀이 만든 공통 정규화 코드가 이 저장소에 vendor(복사)되어 있다. **내용 수정 금지** — 갱신은 1차 탐지팀 원본을 그대로 다시 복사하는 방식으로만 한다. 조사 에이전트는 이걸 직접 import하지 않고 `agent/tools/normalizer_adapter.py`를 거친다. `primary_detection/normalizer/vendor_sync_check.py`로 원본과의 동일성을 확인한다.
@@ -131,5 +137,15 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 ### 로컬 개발용 우회
 로그는 `.env`의 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH` — 1차 탐지와 같은 이름, 0927에 `*_LOG_LOCAL_PATH`에서 변경, `log_source.LOCAL_PATH_ENV`) 파일에서만 읽는다(S3 읽기 코드는 삭제됨, 경로가 없으면 설정 오류). 로컬 개발은 이 경로를 `sample_logs/*.log`로 둔다. 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다. `sample_logs/`는 EC2 실제 트래픽이 들어 있어 **git으로 추적하지 않는다**(`.gitignore`) — 실험 전에 `sample_logs_orig/`로 백업해 두고 실험 후 그 백업으로 원복한다(`scenarios/README.md`). 새로 clone한 저장소에는 샘플이 없으니 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받는다.
 
+### ATT&CK 매핑 — `attack_mapping/`, `reporting/` (어택 매핑 팀 코드)
+작업 전에 [docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)(RAG 전환과 담당 A·B·C 협업 규칙)를 먼저 읽는다.
+- 지금 `main.py`가 쓰는 것은 LLM을 부르지 않는 **Rule 매핑**이다: `final_verdict.attack_type`과 `evidence_chain`의 `description`/`event_type`을 `attack_mapping/rules/`의 키워드와 비교한다. 따라서 LLM이 쓴 문장 표현이 매핑 결과를 좌우한다.
+- 게이트: FALSE_POSITIVE → `not_applicable`, INCONCLUSIVE 또는 provenance `unavailable` → `deferred`, provenance `incomplete` → `evidence_without_raw_refs`·`ambiguous_raw_refs`·`issues`에 걸린 증거를 빼고 verdict 매칭도 끈 `partial`.
+- 연결은 `main.py`의 `run_attack_mapping()`만 한다. 메모리 dict가 아니라 **저장된 파일 경로**를 넘겨 CLI 재실행과 결과를 같게 하고, 매핑 예외(OSError/ValueError/RecursionError)는 출력만 하고 다음 사건으로 넘어간다. `agent/`는 `attack_mapping/`을 import하지 않는다.
+- `reporting/`은 최상위에 둔다: 이후 대응(Response) 단계 결과까지 합칠 최종 보고서 자리라서 `attack_mapping/` 아래에 두면 의존 방향이 꼬인다.
+- `report.py`의 결과 JSON 필드(evidence_chain의 `evidence_id`·`sequence`·`time`·`raw_refs`·`seed_only_raw_refs`, `provenance`, `raw_ref_locations`, `final_verdict.attack_type`, 최상위 `incident_key`)를 바꾸면 매핑 입력 검증에 걸린다. `tests/test_main_attack_mapping.py`, `tests/test_attack_mapping_engine.py::test_actual_investigation_report_contract`, `tests/test_attack_validate.py::test_real_investigation_result_seed_only_contract`로 확인할 것. 사건 연결 키는 최상위 `incident_key`, `null`이면 `incident_id`.
+- RAG 전환(진행 중): 담당 A의 `catalog.py`(공식 STIX 19.2, `data/attack/manifest.json`으로 버전·sha256 고정), `validate.py`(사건 관문·증거 target/context/excluded 분류·LLM 선택 검증), `schema.py`의 RAG 자료형이 있다. B(`retrieve.py`)·C(`mapper.py`)는 아직 없다. ATT&CK v19는 `Defense Evasion`이 `Stealth`로 바뀌고 `Defense Impairment`가 생겨 규칙용 `TACTIC_ORDER`와 공식 순서(`catalog.tactic_order`)가 다르다. 계약과 팀 합의 사항은 [docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md](docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md).
+
 ### 건드리지 않는 영역
 - `primary_detection/normalizer/` — 1차 탐지팀 산출물 (위 참조)
+- `attack_mapping/`, `reporting/` — 어택 매핑 팀 산출물. 담당 A·B·C 경계는 [RAG A·B·C 협업 문서](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)를 따른다

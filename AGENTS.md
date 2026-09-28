@@ -4,9 +4,14 @@
 대화 기억에만 의존하지 말고 실제 코드, Git 변경 사항, 해당 작업의 요청을 기준으로 작업한다.
 이 문서는 저장소 공통 규칙이며, 사용자가 명시한 작업 범위와 Git 반영 방식을 우선한다.
 
-이 파일은 `feature/Agentic-SOC-Investigation-Agent`의 현재 코드를 기준으로 한다.
-`feature/agent-final`과 일부 동작이 다르다. 다른 브랜치의 설명이나 이전 대화만으로
-현재 동작을 단정하지 말고, 체크아웃한 브랜치와 실제 구현을 확인한다.
+이 파일은 개인 저장소 `integrate-attack-mapping-rag`의 현재 코드를 기준으로 한다.
+조사 에이전트(`feature/Agentic-SOC-Investigation-Agent` = 개인 `integrate-investigation`) 위에
+ATT&CK 매핑(`attack_mapping/`, `reporting/`)을 합친 통합 브랜치다. `feature/agent-final`과 일부
+동작이 다르다. 다른 브랜치의 설명이나 이전 대화만으로 현재 동작을 단정하지 말고, 체크아웃한
+브랜치와 실제 구현을 확인한다.
+
+ATT&CK 매핑 작업(`attack_mapping/`, `reporting/`, `data/attack/`)은 이 문서와 함께
+[RAG A·B·C 협업 규칙](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)을 먼저 읽고 따른다.
 
 ## 작업 시작과 동시 편집
 
@@ -32,6 +37,10 @@
 - D 원본 추적: `agent/provenance.py`, `models.py`, `loop.py`, `report.py`.
   입력 → seed → 도구 결과 → 조사 증거 → 최종 보고서까지 원본 참조를 전달·검증한다.
 - 전체 흐름은 `agent/pipeline.py`, 운영 진입점은 `main.py`다.
+- ATT&CK 매핑: `attack_mapping/`(엔진·규칙·Kill Chain·CLI, RAG 전환 중인 catalog·validate·schema)과
+  `reporting/`(최종 보고서)은 어택 매핑 팀 코드다. 조사 쪽에서는 `main.py`의 `run_attack_mapping()`으로
+  연결만 한다. `agent/`는 `attack_mapping/`을 import하지 않는다. 위 A·B·C·D(조사 영역)와
+  매핑 담당 A·B·C는 서로 다른 구분이다.
 
 ## 데이터와 호환성
 
@@ -77,7 +86,10 @@ Windows에서 가상환경을 활성화하지 않았다면 `python` 대신
 
 ## Git 반영과 인계
 
-- 이 파일의 대상 브랜치는 `feature/Agentic-SOC-Investigation-Agent`다. 자매 브랜치인
+- 이 파일의 대상 브랜치는 개인 저장소 `integrate-attack-mapping-rag`다. 조사 코드 변경은
+  조사 브랜치에서 하고 이 브랜치로 merge해 온다. 조사 브랜치에는 매핑 삭제(`d802dbb`)가 있으므로
+  이 브랜치를 조사 브랜치 쪽으로 merge하거나 조사 브랜치로 fast-forward하지 않는다. 팀 저장소 push는
+  사용자가 요청할 때만 한다. 자매 브랜치인
   `feature/agent-final`로 변경을 자동 전파하지 않는다. 사용자가 지정한 저장소·브랜치·커밋
   메시지와 직접 push/PR 방식을 따른다. `pull` 또는 PR 금지 요청을 임의로 바꾸지 않는다.
 - 원격에 반영하기 전에 최신 대상 커밋을 확인한다. 다른 사람의 커밋이 추가되었다면 보존하여
@@ -95,6 +107,9 @@ Windows에서 가상환경을 활성화하지 않았다면 `python` 대신
 - 설치·데모·A/B/C/D 전체 흐름: [통합 테스트 안내](docs/ABCD_TEST_GUIDE.md)
 - C/D 입력·출력과 알려진 제한: [C/D 구현 안내](docs/C_D_IMPLEMENTATION.md)
 - 테스트별 검증 범위: [테스트 안내](tests/README.md)
+- ATT&CK 매핑 RAG 전환과 담당 A·B·C 협업: [RAG A·B·C 협업 규칙](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md),
+  [담당 A 인계](docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md)
+- 조사 결과 증거 출처 필드(`seed_only_raw_refs` 등)와 사건 연결 키: [증거 출처 필드 안내](docs/EVIDENCE_REF_SOURCES.md)
 - 전체 프로젝트 사용법: [README](README.md)
 
 진행 중인 작업 상태는 해당 작업의 Issue나 인계 내용에서 확인한다. 이 파일에는 오래 유지할

@@ -130,3 +130,9 @@ MITRE의 T1041은 기존 명령·제어(C2) 채널을 통해 데이터를 유출
 [주 재현 스크립트](../results/attack_mapping_review_20260927/recheck.py)는 관찰값을 저장하는 도구입니다. 종료 코드 0은 재현 절차가 완료됐다는 뜻이며 제품에 문제가 없다는 뜻은 아닙니다. 다시 실행할 때는 `--out-dir`에 새 경로를 지정해야 합니다. [혼합 문맥 재현 스크립트](../results/attack_mapping_review_20260927/recheck_mixed_context.py)는 기존 자료 보호를 위해 `mixed_context` 폴더가 이미 있으면 실행을 중단합니다. [검증 대상 파일 해시](../results/attack_mapping_review_20260927/edge_cases/metadata.json)도 남겼습니다.
 
 매핑 정확도 관련 F1~F3와 배치 누락·중단 관련 F4~F5를 우선 개선할 것을 권합니다. 이번 점검 결과는 합성 사례에서 확인한 동작이며, 실제 운영 데이터에서의 발생 빈도나 탐지율·오탐률은 측정하지 않았습니다. 코드 수정, 커밋, push는 이번 추가 점검에 포함하지 않았습니다.
+
+---
+
+**[0928 희진 기록]** 이 문서는 2026-09-26~27 Rule 매핑(`feature/investigation-attack-mapping`) 기준의 기록이라 본문을 그대로 둔다.
+지금 흐름(`python main.py <사건 파일>` → 조사 결과 저장 → Rule 매핑, 텍스트 보고서 없음)과 RAG 전환 상황은
+[AGENT_ATTACK_MAPPING_FLOW.md](AGENT_ATTACK_MAPPING_FLOW.md) 맨 아래 "0928 기록"과 [RAG A·B·C 협업 규칙](ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)을 참고.

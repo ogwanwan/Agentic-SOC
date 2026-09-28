@@ -10,6 +10,15 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 1차 탐�
 - A·B·C·D 연결과 테스트 안내: [docs/ABCD_TEST_GUIDE.md](docs/ABCD_TEST_GUIDE.md), [docs/C_D_IMPLEMENTATION.md](docs/C_D_IMPLEMENTATION.md)
 - 작업 규칙: [AGENTS.md](AGENTS.md)
 
+**ATT&CK 매핑 (이 브랜치 `integrate-attack-mapping-rag`)** — `python main.py <사건 파일>`이 조사 결과 JSON을 저장한 직후
+ATT&CK 매핑(지금은 Rule 매핑)을 돌려 `results/attack_mapping/`에 매핑 결과와 최종 보고서 JSON을 만든다.
+
+- 전체 흐름(조사 → ATT&CK 매핑 → 최종 보고서): [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md) — 본문은 0927 기록, 현재 흐름은 맨 아래 "0928 기록"
+- RAG 전환과 담당 A·B·C 협업 규칙: [docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)
+- 담당 A(공식 Catalog·Schema·Validation) 인계, ATT&CK 파일 받기(`python -m scripts.fetch_attack_catalog`): [docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md](docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md)
+- 조사 결과 증거 출처 필드·사건 연결 키: [docs/EVIDENCE_REF_SOURCES.md](docs/EVIDENCE_REF_SOURCES.md)
+- 0926~0927 Rule 매핑 기록: [통합 결과·규칙 보완 요청](docs/ATTACK_MAPPING_INTEGRATION_FEEDBACK_20260927.md), [버그 수정](docs/ATTACK_MAPPING_BUGFIX_REPORT_20260926.md), [추가 점검](docs/ATTACK_MAPPING_REVIEW_20260927.md), [추가 수정](docs/ATTACK_MAPPING_FIX_REPORT_20260927.md)
+
 ## 전체 흐름
 
 ```

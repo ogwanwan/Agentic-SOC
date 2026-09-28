@@ -12,7 +12,7 @@
 - B·C가 같이 쓰는 **공통 자료형(schema.py)**, **카탈로그 조회(catalog.py)**, **사건 관문·증거 분류·LLM 선택 검증(validate.py)**을 만들었습니다.
 - STIX 원본(54MB)은 **git에 올리지 않습니다.** 각자 스크립트로 한 번 받으면 되고(2장), `manifest.json`의 sha256으로 모두 같은 파일인지 확인합니다.
 - **꼭 알아야 할 변경이 하나 있습니다.** ATT&CK v19에서 `Defense Evasion`이 `Stealth`로 이름이 바뀌었고 `Defense Impairment`(TA0112)가 새로 생겼습니다. 현재 Kill Chain 정렬 기준(`TACTIC_ORDER`)은 구버전이라 C의 확인이 필요합니다(5장 ①).
-- 기존 Rule 경로(`engine.py`, `matching.py`, `rules/`, `killchain.py`, `cli.py`)는 **수정하지 않았습니다.** 전체 오프라인 테스트 388개 통과, 1개 skip(Python 3.10).
+- 기존 Rule 경로(`engine.py`, `matching.py`, `rules/`, `killchain.py`, `cli.py`)는 **수정하지 않았습니다.** 전체 오프라인 테스트 394개 통과(조사 138 + 매핑 256), 1개 skip(Python 3.10).
 
 ## 2. 처음 한 번: ATT&CK 파일 받기
 
@@ -193,7 +193,7 @@ excluded_evidence_ids = [e["evidence_id"] for e in exclusions(rows)]   # exclusi
 실행한 것 (Windows, Python 3.10.x — EC2와 같은 3.10):
 
 ```bash
-python -m pytest -q                                             # 388 passed, 1 skipped
+python -m pytest -q                                             # 394 passed(조사 138 + 매핑 256), 1 skipped
 python -m pytest -q tests/test_attack_catalog.py tests/test_attack_validate.py
 INV_RESULTS_DIR=<조사 결과 폴더> python -m pytest -q tests/test_attack_validate.py   # 실제 결과 스모크 포함
 python -m scripts.fetch_attack_catalog && python -m scripts.fetch_attack_catalog --verify
