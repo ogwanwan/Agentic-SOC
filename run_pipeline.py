@@ -8,7 +8,8 @@ Incident 까지 잇는 엔드투엔드 러너다(새 로직 없이 기존 함수
   python run_pipeline.py --audit tools/sample_audit.log   # 특정 계층 경로만 덮어쓰기
   python run_pipeline.py --out-incidents out/incidents.jsonl
 
-운영(주기 실행) 모드 — 최근 N분만 로테이트 파일까지 읽고, 새로 생겼거나 바뀐 사건만 실행별 파일로 저장:
+운영(주기 실행) 모드 — 최근 N분만 로테이트 파일까지 읽고, 새로 생겼거나 바뀐 사건을 DB(<state-dir>/soc.db)에
+저장한다. --emit-dir 를 주면 실행별 파일로도 저장한다(전환 기간 병행):
   python run_pipeline.py --since-minutes 60 --state-dir /var/lib/agentic-soc --emit-dir /var/lib/agentic-soc/incidents
 """
 from __future__ import annotations
@@ -31,7 +32,9 @@ from detect.engine import detect  # noqa: E402
 from detect.loader import load_rules  # noqa: E402
 from detect.suricata_seed import build_suricata_seeds  # noqa: E402
 from common.timeparse import normalize_iso  # noqa: E402
-from pipeline.state import diff_incidents, incident_key, load_state, run_lock, save_state  # noqa: E402
+from pipeline.state import diff_incidents, incident_key, run_lock  # noqa: E402
+from store.db import DB_FILE, connect, import_state_json, migrate  # noqa: E402
+from store.incidents import load_state_view, record_run  # noqa: E402
 from tools.normalize import normalize_all  # noqa: E402
 from triage.llm_review import llm_review  # noqa: E402
 from triage.triage import triage  # noqa: E402
@@ -58,11 +61,14 @@ def main() -> int:
     ap.add_argument("--since-minutes", type=int,
                     help="최근 N분만 분석(로테이트 파일 포함). 미지정 시 파일 전체")
     ap.add_argument("--now", help="기준 시각 ISO8601(기본: 현재 UTC). 샘플 재현·테스트용")
-    ap.add_argument("--state-dir", help="증분 상태 디렉터리. 지정 시 새로 생겼거나 바뀐 사건만 내보내고 LLM 재검토도 그 사건만")
-    ap.add_argument("--emit-dir", help="내보낼 사건을 실행마다 YYYY-MM-DD/HHMMSS-<run_id>.jsonl 로 쓸 디렉터리(--state-dir 필요)")
+    ap.add_argument("--state-dir", help="증분 상태 디렉터리. 지정 시 새로 생겼거나 바뀐 사건만 DB 에 저장하고 LLM 재검토도 그 사건만")
+    ap.add_argument("--db", help=f"incident DB 경로(기본: <state-dir>/{DB_FILE}, --state-dir 필요)")
+    ap.add_argument("--emit-dir", help="내보낼 사건을 실행마다 YYYY-MM-DD/HHMMSS-<run_id>.jsonl 로도 쓸 디렉터리(--state-dir 필요)")
     args = ap.parse_args()
     if args.emit_dir and not args.state_dir:
         ap.error("--emit-dir 는 --state-dir 와 함께 써야 한다")
+    if args.db and not args.state_dir:
+        ap.error("--db 는 --state-dir 와 함께 써야 한다")
 
     now = datetime.fromisoformat(normalize_iso(args.now)) if args.now else datetime.now(timezone.utc)
     if not args.state_dir:
@@ -124,19 +130,33 @@ def run(args, now) -> int:
         if args.min_priority:
             incidents = [i for i in incidents if i["priority"] <= args.min_priority]
             print(f"[triage] --min-priority {args.min_priority} → {len(incidents)}건 남김")
-        state = load_state(args.state_dir)
-        emits, new_state = diff_incidents(incidents, state, now)
-        kinds = Counter(kind for kind, _ in emits)
-        print(f"[state] 내보낼 사건 {len(emits)}건(new {kinds.get('new', 0)}, update {kinds.get('update', 0)}), "
-              f"추적 중 {len(new_state['incidents'])}건")
-        emit_incidents = llm_review([inc for _, inc in emits])
-        reviewed = sum(1 for i in emit_incidents if "llm_reason" in i)
-        print(f"[triage] LLM 재검토 {reviewed}건(내보낼 사건 중 P1~P2)")
-        lap("triage")
-        if args.emit_dir and emits:
-            path = write_emits(args.emit_dir, emits, now)
-            print(f"[emit] {len(emits)}건 저장: {path}")
-        save_state(args.state_dir, new_state)  # 쓰기 성공 뒤에 저장 — 도중에 죽으면 다음 실행이 다시 낸다
+        db_path = args.db or os.path.join(args.state_dir, DB_FILE)
+        conn = connect(db_path)
+        try:
+            migrate(conn)
+            moved = import_state_json(conn, args.state_dir)
+            if moved is not None:
+                print(f"[db] state.json 기록 {moved}건을 DB 로 옮김 → state.json.migrated")
+            state = load_state_view(conn, now)
+            emits, new_state = diff_incidents(incidents, state, now)
+            kinds = Counter(kind for kind, _ in emits)
+            print(f"[state] 내보낼 사건 {len(emits)}건(new {kinds.get('new', 0)}, update {kinds.get('update', 0)}), "
+                  f"추적 중 {len(new_state['incidents'])}건")
+            # LLM 호출은 DB 트랜잭션 밖에서 — 네트워크를 기다리는 동안 DB 를 잠그지 않는다
+            emit_incidents = llm_review([inc for _, inc in emits])
+            reviewed = sum(1 for i in emit_incidents if "llm_reason" in i)
+            print(f"[triage] LLM 재검토 {reviewed}건(내보낼 사건 중 P1~P2)")
+            lap("triage")
+            if args.emit_dir and emits:
+                path = write_emits(args.emit_dir, emits, now)
+                print(f"[emit] {len(emits)}건 저장: {path}")
+            # DB 는 마지막에 커밋 — 도중에 죽으면 다음 실행이 같은 사건을 다시 낸다(누락보다 중복)
+            saved = record_run(conn, emits, new_state, now)
+            print(f"[db] 저장 {db_path}: new {saved['new']}, update {saved['update']} "
+                  f"(재오픈 {saved['reopened']}, 조사중 표시 {saved['flagged']})")
+        finally:
+            conn.close()
+        lap("db")
     else:
         # ④-b 트리아지 뒷단(LLM): 상위(P1~P2) 사건을 경량 LLM(Claude Haiku)으로 재검토 —
         # 점수/정렬 불변, llm_investigate·llm_reason 만 부착. 키 없으면 결정론 결과만 사용(안 죽음).

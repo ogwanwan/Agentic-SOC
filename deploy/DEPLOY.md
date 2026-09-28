@@ -1,7 +1,7 @@
 # 서버 배포 — 5분 주기 자동 탐지
 
 로그가 쌓이는 EC2(Ubuntu)에 파이프라인을 올리고, systemd timer로 5분마다 실행한다.
-매번 **최근 60분**을 다시 분석하고, **새로 생겼거나 바뀐 Incident만** 실행별 JSONL 파일로 저장한다. 조사 에이전트는 새로 생긴 파일을 가져간다.
+매번 **최근 60분**을 다시 분석하고, **새로 생겼거나 바뀐 Incident만** incident DB(SQLite, `soc.db`)에 저장한다. 조사 에이전트는 DB의 조사 대기열에서 사건을 꺼내 간다. 전환 기간 동안 실행별 JSONL 파일도 함께 쓴다.
 
 ```text
 agentic-soc.timer (5분마다)
@@ -9,8 +9,9 @@ agentic-soc.timer (5분마다)
        └─ run_pipeline.py --since-minutes 60 --state-dir /var/lib/agentic-soc --emit-dir /var/lib/agentic-soc/incidents
             ├─ 로그 4종 + 로테이트 파일(.1, .N.gz) 중 최근 60분만 정규화
             ├─ 탐지 → 사건 묶기 → 트리아지
-            ├─ state.json과 비교해 new/update만 선택 → 그 사건만 LLM 재검토
-            └─ incidents/YYYY-MM-DD/HHMMSS-<run_id>.jsonl 저장 (보고할 사건이 있을 때만)
+            ├─ DB(soc.db)와 비교해 new/update만 선택 → 그 사건만 LLM 재검토
+            ├─ incidents/YYYY-MM-DD/HHMMSS-<run_id>.jsonl 저장 (--emit-dir, 보고할 사건이 있을 때만)
+            └─ soc.db 에 저장 (한 트랜잭션)
 ```
 
 ## 왜 이 방식인가
@@ -113,6 +114,32 @@ systemctl list-timers agentic-soc.timer       # 다음 실행 시각
 
 ## 6. 결과 읽기와 조사 에이전트 인계
 
+### incident DB (`/var/lib/agentic-soc/soc.db`)
+
+첫 운영 실행에서 자동으로 만들어진다(설치할 것 없음, 파이썬 내장 sqlite3). 예전 `state.json`이 있으면 그 기록을 DB로 옮기고 `state.json.migrated`로 이름을 바꾼다. 옮긴 사건은 대기열에 넣지 않고, 다음에 새 활동이 생기면 들어온다.
+
+| 테이블 | 내용 |
+| --- | --- |
+| `incidents` | 사건당 1행(PK `incident_key`). 점수·우선순위·경로·LLM 판단·조사 상태(`status`: `pending` 미조사 / `investigating` 조사중 / `done` 완료) |
+| `incident_details` | 사건 상세(1:1). `layers`, `members`, `seeds`, `join_path`, 나머지 필드는 `extra_json` |
+
+파이프라인이 새 활동(update)을 저장할 때: 완료된 사건은 미조사로 다시 열고, 조사중인 사건은 상태를 두고 `has_update=1`만 표시한다. 변화 없는 사건의 상태는 건드리지 않는다.
+
+조사 대기열 조건(`store/incidents.py`의 `QUEUE_WHERE`·`QUEUE_ORDER`): 조사 대상(`route='investigate'`)이고 LLM이 오탐이라 하지 않았으며(LLM이 못 본 사건 포함) 미조사인 사건을 점수 높은 순, 동점이면 먼저 들어온 순.
+
+```bash
+cd /opt/agentic-soc
+sudo -u soc .venv/bin/python socdb.py stats            # 상태·우선순위별 사건 수, 대기열 길이
+sudo -u soc .venv/bin/python socdb.py queue -n 20      # 조사 대기열(급한 순)
+sudo -u soc .venv/bin/python socdb.py show <incident_key>
+```
+
+SQL로 직접 보려면 `sudo apt install sqlite3` 후 `sqlite3 /var/lib/agentic-soc/soc.db`.
+
+> **수동 실행은 서비스 계정으로.** `sudo python run_pipeline.py …`처럼 root로 실행하면 `soc.db-wal` 등이 root 소유로 생겨, 이후 5분 실행이 DB에 쓰지 못한다. 수동 실행은 `sudo systemctl start agentic-soc.service`로 한다.
+
+### 실행별 JSONL 파일 (전환 기간 병행)
+
 실행 1회당 파일 1개가 날짜(UTC) 폴더에 생긴다. 보고할 사건이 없는 실행은 파일을 만들지 않는다.
 
 ```text
@@ -151,10 +178,11 @@ cat /var/lib/agentic-soc/incidents/$(date -u +%F)/*.jsonl
 | 실행 기록 | `journalctl -u agentic-soc --since "1 hour ago"` |
 | 일시 중지 / 재개 | `sudo systemctl stop agentic-soc.timer` / `start` |
 | 코드 업데이트 | `cd /opt/agentic-soc && sudo git pull && sudo .venv/bin/pip install -r requirements.txt` (타이머는 그대로) |
-| 상태 초기화 | `sudo rm /var/lib/agentic-soc/state.json` → 다음 실행에서 최근 60분 사건이 전부 `new`로 다시 나감 |
+| DB 확인 | `socdb.py stats` / `queue` / `show <incident_key>` (6절) |
+| 상태 초기화 | 타이머를 멈추고 `soc.db`, `soc.db-wal`, `soc.db-shm`을 다른 곳으로 옮김 → 다음 실행에서 최근 60분 사건이 전부 `new`로 다시 나감(조사 상태도 사라짐) |
 | 결과 보관 정리 | `sudo find /var/lib/agentic-soc/incidents -name '*.jsonl' -mtime +30 -delete && sudo find /var/lib/agentic-soc/incidents -mindepth 1 -type d -empty -delete` |
 
-상태 파일은 24시간 동안 다시 보이지 않은 사건을 스스로 정리한다.
+24시간 동안 다시 보이지 않은 사건은 DB에 남되, 다시 나타나면 `new`로 판단된다(예전 state.json의 24시간 정리와 같은 동작).
 
 ## 알려진 한계
 

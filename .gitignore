@@ -27,3 +27,8 @@ Thumbs.db
 # 실행 산출물
 out/
 graphify-out/
+
+# incident DB (로컬 테스트용 DB 가 커밋되지 않게)
+*.db
+*.db-wal
+*.db-shm
