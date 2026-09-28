@@ -178,3 +178,64 @@ def judge_mapping_unit(
     )
 
     return _validate_decision_shape(raw_decision)
+
+def map_mapping_unit(
+    *,
+    llm_client: JsonLLMClient,
+    mapping_unit: Any,
+    retrieve_candidates_fn: Any,
+    validate_selection_fn: Any,
+    related_evidence: Sequence[Any] = (),
+    contradicting_evidence: Sequence[Any] = (),
+    remaining_unknowns: Sequence[Any] = (),
+) -> list[Any]:
+    """Mapping Unit 하나를 Retrieval → LLM → Validation 순서로 처리한다.
+
+    현재 단계에서는 A/B 실제 구현에 직접 의존하지 않는다.
+
+    retrieve_candidates_fn:
+        Mapping Unit을 받아 Candidate 목록을 반환하는 테스트 대역.
+        나중에 B의 실제 Retriever와 연결한다.
+
+    validate_selection_fn:
+        LLM Selection 하나를 받아 검증 결과를 반환하는 테스트 대역.
+        나중에 A의 실제 Validator와 연결한다.
+
+    Validator가 None을 반환하면 해당 Selection은 거부된 것으로 본다.
+    """
+
+    candidates = list(
+        retrieve_candidates_fn(mapping_unit)
+    )
+
+    # 검색 후보가 없다면 LLM을 호출할 이유가 없다.
+    if not candidates:
+        return []
+
+    decision = judge_mapping_unit(
+        llm_client=llm_client,
+        target_evidence=mapping_unit,
+        candidates=candidates,
+        related_evidence=related_evidence,
+        contradicting_evidence=contradicting_evidence,
+        remaining_unknowns=remaining_unknowns,
+    )
+
+    # LLM이 근거 부족으로 보류한 경우 Validator도 호출하지 않는다.
+    if decision["decision"] == "ABSTAIN":
+        return []
+
+    validated: list[Any] = []
+
+    for selection in decision["selections"]:
+        validated_selection = validate_selection_fn(
+            selection
+        )
+
+        # 실패한 Selection만 버린다.
+        if validated_selection is None:
+            continue
+
+        validated.append(validated_selection)
+
+    return validated
