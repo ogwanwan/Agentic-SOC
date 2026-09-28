@@ -20,12 +20,12 @@ LLM_PROVIDER 환경변수로 서로 바꿔 쓸 수 있다. 필요 환경변수: 
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from typing import Any, Dict, Optional
 
 from .llm_errors import LLMUnavailableError
+from .llm_json import parse_llm_json
 from .prompts import build_system_prompt, build_user_prompt
 
 
@@ -107,7 +107,8 @@ class GeminiClient:
             raise GeminiDecisionError(
                 f"Gemini가 빈 응답을 반환했습니다. (finish_reason 등을 확인하십시오)\n원본 응답: {response}"
             )
-        return self._parse_json(text)
+        # 응답 형식 보정(trailing comma, markdown 리스트로 깨진 키 등)은 공용 파서가 한다
+        return parse_llm_json(text, GeminiDecisionError, label="Gemini")
 
     # 503(서버 과부하)/429(분당 한도)는 일시적인 오류인데, 예전엔 한 번만 나도
     # main.py 전체가 예외로 끝났다(seed 생성 단계에서 연속 발생 확인). 이 코드(와 다른 5xx)만
@@ -159,38 +160,3 @@ class GeminiClient:
                 print(f"[Gemini {exc.code}] {delay:.0f}초 후 재시도 ({attempt}/{self.MAX_ATTEMPTS - 1})")
                 time.sleep(delay)
         raise AssertionError("unreachable")
-
-    # LLM이 가끔 JSON 응답 중간에 markdown 리스트 문법
-    # (`- key: value`처럼 키 앞에 하이픈이 붙고 따옴표가 빠진 형태)을 섞어 넣어
-    # json.loads()가 실패하는 사례가 발견됐다. 기존 trailing comma 보정으로는
-    # 못 잡는 새로운 유형이라, 이 패턴을 정규식으로 감지해 정상 JSON 키 형태로
-    # 복구하는 보정 단계를 추가했다.
-    _MARKDOWN_BULLET_KEY_RE = re.compile(r'(?m)^(\s*)-\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s*:')
-
-    @staticmethod
-    def _parse_json(text: str) -> Dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-            cleaned = cleaned.strip()
-
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            # 1차 보정: trailing comma 제거
-            fixed = re.sub(r",\s*([\]}])", r"\1", cleaned)
-            # 2차 보정: markdown 리스트 문법으로 깨진 키(`- key:` → `"key":`) 복구.
-            # 두 보정을 순서대로 누적 적용해서, 두 문제가 같이 섞여 나온 경우도 처리한다.
-            fixed = GeminiClient._MARKDOWN_BULLET_KEY_RE.sub(r'\1"\2":', fixed)
-
-            if fixed != cleaned:
-                try:
-                    return json.loads(fixed)
-                except json.JSONDecodeError:
-                    pass
-
-            raise GeminiDecisionError(
-                f"Gemini 응답을 JSON으로 파싱하지 못했습니다: {exc}\n원본 응답:\n{text}"
-            ) from exc

@@ -110,6 +110,28 @@ def test_claude_client_runs_investigation_loop(monkeypatch):
     assert client.usage_totals["calls"] == 2 and client.usage_totals["cache_read_input_tokens"] == 160
 
 
+def test_prose_around_json_is_parsed_in_investigation_loop(monkeypatch):
+    # 2026-09-28 첫 실제 실행: Claude 응답을 두 번 연속 "line 1 column 1"로 해석하지 못해 폴백 판정이 났다
+    verdict = {"verdict": "INCONCLUSIVE", "confidence": 0.5, "severity": "LOW", "attack_type": "x",
+               "affected_systems": [], "summary": "s", "reasoning": "r"}
+    terminate = _decision(next_action="terminate", tool_call=None,
+                          termination_reason="no_more_evidence", final_verdict=verdict)
+    replies = [{"text": "조회 결과를 보고 다음 도구를 고릅니다.\n" + _decision()["text"]},
+               {"text": "최종 판단입니다.\n```json\n" + terminate["text"] + "\n```\n이상입니다."}]
+    _install_fake_anthropic(monkeypatch, replies)
+    result = InvestigationAgent(ClaudeClient(api_key="k"), build_default_registry()).run(SEED)
+    assert result["final_verdict"]["reasoning"] == "r"  # 폴백 판정이 아니라 LLM 판정
+    assert not any("해석 실패" in n for n in result["investigation_notes"])
+
+
+def test_unparsable_response_leaves_response_head_in_notes(monkeypatch):
+    _install_fake_anthropic(monkeypatch, [{"text": "판단할 근거가 부족합니다. 추가 조회가 필요합니다."}])
+    result = InvestigationAgent(ClaudeClient(api_key="k"), build_default_registry()).run(SEED)
+    failures = [n for n in result["investigation_notes"] if "해석 실패" in n]
+    assert len(failures) == 2 and all("판단할 근거가 부족합니다" in n for n in failures)
+    assert result["final_verdict"]["reasoning"].startswith("[자동 폴백 판정")
+
+
 def test_truncated_response_raises_decision_error(monkeypatch):
     _install_fake_anthropic(monkeypatch, [{"text": '{"facts": ["잘린', "stop_reason": "max_tokens"}])
     with pytest.raises(ClaudeDecisionError, match="출력 한도"):

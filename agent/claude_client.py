@@ -26,12 +26,11 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 from typing import Any, Dict, Optional
 
 from .llm_errors import LLMUnavailableError
+from .llm_json import parse_llm_json
 from .prompts import build_system_prompt, build_user_prompt
 
 DEFAULT_MODEL = "claude-sonnet-5"
@@ -144,7 +143,8 @@ class ClaudeClient:
             )
         if not text.strip():
             raise ClaudeDecisionError(f"Claude가 빈 응답을 반환했습니다. (stop_reason={getattr(response, 'stop_reason', None)})")
-        return self._parse_json(text)
+        # Gemini와 달리 JSON만 내보내게 강제하는 설정이 없어 앞뒤에 설명 문장이 붙을 수 있다 — 공용 파서가 꺼낸다
+        return parse_llm_json(text, ClaudeDecisionError, label="Claude")
 
     def _add_usage(self, usage: Any) -> None:
         self.usage_totals["calls"] += 1
@@ -152,30 +152,3 @@ class ClaudeClient:
             return
         for key in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
             self.usage_totals[key] += int(getattr(usage, key, 0) or 0)
-
-    # LLM이 가끔 JSON 중간에 markdown 리스트 문법(`- key: value`)을 섞어 json.loads()가 실패한다.
-    # GeminiClient와 같은 보정을 적용한다.
-    _MARKDOWN_BULLET_KEY_RE = re.compile(r'(?m)^(\s*)-\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s*:')
-
-    @staticmethod
-    def _parse_json(text: str) -> Dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-            cleaned = cleaned.strip()
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            # 1차 보정: trailing comma 제거, 2차 보정: markdown 리스트로 깨진 키 복구 (누적 적용)
-            fixed = re.sub(r",\s*([\]}])", r"\1", cleaned)
-            fixed = ClaudeClient._MARKDOWN_BULLET_KEY_RE.sub(r'\1"\2":', fixed)
-            if fixed != cleaned:
-                try:
-                    return json.loads(fixed)
-                except json.JSONDecodeError:
-                    pass
-            raise ClaudeDecisionError(
-                f"LLM 응답을 JSON으로 파싱하지 못했습니다: {exc}\n원본 응답:\n{text}"
-            ) from exc

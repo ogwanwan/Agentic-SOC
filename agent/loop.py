@@ -138,7 +138,8 @@ class InvestigationAgent:
             except Exception as exc:
                 if not type(exc).__name__.endswith("DecisionError"):
                     raise
-                first_line = str(exc).splitlines()[0][:200]
+                # 첫 줄에 오류와 응답 앞부분이 있다(agent/llm_json.py) — 원인을 나중에 확인할 수 있게 남긴다
+                first_line = str(exc).splitlines()[0][:400]
                 state.notes.append(f"LLM 응답 해석 실패({attempt + 1}회차): {first_line}")
         state.notes.append("LLM 응답을 연속으로 해석하지 못해, 지금까지의 증거로 자동 폴백 판정했습니다.")
         return None
