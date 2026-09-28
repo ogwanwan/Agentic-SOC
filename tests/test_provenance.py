@@ -195,6 +195,40 @@ def test_empty_result_evidence_without_call_number_keeps_contribution():
     assert result["statistics"]["confidence_increase"] == pytest.approx(0.25)
 
 
+def test_evidence_ref_sources_mark_seed_only_refs_without_changing_status():
+    # 2026-09-28: ATT&CK 매핑이 "도구로 재확인되지 않은 1차 탐지 참조"를 tools_called와 비교해 추정하던 것을
+    # 증거별 필드로 준다. seed 참조도 실제 원본 줄이라 status는 바꾸지 않고 표시만 한다.
+    registry = ToolRegistry()
+    registry.register(ToolSpec("ok", "", [], handler=lambda args: {
+        "count": 2, "records": [{"raw_ref": "input:1"}, {"raw_ref": "seed:2"}]}))
+    llm = ScriptedInvestigator([
+        # seed:2는 도구 호출 전에 인용했지만 이후 도구 결과에서 관측된다
+        {"next_action": "call_tool", "tool_call": {"tool_name": "ok"},
+         "new_evidence": [evidence(raw_refs=["seed:2"], description="seed 단서")]},
+        terminate([evidence(raw_refs=["input:1"]), evidence(raw_refs=["seed:1"], description="seed만"),
+                   evidence(raw_refs=["seed:1", "input:1"], contradicting=True)]),
+    ])
+    result = InvestigationAgent(llm, registry).run({"incident_id": "SRC", "evidence_refs": ["seed:1", "seed:2"]})
+    later, tool, seed_only = result["evidence_chain"]
+    assert (later["supporting_tool_calls"], later["seed_only_raw_refs"]) == ([1], [])
+    assert (tool["supporting_tool_calls"], tool["seed_only_raw_refs"]) == ([1], [])
+    assert (seed_only["supporting_tool_calls"], seed_only["seed_only_raw_refs"]) == ([], ["seed:1"])
+    contradicting = result["contradicting_evidence"][0]
+    assert (contradicting["supporting_tool_calls"], contradicting["seed_only_raw_refs"]) == ([1], ["seed:1"])
+    assert result["provenance"]["seed_only_evidence"] == [seed_only["evidence_id"], contradicting["evidence_id"]]
+    assert result["provenance"]["status"] == "passed"
+
+
+def test_empty_result_evidence_is_supported_by_its_verified_call():
+    result, _ = _empty_result_run(2)
+    found, empty = result["evidence_chain"]
+    assert (found["supporting_tool_calls"], found["seed_only_raw_refs"]) == ([1], [])
+    assert (empty["supporting_tool_calls"], empty["seed_only_raw_refs"]) == ([2], [])
+    assert result["provenance"]["seed_only_evidence"] == []
+    unverified, _ = _empty_result_run(3)  # 실패한 호출은 확인되지 않아 근거 호출이 없다
+    assert unverified["evidence_chain"][1]["supporting_tool_calls"] == []
+
+
 def test_process_tree_refs_and_multiline_groups(tmp_path, monkeypatch):
     epoch = int(datetime(2026, 9, 21, tzinfo=timezone.utc).timestamp())
     path = local_log(tmp_path, monkeypatch, "audit",

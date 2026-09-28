@@ -11,6 +11,7 @@
 
 무엇을 부르나
   agent/provenance.py provenance_report()      원본 참조 검증 결과(passed/incomplete/unavailable)
+  agent/provenance.py evidence_ref_sources()   증거별 출처(supporting_tool_calls, seed_only_raw_refs)
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from .provenance import provenance_report
+from .provenance import evidence_ref_sources, provenance_report, references
 
 
 def _now_iso() -> str:
@@ -37,6 +38,10 @@ def build_investigation_result(
     )
 
     leading_hyp = max(state.hypotheses.values(), key=lambda h: h.confidence, default=None)
+    seed_refs = references(state.seed, seed=True)
+
+    def ref_sources(e: Any) -> Dict[str, Any]:
+        return evidence_ref_sources(e, state.tool_calls, seed_refs)
 
     evidence_chain = [
         {
@@ -52,6 +57,7 @@ def build_investigation_result(
             "raw_ref": e.raw_refs[0] if e.raw_refs else None,
             "raw_refs": list(e.raw_refs),
             "empty_result_call": e.empty_result_call,
+            **ref_sources(e),
         }
         for e in state.evidence
     ]
@@ -68,6 +74,7 @@ def build_investigation_result(
             "raw_ref": e.raw_refs[0] if e.raw_refs else None,
             "raw_refs": list(e.raw_refs),
             "empty_result_call": e.empty_result_call,
+            **ref_sources(e),
         }
         for e in state.contradicting_evidence
     ]

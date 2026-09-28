@@ -105,7 +105,7 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 
 | 번호 | 하는 일 |
 |---|---|
-| [41] | `report.build_investigation_result()`로 결과 JSON |
+| [41] | `report.build_investigation_result()`로 결과 JSON. 증거마다 `provenance.evidence_ref_sources()`가 `supporting_tool_calls`(그 raw_refs를 관측한 도구 호출 sequence, 0건 증거는 `empty_result_call`)와 `seed_only_raw_refs`(1차 탐지 참조 중 도구로 관측되지 않은 것)를 붙이고, `provenance.seed_only_evidence`에 해당 증거 id를 모은다(status에는 영향 없음) |
 | [42]·[43]·[44] | loop → pipeline → main으로 반환 |
 | [45] | `main.save_investigation_result()`로 JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장하고 경로만 출력. 사람이 읽는 텍스트 보고서는 만들지 않는다 |
 
