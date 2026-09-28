@@ -24,6 +24,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+from .llm_errors import LLMUnavailableError
 from .prompts import build_system_prompt, build_user_prompt
 
 
@@ -103,9 +104,11 @@ class GeminiClient:
         return self._parse_json(text)
 
     # 503(서버 과부하)/429(분당 한도)는 일시적인 오류인데, 예전엔 한 번만 나도
-    # main.py 전체가 예외로 끝났다(seed 생성 단계에서 연속 발생 확인). 이 두 코드만
-    # 기다렸다가 다시 시도하고, 그 외 오류는 바로 올려 보낸다.
-    _RETRYABLE_STATUS = {429, 503}
+    # main.py 전체가 예외로 끝났다(seed 생성 단계에서 연속 발생 확인). 이 코드(와 다른 5xx)만
+    # 기다렸다가 다시 시도하고, 그 외 오류(400·401·403 등 설정·요청 오류)는 바로 올려 보낸다.
+    # 재시도를 다 써도 일시 오류면 LLMUnavailableError로 감싸 올린다 — 조사 루프가 그 사건만
+    # 조사 미완료로 저장하고 다음 사건을 계속한다(2026-09-28 EC2: 503 3회 연속으로 전체 실행·결과 유실).
+    _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
     _RETRY_DELAY_RE = re.compile(r"retryDelay['\"]?:\s*['\"]?(\d+(?:\.\d+)?)s")
     MAX_ATTEMPTS = 4
     BASE_DELAY_SECONDS = 15.0
@@ -131,13 +134,19 @@ class GeminiClient:
                 )
             except transport_errors as exc:
                 if attempt == self.MAX_ATTEMPTS:
-                    raise
+                    raise LLMUnavailableError(
+                        f"Gemini 연결 오류({type(exc).__name__}, {self.MAX_ATTEMPTS}회 시도 후): {str(exc)[:200]}"
+                    ) from exc
                 delay = 5.0 * attempt
                 print(f"[Gemini 연결 오류: {type(exc).__name__}] {delay:.0f}초 후 재시도 ({attempt}/{self.MAX_ATTEMPTS - 1})")
                 time.sleep(delay)
             except errors.APIError as exc:
-                if exc.code not in self._RETRYABLE_STATUS or attempt == self.MAX_ATTEMPTS:
+                if exc.code not in self._RETRYABLE_STATUS:
                     raise
+                if attempt == self.MAX_ATTEMPTS:
+                    raise LLMUnavailableError(
+                        f"Gemini API 일시 오류({exc.code}, {self.MAX_ATTEMPTS}회 시도 후): {str(exc)[:200]}"
+                    ) from exc
                 # 429는 서버가 알려준 retryDelay를 따르고, 없으면 지수 백오프(15s, 30s, 60s)
                 match = self._RETRY_DELAY_RE.search(str(exc))
                 delay = float(match.group(1)) + 2.0 if match else self.BASE_DELAY_SECONDS * 2 ** (attempt - 1)

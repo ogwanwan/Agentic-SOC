@@ -6,6 +6,7 @@
 - 보내는 인자가 설치된 실제 SDK의 messages.create()가 받는 인자인지 (가짜 클라이언트만으로는
   2026-09-28 EC2의 `temperature` TypeError를 잡지 못했다)
 - 출력 한도에서 잘린 응답은 ClaudeDecisionError, 토큰 사용량 누적
+- SDK 재시도 뒤 일시 오류(429·529·연결)는 LLMUnavailableError, 권한 오류는 그대로
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from typing import Any, Dict, List
 import pytest
 
 from agent.claude_client import ClaudeClient, ClaudeDecisionError
+from agent.llm_errors import LLMUnavailableError
 from agent.loop import InvestigationAgent
 from agent.tools import build_default_registry
 
@@ -28,14 +30,26 @@ def isolated_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+class FakeStatusError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"status {status_code}")
+        self.status_code = status_code
+
+
+class FakeConnectionError(Exception):
+    pass
+
+
 class _FakeMessages:
-    def __init__(self, replies: List[Dict[str, Any]]) -> None:
+    def __init__(self, replies: List[Any]) -> None:
         self.replies = replies
         self.calls: List[Dict[str, Any]] = []
 
     def create(self, **kwargs: Any):
         self.calls.append(kwargs)
         reply = self.replies[min(len(self.calls), len(self.replies)) - 1]
+        if isinstance(reply, Exception):
+            raise reply
         usage = types.SimpleNamespace(input_tokens=100, output_tokens=20,
                                       cache_creation_input_tokens=0, cache_read_input_tokens=80)
         return types.SimpleNamespace(
@@ -53,7 +67,8 @@ def _install_fake_anthropic(monkeypatch, replies):
             self.messages = _FakeMessages(replies)
             created["messages"] = self.messages
 
-    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=FakeAnthropic))
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(
+        Anthropic=FakeAnthropic, APIStatusError=FakeStatusError, APIConnectionError=FakeConnectionError))
     return created
 
 
@@ -139,3 +154,18 @@ def test_request_arguments_are_accepted_by_installed_sdk(monkeypatch):
     sent = set(created["messages"].calls[0])
     assert sent <= accepted, f"anthropic {sdk.__version__}가 받지 않는 인자: {sent - accepted}"
 
+
+@pytest.mark.parametrize("error", [FakeStatusError(529), FakeStatusError(429), FakeStatusError(503),
+                                   FakeConnectionError("timeout")])
+def test_transient_api_error_becomes_llm_unavailable(monkeypatch, error):
+    _install_fake_anthropic(monkeypatch, [error])
+    with pytest.raises(LLMUnavailableError, match="Claude API 일시 오류"):
+        ClaudeClient(api_key="k").complete_json("sys", "user")
+
+
+@pytest.mark.parametrize("status", [400, 401, 403])
+def test_config_errors_are_raised_as_is(monkeypatch, status):
+    # 키·권한·요청 형식 오류는 사건마다 반복돼도 해결되지 않으므로 감싸지 않고 전체 실행을 멈춘다
+    _install_fake_anthropic(monkeypatch, [FakeStatusError(status)])
+    with pytest.raises(FakeStatusError):
+        ClaudeClient(api_key="k").complete_json("sys", "user")

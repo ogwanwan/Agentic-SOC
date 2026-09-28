@@ -34,6 +34,8 @@ class TerminationReason(str, Enum):
     CONFIDENCE_SUFFICIENT = "confidence_sufficient"
     NO_MORE_EVIDENCE = "no_more_evidence"
     MAX_CALL_REACHED = "max_call_reached"
+    # 코드 전용(LLM이 고르지 않음): 재시도 뒤에도 LLM API 일시 오류 → 조사 미완료(investigation_status=INCOMPLETE)
+    LLM_UNAVAILABLE = "llm_unavailable"
 
 
 _evidence_counter = itertools.count(1)

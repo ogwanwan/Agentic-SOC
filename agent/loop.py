@@ -36,6 +36,7 @@ import re
 from datetime import timedelta, timezone
 from typing import Any, Dict, Optional
 
+from .llm_errors import LLMUnavailableError
 from .models import AgentState, Evidence, Hypothesis, TerminationReason, ToolCallRecord, VerdictType
 from .report import build_investigation_result
 from .provenance import observed_references, observed_reference_groups, observed_locations, references, validate_citations
@@ -169,6 +170,41 @@ class InvestigationAgent:
         if self.network_precheck:
             self._run_network_precheck(state)
 
+        incomplete_reason = None
+        try:
+            # [20]~[40] → _investigate(): LLM 판단 → 도구 실행 반복, 종료 관문, 마무리 판정
+            termination_reason, final_verdict = self._investigate(state)
+        except LLMUnavailableError as exc:
+            # 재시도 뒤에도 LLM API가 일시 오류(과부하·한도·연결)면 이 사건만 조사 미완료로 끝낸다.
+            # 2026-09-28 EC2: Gemini 503 한 번으로 main.py 전체가 멈추고 앞서 끝난 사건 결과까지 저장되지 않았다.
+            # API 키·권한 오류는 LLMUnavailableError가 아니라 그대로 올라가 전체 실행을 멈춘다.
+            incomplete_reason = str(exc)
+            termination_reason = TerminationReason.LLM_UNAVAILABLE.value
+            final_verdict = self._incomplete_verdict(state, incomplete_reason)
+            state.notes.append(f"⚠ 조사 미완료 — LLM API 일시 오류로 조사를 끝내지 못했습니다: {incomplete_reason}")
+
+        # [41] → agent/report.py build_investigation_result(): state에 쌓인 조사 내용으로 최종 JSON 생성
+        result = build_investigation_result(state, termination_reason, final_verdict,
+                                            incomplete_reason=incomplete_reason)
+        result["statistics"]["tool_calls_max"] = self.max_calls
+        # [42] → agent/pipeline.py [16]으로 조사 결과를 돌려준다
+        return result
+
+    def _incomplete_verdict(self, state: AgentState, reason: str) -> Dict[str, Any]:
+        """조사 미완료 사건의 판정. 폴백 판정(수치로 계산한 판정)과 달리 판정을 내리지 않는다 — INCONCLUSIVE.
+        ATT&CK 매핑은 INCONCLUSIVE를 deferred로 두므로, 미완료 조사에 기법 번호가 붙지 않는다."""
+        return {
+            "verdict": VerdictType.INCONCLUSIVE.value,
+            "confidence": round(state.current_confidence, 3),
+            "severity": "UNKNOWN",
+            "attack_type": "unknown",
+            "affected_systems": [],
+            "summary": "LLM API 일시 오류로 조사를 끝내지 못했습니다. 다시 조사해야 합니다.",
+            "reasoning": f"[조사 미완료 — LLM API 일시 오류] {reason}",
+        }
+
+    def _investigate(self, state: AgentState) -> tuple:
+        """[20]~[40] 조사 루프 본문. (termination_reason, final_verdict)를 돌려준다."""
         termination_reason = None
         final_verdict = None
         max_cycles = self.max_calls + 3  # LLM이 종료 판단을 안 내려도 무한루프에 빠지지 않도록 하는 안전장치
@@ -306,12 +342,7 @@ class InvestigationAgent:
         if self.strict_termination:
             for conflict in self._verdict_conflicts(state, final_verdict):
                 state.notes.append("⚠ 판정-원칙 불일치: " + conflict + " (최종 판정은 LLM 결과 그대로 둠)")
-
-        # [41] → agent/report.py build_investigation_result(): state에 쌓인 조사 내용으로 최종 JSON 생성
-        result = build_investigation_result(state, termination_reason, final_verdict)
-        result["statistics"]["tool_calls_max"] = self.max_calls
-        # [42] → agent/pipeline.py [16]으로 조사 결과를 돌려준다
-        return result
+        return termination_reason, final_verdict
 
     def _termination_rejections(self, state: AgentState, termination_reason: str,
                                 final_verdict: Optional[Dict[str, Any]] = None) -> list:

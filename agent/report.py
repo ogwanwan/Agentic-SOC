@@ -32,7 +32,10 @@ def build_investigation_result(
     termination_reason: str,
     final_verdict: Optional[Dict[str, Any]],
     investigation_id: Optional[str] = None,
+    incomplete_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """incomplete_reason이 있으면 조사를 끝내지 못한 사건이다(LLM API 일시 오류 등) —
+    investigation_status=INCOMPLETE와 사유를 남겨 폴백 판정과 구분하고, 다시 조사할 수 있게 한다."""
     investigation_id = investigation_id or (
         f"INV-{state.incident_id}-{datetime.now(timezone.utc).strftime('%Y%m%d')}-001"
     )
@@ -133,7 +136,8 @@ def build_investigation_result(
             "updated_at": state.seed.get("updated_at"),
         },
         "investigation_id": investigation_id,
-        "investigation_status": "COMPLETE",
+        "investigation_status": "INCOMPLETE" if incomplete_reason else "COMPLETE",
+        "incomplete_reason": incomplete_reason,
         "timestamp": _now_iso(),
         "initial_seed": state.seed,
         "raw_refs": list(state.raw_refs),

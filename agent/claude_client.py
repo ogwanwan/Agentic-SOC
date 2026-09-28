@@ -6,7 +6,8 @@
   temperature는 보내지 않는다: anthropic SDK 1.x에서 인자가 삭제됐고(보내면 TypeError), 기본 모델
   claude-sonnet-5도 sampling 인자를 받지 않는다(400). 판정 재현성은 프롬프트 원칙과 코드 관문이 맡는다.
   claude-sonnet-5는 thinking이 기본으로 켜져 있어 thinking 토큰도 max_tokens에 포함된다 → 출력 한도 16000.
-  일시 오류(429 한도, 529 과부하, 연결 끊김)는 anthropic SDK가 서버 안내 시간만큼 기다렸다 재시도한다.
+  일시 오류(429 한도, 5xx·529 과부하, 연결 끊김·시간 초과)는 anthropic SDK가 서버 안내 시간만큼 기다렸다
+  재시도하고, 그래도 실패하면 LLMUnavailableError로 올린다(조사 루프가 그 사건만 조사 미완료로 처리).
   시스템 프롬프트는 매 턴 같으므로 프롬프트 캐싱으로 표시해 반복 호출 비용을 줄이고, 호출마다 쓴 토큰을
   usage_totals에 누적한다(조사 1건 비용 측정용).
 
@@ -30,10 +31,24 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+from .llm_errors import LLMUnavailableError
 from .prompts import build_system_prompt, build_user_prompt
 
 DEFAULT_MODEL = "claude-sonnet-5"
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# SDK 재시도 뒤에도 이 상태 코드면 일시 오류로 본다(429 한도, 5xx·529 과부하, 408 시간 초과)
+TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
+
+
+def _is_transient(exc: Exception) -> bool:
+    import anthropic
+
+    connection_error = getattr(anthropic, "APIConnectionError", None)  # APITimeoutError 포함
+    status_error = getattr(anthropic, "APIStatusError", None)
+    if connection_error is not None and isinstance(exc, connection_error):
+        return True
+    return status_error is not None and isinstance(exc, status_error) and (
+        getattr(exc, "status_code", None) in TRANSIENT_STATUS)
 
 
 class ClaudeDecisionError(Exception):
@@ -105,14 +120,21 @@ class ClaudeClient:
     def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         """범용 호출: 어떤 system/user 프롬프트든 받아서 JSON으로 파싱해 돌려준다."""
         extra: Dict[str, Any] = {"output_config": {"effort": self.effort}} if self.effort else {}
-        response = self._client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            # 시스템 프롬프트(원칙·도구 목록·출력 형식)는 매 턴 같아서 캐시해 두고 다시 읽는다.
-            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": user_prompt}],
-            **extra,
-        )
+        try:
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                # 시스템 프롬프트(원칙·도구 목록·출력 형식)는 매 턴 같아서 캐시해 두고 다시 읽는다.
+                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": user_prompt}],
+                **extra,
+            )
+        except Exception as exc:
+            if _is_transient(exc):
+                raise LLMUnavailableError(
+                    f"Claude API 일시 오류({type(exc).__name__}, 재시도 {self.MAX_RETRIES}회 후): {str(exc)[:200]}"
+                ) from exc
+            raise
         self._add_usage(getattr(response, "usage", None))
         text = "".join(getattr(block, "text", "") for block in response.content if block.type == "text")
         if getattr(response, "stop_reason", None) == "max_tokens":

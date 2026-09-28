@@ -98,9 +98,24 @@ def main(argv=None) -> None:
     # [3] → LLM 클라이언트 생성 (위 build_llm_client: 기본 Gemini, LLM_PROVIDER=anthropic이면 Claude)
     llm_client = build_llm_client()
 
+    # [45] 결과 저장 — 사건 하나가 끝날 때마다 바로 저장한다. 뒤 사건에서 예외(API 키 오류 등)로
+    #      실행이 멈춰도 앞서 끝난 사건 결과는 남는다.
+    saved_paths = []
+    incomplete = []
+
+    def save(result: dict) -> None:
+        path = save_investigation_result(result)
+        saved_paths.append(path)
+        key = result.get("incident_key") or result.get("incident_id")
+        if result.get("investigation_status") == "INCOMPLETE":
+            incomplete.append(key)
+            print(f"[{len(saved_paths)}/{len(incidents)}] ⚠ 조사 미완료(다시 조사 필요) {key}: {path}")
+        else:
+            print(f"[{len(saved_paths)}/{len(incidents)}] {key}: {path}")
+
     # [5] → agent/pipeline.py run_investigation_pipeline() — 사건을 받은 순서대로 조사한다
-    # [44] ← 사건별 조사 결과(JSON dict) 리스트를 돌려받는다
-    results = run_investigation_pipeline(
+    # [44] ← 사건별 조사 결과는 on_result(save)로 하나씩 받아 저장한다
+    run_investigation_pipeline(
         incidents,
         host=host,
         llm_client=llm_client,
@@ -110,14 +125,15 @@ def main(argv=None) -> None:
         # 도구 1개만 보고 끝나는 조사를 막는 설정 (agent/loop.py 참고)
         network_precheck=True,      # 사건에 src_ip가 있으면 network를 코드가 먼저 조회
         strict_termination=True,    # 종료 관문 강화 + 판정이 도구 계산 기준과 어긋나면 종료 거부
+        on_result=save,
     )
-
-    # [45] 결과 저장 → 사건마다 결과 JSON을 results/investigation_agent/에 저장하고 경로만 출력한다
-    saved_paths = [save_investigation_result(result) for result in results]
 
     print(f"\n--- 저장된 조사 결과 JSON {len(saved_paths)}건 ---")
     for path in saved_paths:
         print(f"  {path}")
+    if incomplete:
+        # 사건 id(incident_key, 없으면 incident_id)로 다시 조사할 사건을 고를 수 있게 모아 보여 준다
+        print(f"\n⚠ LLM API 일시 오류로 조사 미완료 {len(incomplete)}건 — 다시 조사하십시오: {', '.join(incomplete)}")
 
 
 # [1] 시작점 — `python main.py <사건 파일>`로 실행하면 main()이 불린다

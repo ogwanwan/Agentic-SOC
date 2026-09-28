@@ -107,7 +107,7 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 |---|---|
 | [41] | `report.build_investigation_result()`로 결과 JSON. 증거마다 `provenance.evidence_ref_sources()`가 `supporting_tool_calls`(그 raw_refs를 관측한 도구 호출 sequence, 0건 증거는 `empty_result_call`)와 `seed_only_raw_refs`(1차 탐지 참조 중 도구로 관측되지 않은 것)를 붙이고, `provenance.seed_only_evidence`에 해당 증거 id를 모은다(status에는 영향 없음) |
 | [42]·[43]·[44] | loop → pipeline → main으로 반환 |
-| [45] | `main.save_investigation_result()`로 JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장하고 경로만 출력. 사람이 읽는 텍스트 보고서는 만들지 않는다 |
+| [45] | 사건 하나가 끝날 때마다 `pipeline`의 `on_result`로 `main.save_investigation_result()`가 JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 바로 저장하고 경로만 출력. LLM API 일시 오류로 조사 미완료(`investigation_status: INCOMPLETE`)인 사건은 마지막에 사건 id로 모아 보여 준다. 사람이 읽는 텍스트 보고서는 만들지 않는다 |
 
 ### 도구 내부 — `agent/tools/real/fetch_*_log.py`
 
