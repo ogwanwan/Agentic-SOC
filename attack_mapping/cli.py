@@ -19,6 +19,11 @@ instead of depending on B's real ALL_RULES.
 
 from __future__ import annotations
 
+from .mapper import (
+    build_rag_kill_chain,
+    map_investigation as map_rag_investigation,
+)
+
 import argparse
 import json
 import os
@@ -172,6 +177,106 @@ def process_file(
 
     return mapping_result
 
+def process_file_rag(
+    investigation_result_path: str,
+    out_dir: str,
+    *,
+    llm_client: Any,
+    catalog: Any,
+    build_mapping_unit_fn: Any,
+    retrieve_candidates_fn: Any,
+    retrieval_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    """RAG 기반 ATT&CK Mapping으로 조사 결과 파일 하나를 처리한다.
+
+    흐름:
+        investigation_result JSON
+        → mapper.map_investigation()
+        → RAG Kill Chain
+        → attack_mapping.json
+        → final_report.json
+
+    B의 실제 Retrieval이 아직 없어도
+    build_mapping_unit_fn / retrieve_candidates_fn을
+    주입해서 전체 C 경로를 테스트할 수 있다.
+    """
+
+    with open(
+        investigation_result_path,
+        "r",
+        encoding="utf-8-sig",
+    ) as f:
+        investigation_result = json.load(f)
+
+    if not isinstance(
+        investigation_result,
+        dict,
+    ):
+        raise ValueError(
+            "investigation_result must be a JSON object"
+        )
+
+    _validate_input_depth(
+        investigation_result
+    )
+
+    if _is_generated_artifact(
+        investigation_result
+    ):
+        raise GeneratedArtifactError(
+            "generated ATT&CK artifact; "
+            "expected an investigation result"
+        )
+
+    mapping_result = dict(
+        map_rag_investigation(
+            investigation_result,
+            llm_client=llm_client,
+            catalog=catalog,
+            build_mapping_unit_fn=(
+                build_mapping_unit_fn
+            ),
+            retrieve_candidates_fn=(
+                retrieve_candidates_fn
+            ),
+            retrieval_version=(
+                retrieval_version
+            ),
+        )
+    )
+
+    # RAG에서는 ATT&CK v19 공식 tactic 순서를 사용한다.
+    mapping_result["kill_chain"] = (
+        build_rag_kill_chain(
+            mapping_result["techniques"],
+            catalog=catalog,
+        )
+    )
+
+    # 기존 Final Report Builder는 그대로 재사용한다.
+    final_report = build_final_report(
+        investigation_result,
+        mapping_result,
+    )
+
+    os.makedirs(
+        out_dir,
+        exist_ok=True,
+    )
+
+    stem = _output_stem(
+        mapping_result,
+        investigation_result_path,
+    )
+
+    _write_output_pair(
+        out_dir,
+        stem,
+        mapping_result,
+        final_report,
+    )
+
+    return mapping_result
 
 def _summary_line(investigation_result_path: str, mapping_result: Dict[str, Any]) -> str:
     label = mapping_result.get("incident_id") or os.path.basename(investigation_result_path)
