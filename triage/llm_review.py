@@ -90,24 +90,45 @@ def _digest(inc, by_ref=None):
 
 
 def _parse(text):
-    """관대한 JSON 파싱: 첫 '[' 부터 첫 완결 배열만 디코드(뒤에 설명·[1] 인용 붙어도 무시)."""
+    """관대한 JSON 파싱: 첫 '[' 부터 완결 배열을 디코드(뒤 설명·[1] 인용 무시).
+
+    배열이 잘려(max_tokens 초과 등) 통째로는 못 읽으면, 완결된 {..} 객체만이라도 하나씩 긁어
+    살린다(0건으로 전부 버리지 않게 — 배치 일부라도 판정 반영)."""
     i = text.find("[")
     if i == -1:
         return []
+    dec = json.JSONDecoder()
     try:
-        arr, _ = json.JSONDecoder().raw_decode(text[i:])
+        arr, _ = dec.raw_decode(text[i:])
+        if isinstance(arr, list):
+            return arr
     except ValueError:
-        return []
-    return arr if isinstance(arr, list) else []
+        pass
+    # 구제: 잘린 배열에서 완결 객체만 순서대로 추출
+    out, s = [], text[i + 1:]
+    while True:
+        j = s.find("{")
+        if j == -1:
+            break
+        try:
+            obj, end = dec.raw_decode(s[j:])
+        except ValueError:
+            break
+        if isinstance(obj, dict):
+            out.append(obj)
+        s = s[j + end:]
+    return out
 
 
 def _default_call(digests):
     """실제 Anthropic 호출. anthropic SDK + ANTHROPIC_API_KEY(.env) 사용, 한 번의 create 호출."""
     import anthropic  # 지연 import: 패키지 미설치·키 없을 때 결정론-only 로 살아남게
     client = anthropic.Anthropic()   # ANTHROPIC_API_KEY 를 SDK 가 env 에서 읽음(값 노출 없음)
+    # 사건 수에 맞춰 출력 토큰 확보 — 배치가 크면 판정 JSON 이 1024 를 넘어 잘려 파싱 실패했음
+    max_tokens = min(1024 + 256 * len(digests), 8000)
     msg = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=max_tokens,
         system=_SYSTEM,
         messages=[{"role": "user", "content": json.dumps(digests, ensure_ascii=False)}],
     )
