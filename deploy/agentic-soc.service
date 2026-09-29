@@ -1,0 +1,41 @@
+# Agentic SOC 1차 탐지 — 5분마다 agentic-soc.timer 가 한 번씩 실행하는 oneshot 서비스
+# 설치: deploy/DEPLOY.md 참고
+[Unit]
+Description=Agentic SOC detection pipeline (micro-batch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=soc
+Group=soc
+# Ubuntu 에서 auth.log·apache 로그는 adm 그룹 읽기 권한
+SupplementaryGroups=adm
+WorkingDirectory=/opt/agentic-soc
+# 로그 경로·SERVER_PUBLIC_IP·ANTHROPIC_API_KEY (값 뒤 인라인 주석 금지)
+EnvironmentFile=/etc/agentic-soc/env
+Environment=PYTHONIOENCODING=utf-8
+# /var/lib/agentic-soc 를 soc 소유로 만들어 준다(상태·결과 저장소)
+StateDirectory=agentic-soc
+ExecStart=/opt/agentic-soc/.venv/bin/python -u run_pipeline.py \
+    --since-minutes 60 \
+    --state-dir /var/lib/agentic-soc \
+    --emit-dir /var/lib/agentic-soc/incidents
+
+# 웹서버와 같은 호스트에서 돈다 — 서비스 응답성을 해치지 않게 제한
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=1G
+TimeoutStartSec=240
+
+# 권한 최소화: 로그는 읽기만, 쓰기는 StateDirectory 만
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes

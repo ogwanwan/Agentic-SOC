@@ -33,6 +33,7 @@ from tools.fetch_apache_log import fetch_apache_log      # web
 from tools.fetch_auth_log import fetch_auth_log          # auth
 from tools.fetch_network_log import fetch_network_log    # network
 from tools.fetch_audit_log import fetch_audit_log        # system
+from tools.log_sources import resolve_log_files
 from common.timeparse import normalize_iso
 
 
@@ -44,14 +45,45 @@ def _ts_key(event):
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _warn(message):
+    print("[normalize] 경고: %s" % message, file=_sys.stderr)
+
+
 def _safe(fetch_fn, path, **kwargs):
-    """도구 하나 호출. 도구/경로 없거나 파일 없으면 조용히 빈 리스트(정규화는 안 죽는다)."""
+    """도구 하나 호출. 도구/경로 없거나 파일을 못 읽으면 빈 리스트(정규화는 안 죽는다).
+
+    파일 없음은 조용히 넘기고, 권한 오류·디렉터리 경로 등 그 밖의 OSError 는 경고를 남긴다
+    (운영에서 읽기 권한 누락이 '0건'으로 묻히지 않게).
+    """
     if fetch_fn is None or not path:
         return []
     try:
         return fetch_fn(path, **kwargs)
     except FileNotFoundError:
         return []
+    except OSError as exc:
+        _warn("%s 읽기 실패(%s)" % (path, exc))
+        return []
+
+
+def _fetch_layer(layer, fetch_fn, path, time_window, include_rotated):
+    """한 계층 정규화. include_rotated 면 path 의 로테이트 형제까지 읽어 합친다."""
+    if not path:
+        return []
+    kwargs = {"time_window": time_window} if time_window else {}
+    if not include_rotated:
+        events = _safe(fetch_fn, path, **kwargs)
+    else:
+        since_dt = _ts_key({"timestamp": time_window[0]}) if time_window else None
+        files = resolve_log_files(path, since_dt=since_dt)
+        if not files and not resolve_log_files(path):
+            _warn("%s 계층 로그 파일 없음 (경로=%s)" % (layer, path))
+        events = []
+        for file_path in files:
+            events += _safe(fetch_fn, file_path, **kwargs)
+    if not events and not time_window:
+        _warn("%s 계층 이벤트 0건 (경로=%s, 파일·권한 확인)" % (layer, path))
+    return events
 
 
 def normalize_all(
@@ -60,11 +92,15 @@ def normalize_all(
     network_path=None,
     audit_path=None,
     sort=True,
+    time_window=None,
+    include_rotated=False,
 ):
     """전 계층 raw 로그 → 공통스키마 이벤트 하나의 리스트로 정규화(fan-out + merge + sort).
 
     각 경로 생략 시 .env 에서 읽는다. 특정 계층만 넘기면 그 계층만 정규화된다.
     현재 계층: web(apache) + auth + network(suricata) + system(audit).
+    time_window    : [start_iso, end_iso] UTC. 각 fetch 의 time_window 필터로 그대로 넘긴다.
+    include_rotated: True 면 로테이트 형제(base.1, base.N.gz) 중 창 시작 이후 수정된 파일도 읽는다.
     반환: list[dict] (공통스키마), sort=True면 timestamp(UTC) 오름차순.
     """
     apache_path = apache_path or os.getenv("APACHE_LOG_PATH")
@@ -73,10 +109,10 @@ def normalize_all(
     audit_path = audit_path or os.getenv("AUDIT_LOG_PATH")
 
     events = []
-    events += _safe(fetch_apache_log, apache_path)    # web
-    events += _safe(fetch_auth_log, auth_path)        # auth
-    events += _safe(fetch_network_log, network_path)  # network
-    events += _safe(fetch_audit_log, audit_path)      # system
+    events += _fetch_layer("web", fetch_apache_log, apache_path, time_window, include_rotated)
+    events += _fetch_layer("auth", fetch_auth_log, auth_path, time_window, include_rotated)
+    events += _fetch_layer("network", fetch_network_log, network_path, time_window, include_rotated)
+    events += _fetch_layer("system", fetch_audit_log, audit_path, time_window, include_rotated)
 
     if sort:
         events.sort(key=_ts_key)  # 전 계층 공통 정렬축 = timestamp(UTC)
