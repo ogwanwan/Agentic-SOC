@@ -15,12 +15,8 @@ member_count/oversized 는 점수에 쓰지 않는다("큰 것 ≠ 위험"). 최
 critical/high 격차를 벌리고, 계층/연결 가산은 밴드를 혼자 못 넘게 축소. P1=critical 앵커(≈29건),
 P2=high(≈249건), P3 이하=medium/약신호. (이전엔 P1이 271/285로 변별력 없었음)
 
-incident_key: DB upsert 의 안정 키. incident_id(멤버 해시)는 사건이 커지면 값이 바뀌어 매 틱 새 행이
-쌓이므로, entity+사유(seed reason 집합) 해시를 행 기준으로 쓴다. 같은 IP·같은 룰 반복이면 같은 key →
-update, 새 룰이 추가되면(에스컬레이션) key 가 바뀌어 새 사건. entity value 없으면 incident_id 로 대체.
+incident_key(DB upsert 안정 키)는 pipeline.state.incident_key 가 담당한다(트리아지는 안 만듦).
 """
-
-import hashlib
 
 SEVERITY_SCORE = {"critical": 50, "high": 30, "medium": 12, "low": 4}  # None → 0
 
@@ -62,20 +58,6 @@ def route(score):
     return "P4", "hold"
 
 
-def incident_key(incident):
-    """DB 행의 안정 키 = hash(entity + 정렬된 사유집합). 멤버가 늘어도 안 바뀐다.
-
-    entity value 가 없으면 병합 기준을 못 잡으므로 incident_id(멤버 해시)로 대체한다.
-    """
-    ent = incident.get("entity") or {}
-    val = ent.get("value")
-    if val is None:
-        return incident.get("incident_id")
-    reasons = sorted({s.get("reason") for s in incident.get("seeds", []) or [] if s.get("reason")})
-    raw = "%s|%s|%s" % (ent.get("type"), val, "|".join(reasons))
-    return "K-" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
-
-
 def triage(incidents):
     """Incident 리스트 → triage_score·priority·route·triage_parts 를 덧붙여 점수 내림차순 정렬.
 
@@ -86,7 +68,6 @@ def triage(incidents):
         score, parts = triage_score(inc)
         priority, dest = route(score)
         enriched = dict(inc)
-        enriched["incident_key"] = incident_key(inc)
         enriched["triage_score"] = score
         enriched["priority"] = priority
         enriched["route"] = dest
