@@ -1,13 +1,24 @@
 """RAG 기반 ATT&CK Mapping의 LLM 판단 단계."""
 
 from __future__ import annotations
-
+from copy import deepcopy
 from typing import Any, Mapping, Protocol, Sequence
 
 from .prompts import (
     build_mapping_system_prompt,
     build_mapping_user_prompt,
 )
+
+from .schema import (
+    AttackMappingEntry,
+    AttackMappingResult,
+    CandidateTechnique,
+    MappingDecision,
+    MappingUnit,
+    SelectionRejection,
+    ValidatedSelection,
+)
+
 from .schema import (
     AttackMappingEntry,
     CandidateTechnique,
@@ -24,7 +35,15 @@ from .schema import (
     SelectionRejection,
     ValidatedSelection,
 )
-from .validate import validate_decision
+
+from .validate import (
+    check_case_gate,
+    classify_evidence,
+    eligibility_index,
+    exclusions,
+    target_evidence,
+    validate_decision,
+)
 
 class JsonLLMClient(Protocol):
     """ATT&CK Mapper가 필요로 하는 최소 LLM 인터페이스."""
@@ -488,3 +507,328 @@ def build_attack_mapping_entries(
         entries.append(entry)
 
     return entries
+
+def map_investigation(
+    investigation_result: Mapping[str, Any],
+    *,
+    llm_client: JsonLLMClient,
+    catalog: Any,
+    build_mapping_unit_fn: Any,
+    retrieve_candidates_fn: Any,
+    retrieval_version: str | None = None,
+) -> AttackMappingResult:
+    """Investigation 결과 하나를 RAG ATT&CK Mapping으로 처리한다.
+
+    역할 경계:
+    - A: 사건 Gate / Evidence 분류 / Selection 검증
+    - B: Evidence → MappingUnit / Candidate Retrieval
+    - C: LLM 판단 / 결과 병합 / AttackMappingResult 구성
+
+    B 구현이 아직 없어도 build_mapping_unit_fn과
+    retrieve_candidates_fn에 테스트 대역을 주입해서
+    C 전체 흐름을 검증할 수 있다.
+    """
+
+    incident_id = None
+    investigation_id = None
+
+    if isinstance(investigation_result, Mapping):
+        raw_incident_id = investigation_result.get("incident_id")
+        raw_investigation_id = investigation_result.get(
+            "investigation_id"
+        )
+
+        if isinstance(raw_incident_id, str):
+            incident_id = raw_incident_id
+
+        if isinstance(raw_investigation_id, str):
+            investigation_id = raw_investigation_id
+
+    manifest = getattr(
+        catalog,
+        "manifest",
+        {},
+    )
+
+    if (
+        retrieval_version is None
+        and isinstance(manifest, Mapping)
+    ):
+        manifest_retrieval_version = manifest.get(
+            "retrieval_version"
+        )
+
+        if isinstance(
+            manifest_retrieval_version,
+            str,
+        ):
+            retrieval_version = (
+                manifest_retrieval_version
+            )
+
+    raw_locations = {}
+
+    if isinstance(investigation_result, Mapping):
+        value = investigation_result.get(
+            "raw_ref_locations",
+            {},
+        )
+
+        if isinstance(value, Mapping):
+            raw_locations = deepcopy(dict(value))
+
+    result: AttackMappingResult = {
+        "incident_id": incident_id,
+        "investigation_id": investigation_id,
+        "mapping_status": "error",
+        "provenance_status": None,
+        "techniques": [],
+        "unmatched_evidence_ids": [],
+        "excluded_evidence_ids": [],
+        "raw_ref_locations": raw_locations,
+        "mapping_table_version": None,
+        "errors": [],
+        "attack_version": getattr(
+            catalog,
+            "attack_version",
+            None,
+        ),
+        "retrieval_version": retrieval_version,
+        "mapping_method": "rag_llm",
+        "exclusions": [],
+        "rejected_selections": [],
+        "retrieval_trace": [],
+        "warnings": [],
+    }
+
+    # ---------------------------------------------------------
+    # 1. A: 사건 단위 Gate
+    # ---------------------------------------------------------
+
+    gate = check_case_gate(
+        investigation_result
+    )
+
+    result["provenance_status"] = (
+        gate.provenance_status
+    )
+
+    result["warnings"] = [
+        deepcopy(item)
+        for item in gate.warnings
+    ]
+
+    if not gate.proceed:
+        result["mapping_status"] = (
+            gate.mapping_status or "error"
+        )
+
+        result["errors"] = list(
+            gate.errors
+        )
+
+        return result
+
+    try:
+        # -----------------------------------------------------
+        # 2. A: Evidence 분류
+        # -----------------------------------------------------
+
+        rows = classify_evidence(
+            investigation_result
+        )
+
+        eligibility = eligibility_index(
+            rows
+        )
+
+        excluded = exclusions(
+            rows
+        )
+
+        result["exclusions"] = deepcopy(
+            excluded
+        )
+
+        result["excluded_evidence_ids"] = [
+            item["evidence_id"]
+            for item in excluded
+        ]
+
+        targets = target_evidence(
+            rows
+        )
+
+        validated_selections: list[
+            ValidatedSelection
+        ] = []
+
+        matched_evidence_ids: set[str] = set()
+
+        contradicting = investigation_result.get(
+            "contradicting_evidence",
+            [],
+        )
+
+        if not isinstance(
+            contradicting,
+            list,
+        ):
+            contradicting = []
+
+        remaining_unknowns = (
+            investigation_result.get(
+                "remaining_unknowns",
+                [],
+            )
+        )
+
+        if not isinstance(
+            remaining_unknowns,
+            list,
+        ):
+            remaining_unknowns = []
+
+        # -----------------------------------------------------
+        # 3. Target Evidence 하나씩 처리
+        # -----------------------------------------------------
+
+        for row in targets:
+            # B 역할:
+            # Evidence → MappingUnit
+            unit = build_mapping_unit_fn(
+                row.evidence
+            )
+
+            if not isinstance(
+                unit,
+                MappingUnit,
+            ):
+                raise TypeError(
+                    "build_mapping_unit_fn must return "
+                    "MappingUnit"
+                )
+
+            # B 역할:
+            # MappingUnit → Candidate 최대 10개
+            candidates = list(
+                retrieve_candidates_fn(
+                    unit,
+                    catalog,
+                    limit=10,
+                )
+            )
+
+            if len(candidates) > 10:
+                raise ValueError(
+                    "retriever returned more than "
+                    "10 candidates"
+                )
+
+            if any(
+                not isinstance(
+                    candidate,
+                    CandidateTechnique,
+                )
+                for candidate in candidates
+            ):
+                raise TypeError(
+                    "retrieve_candidates_fn must "
+                    "return CandidateTechnique objects"
+                )
+
+            # P0 최소 Retrieval Trace
+            result["retrieval_trace"].append(
+                {
+                    "mapping_unit_id": (
+                        unit.mapping_unit_id
+                    ),
+                    "candidate_ids": [
+                        candidate.technique_id
+                        for candidate in candidates
+                    ],
+                }
+            )
+
+            # C LLM + A Validator
+            accepted, rejected = (
+                judge_and_validate_mapping_unit(
+                    llm_client=llm_client,
+                    mapping_unit=unit,
+                    candidates=candidates,
+                    catalog=catalog,
+                    eligibility=eligibility,
+                    related_evidence=(),
+                    contradicting_evidence=(
+                        contradicting
+                    ),
+                    remaining_unknowns=(
+                        remaining_unknowns
+                    ),
+                )
+            )
+
+            result[
+                "rejected_selections"
+            ].extend(
+                deepcopy(rejected)
+            )
+
+            validated_selections.extend(
+                accepted
+            )
+
+            # 이 Evidence에서 최소 하나라도
+            # 최종 Technique이 검증되었는가?
+            if accepted:
+                matched_evidence_ids.add(
+                    row.evidence_id
+                )
+
+        # -----------------------------------------------------
+        # 4. C: 같은 Technique 병합
+        # -----------------------------------------------------
+
+        entries = build_attack_mapping_entries(
+            validated_selections,
+            catalog=catalog,
+        )
+
+        result["techniques"] = entries
+
+        # Target이었지만 최종 Technique을 얻지 못한 Evidence
+        result["unmatched_evidence_ids"] = [
+            row.evidence_id
+            for row in targets
+            if row.evidence_id
+            not in matched_evidence_ids
+        ]
+
+        # -----------------------------------------------------
+        # 5. Mapping Status
+        # -----------------------------------------------------
+
+        if not entries:
+            result["mapping_status"] = (
+                "no_techniques_matched"
+            )
+
+        elif (
+            gate.provenance_status
+            == "incomplete"
+        ):
+            result["mapping_status"] = "partial"
+
+        else:
+            result["mapping_status"] = "mapped"
+
+    except Exception as exc:
+        # 기술적 실패만 errors에 기록한다.
+        # Selection 거부는 위의
+        # rejected_selections에 들어간다.
+        result["mapping_status"] = "error"
+        result["errors"].append(
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    return result
