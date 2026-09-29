@@ -14,6 +14,8 @@ member_count/oversized 는 점수에 쓰지 않는다("큰 것 ≠ 위험"). 최
 가중치·경계는 실 EC2 로그 285사건 score 분포로 튜닝(2026-09-26): 심각도가 밴드를 지배하도록
 critical/high 격차를 벌리고, 계층/연결 가산은 밴드를 혼자 못 넘게 축소. P1=critical 앵커(≈29건),
 P2=high(≈249건), P3 이하=medium/약신호. (이전엔 P1이 271/285로 변별력 없었음)
+
+incident_key(DB upsert 안정 키)는 pipeline.state.incident_key 가 담당한다(트리아지는 안 만듦).
 """
 
 SEVERITY_SCORE = {"critical": 50, "high": 30, "medium": 12, "low": 4}  # None → 0

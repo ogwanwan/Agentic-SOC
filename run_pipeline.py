@@ -142,8 +142,9 @@ def run(args, now) -> int:
             kinds = Counter(kind for kind, _ in emits)
             print(f"[state] 내보낼 사건 {len(emits)}건(new {kinds.get('new', 0)}, update {kinds.get('update', 0)}), "
                   f"추적 중 {len(new_state['incidents'])}건")
-            # LLM 호출은 DB 트랜잭션 밖에서 — 네트워크를 기다리는 동안 DB 를 잠그지 않는다
-            emit_incidents = llm_review([inc for _, inc in emits])
+            # LLM 호출은 DB 트랜잭션 밖에서 — 네트워크를 기다리는 동안 DB 를 잠그지 않는다.
+            # events 를 함께 넘겨 LLM 이 실제 명령어(evidence)로 오탐을 판별하게 한다.
+            emit_incidents = llm_review([inc for _, inc in emits], events=events)
             reviewed = sum(1 for i in emit_incidents if "llm_reason" in i)
             print(f"[triage] LLM 재검토 {reviewed}건(내보낼 사건 중 P1~P2)")
             lap("triage")
@@ -160,7 +161,8 @@ def run(args, now) -> int:
     else:
         # ④-b 트리아지 뒷단(LLM): 상위(P1~P2) 사건을 경량 LLM(Claude Haiku)으로 재검토 —
         # 점수/정렬 불변, llm_investigate·llm_reason 만 부착. 키 없으면 결정론 결과만 사용(안 죽음).
-        incidents = llm_review(incidents)
+        # events 로 실제 명령어(evidence) 를 함께 넘겨 오탐 판별을 정밀화.
+        incidents = llm_review(incidents, events=events)
         reviewed = sum(1 for i in incidents if "llm_reason" in i)
         print(f"[triage] LLM 재검토 {reviewed}건(P1~P2 상위)")
 
