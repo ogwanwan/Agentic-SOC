@@ -1,0 +1,183 @@
+"""fetch_web_log 실제 구현 - 에이전트(LLM)가 조사 중 호출하는 웹(apache access) 로그 조회 도구.
+
+누가 부르나
+  [31] agent/tools/registry.py ToolRegistry.call("fetch_web_log", args) ← agent/loop.py [30]
+       (LLM이 이 도구를 골랐을 때)
+  agent/tools/real/fetch_event_logs.py (사건 구간 다계층 조회 때 이 함수를 직접 부른다)
+
+무엇을 부르나
+  [33] agent/tools/log_source.py load_window_events("web", ...)  apache access.log 읽기 + 정규화 + 시간창 필터
+       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_apache_log.py
+
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
+
+역할 분담:
+  - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
+      → normalizer_adapter.normalize_log_documents()
+      → primary_detection/normalizer/tools/fetch_apache_log.py (1차 탐지팀 공통 정규화 함수)
+    에이전트 자체 파서(구 parsers/nginx_json_parser.py, apache_parser.py)는 쓰지 않는다.
+  - 이 파일(에이전트 도구): 도구 인자 해석, 필터, limit/offset 페이지네이션,
+    LLM에게 돌려줄 summary/반환 형식.
+
+왜 nginx가 아니라 apache인가: EC2 실측으로 nginx(리버스 프록시)와
+apache(백엔드, 127.0.0.1:8080)가 같이 떠 있고, apache access.log가 1차 탐지팀
+fetch_apache_log.py가 기대하는 포맷과 컬럼 단위로 일치했다. apache 스키마는 "path"
+필드를 쓰고 client IP(%a)가 이미 실제 클라이언트라 xff 보정이 필요 없다.
+
+필터 의미:
+  - path: 부분 문자열 일치
+  - method: 대소문자 무시 일치, status_code: 정수 일치
+  - exclude_self: 서버 자신의 공인 IP(1차 탐지팀 SERVER_PUBLIC_IP)에서 온 요청 제외
+
+필요 환경변수: APACHE_LOG_PATH (읽을 apache access.log 경로)
+
+summary 끝의 [조회 구간 전체 집계]는 페이지와 무관하게 조건에 맞는 전체 요청 기준
+메서드·상태코드 계열·서로 다른 경로 수·상위 경로·User-Agent를 준다(원칙 9에 그대로 쓰도록).
+EC2 main.py(INC-xmlrpc-flood)에서 LLM이 records를 직접 세고 해석하다 판정이
+흔들려, auth와 같은 방식으로 세는 기준을 코드로 고정했다.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+from typing import Any, Dict, List
+
+from ..log_source import filtered_out_hint, load_window_events, pagination
+
+TOP_N = 5
+MAX_UA_CHARS = 80
+# 원칙 9 판정 기준(investigation.yaml과 같은 값). LLM이 기준을 알고도 User-Agent·2xx를 근거로
+# 판정을 바꾸는 사례가 로컬 xmlrpc 재현에서 반복돼, SSH 실패 횟수처럼 충족 여부를
+# 코드가 계산해 summary에 적는다.
+AUTH_ENDPOINT_RE = re.compile(r"(xmlrpc\.php|wp-login\.php|/login|/signin|/user/login|/admin/login)", re.IGNORECASE)
+AUTH_POST_THRESHOLD = 10
+SCAN_PATH_THRESHOLD = 20
+
+
+def _status_class(status: Any) -> str:
+    return f"{status // 100}xx" if isinstance(status, int) else "unknown"
+
+
+def _top(counter: Counter) -> str:
+    return ", ".join(f"{key} {count}건" for key, count in counter.most_common(TOP_N)) or "-"
+
+
+def _request_stats(records: List[Dict[str, Any]]) -> str:
+    methods = Counter(r.get("method") or "-" for r in records)
+    statuses = Counter(_status_class(r.get("status")) for r in records)
+    paths = Counter(r.get("path") or "-" for r in records)
+    # 브라우저 User-Agent는 200자 가까이 돼 summary가 길어진다 — 앞부분만으로 구분에 충분
+    agents = Counter((r.get("user_agent") or "-")[:MAX_UA_CHARS] for r in records)
+    src_ips = {r.get("src_ip") for r in records if r.get("src_ip")}
+    times = sorted(r["timestamp"] for r in records if r.get("timestamp"))
+    span = f"{times[0]}~{times[-1]}" if times else "-"
+    return (
+        f"요청 {len(records)}건(실제 기록 시각 {span}), 출발지 IP {len(src_ips)}개, "
+        f"메서드별: {_top(methods)}, 상태코드 계열별: {_top(statuses)}, "
+        f"서로 다른 경로 {len(paths)}개, 상위 경로: {_top(paths)}, "
+        f"User-Agent 상위: {_top(agents)} "
+        f"{_principle9_text(principle9_check(records))}"
+    )
+
+
+def principle9_check(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    """원칙 9 기준 계산. 출발지 IP가 하나일 때만(src_ip로 거른 조회) 값을 낸다.
+
+    결과는 summary 문장과 함께 반환값 "rule_checks"로도 나간다. loop.py는 이 값으로
+    "기준 충족인데 FALSE_POSITIVE" 종료를 거부한다(strict_termination).
+    """
+    src_ips = {r.get("src_ip") for r in records if r.get("src_ip")}
+    if len(src_ips) != 1:
+        return None
+    paths = {r.get("path") or "-" for r in records}
+    four_xx = sum(1 for r in records if isinstance(r.get("status"), int) and r["status"] // 100 == 4)
+    auth_posts = sum(1 for r in records if str(r.get("method") or "").upper() == "POST"
+                     and AUTH_ENDPOINT_RE.search(r.get("path") or ""))
+    return {
+        "rule": "principle_9",
+        "src_ip": next(iter(src_ips)),
+        "auth_posts": auth_posts,
+        "auth_bruteforce": auth_posts >= AUTH_POST_THRESHOLD,
+        "distinct_paths": len(paths),
+        "four_xx": four_xx,
+        "path_scan": len(paths) >= SCAN_PATH_THRESHOLD and four_xx * 2 > len(records),
+    }
+
+
+def _principle9_text(check: Dict[str, Any] | None) -> str:
+    if check is None:
+        return "[원칙 9 기준] 출발지 IP가 여러 개라 계산하지 않음 — src_ip로 거른 조회에서 확인하십시오."
+    return (
+        f"[원칙 9 기준] 인증·원격호출 엔드포인트 POST {check['auth_posts']}회 → 인증 대입 기준(POST "
+        f"{AUTH_POST_THRESHOLD}회 이상) {'충족' if check['auth_bruteforce'] else '미충족'}, "
+        f"서로 다른 경로 {check['distinct_paths']}개·4xx {check['four_xx']}건 → 경로 스캔 기준(경로 "
+        f"{SCAN_PATH_THRESHOLD}개 이상이고 4xx 과반) {'충족' if check['path_scan'] else '미충족'}. "
+        "(응답 코드·User-Agent와 무관하게 이 값으로 판정)"
+    )
+
+
+def _matches(record: Dict[str, Any], args: Dict[str, Any]) -> bool:
+    if args.get("src_ip") is not None and record.get("src_ip") != args["src_ip"]:
+        return False
+    if args.get("method") is not None and str(record.get("method") or "").upper() != str(args["method"]).upper():
+        return False
+    if args.get("path") is not None and args["path"] not in (record.get("path") or ""):
+        return False
+    if args.get("status_code") is not None and record.get("status") != int(args["status_code"]):
+        return False
+    if args.get("exclude_self"):
+        from primary_detection.normalizer.tools.fetch_apache_log import SERVER_PUBLIC_IP
+
+        if record.get("src_ip") == SERVER_PUBLIC_IP:
+            return False
+    return True
+
+
+# [32] ← registry.call() [31]에서 호출. 반환 dict는 loop.py [37]로 간다.
+def fetch_web_log(args: Dict[str, Any]) -> Dict[str, Any]:
+    host = args["host"]
+    start_time = args["start_time"]
+    end_time = args["end_time"]
+    limit, offset = pagination(args)
+
+    # [33] → log_source.load_window_events(): 파일 읽기 → [34] 1차 탐지팀 정규화 → 구간 안 이벤트
+    loaded = load_window_events("web", host, start_time, end_time)
+    # [35] 도구 인자로 거르고(_matches), 페이지로 자르고, summary·rule_checks를 만든다
+    matched: List[Dict[str, Any]] = [e for e in loaded["events"] if _matches(e, args)]
+
+    total_matched = len(matched)
+    page = matched[offset : offset + limit]
+    has_more = offset + len(page) < total_matched
+    next_offset = offset + len(page) if has_more else None
+
+    if loaded["error"] == "permission_denied":
+        summary = f"{host}의 web 로그 파일 읽기 권한이 없습니다. APACHE_LOG_PATH 권한을 확인하세요."
+    elif total_matched == 0:
+        summary = (
+            f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 web 요청을 찾지 못했습니다. "
+            "host 이름, 기간, 또는 APACHE_LOG_PATH 설정을 확인하세요."
+        ) + filtered_out_hint(len(loaded["events"]), args, ("src_ip", "method", "path", "status_code", "exclude_self"))
+    else:
+        page_desc = f"{offset}~{offset + len(page) - 1}번째" if page else "0건"
+        more_desc = f"더 있음 (next_offset={next_offset})" if has_more else "더 없음"
+        summary = (
+            f"{host}의 {start_time}~{end_time} 구간에서 조건에 맞는 web 요청 총 {total_matched}건 중 "
+            f"{page_desc} {len(page)}건 반환. ({more_desc}, method/path/status/duration_us까지 구조화, "
+            "1차 탐지팀 공통 정규화 함수 사용) "
+            f"[조회 구간 전체 집계] {_request_stats(matched)}"
+        )
+
+    return {
+        "count": len(page),
+        "summary": summary,
+        "records": page,
+        "total_matched": total_matched,
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "scanned_objects": loaded["scanned_objects"],
+        "invalid_timestamps": loaded["invalid_timestamps"],
+        "window_total": len(loaded["events"]),  # 필터 전 구간 전체 건수 — 0이면 로그 미확보
+        **({"rule_checks": [check]} if matched and (check := principle9_check(matched)) else {}),
+        **({"error": loaded["error"]} if loaded["error"] else {}),
+    }

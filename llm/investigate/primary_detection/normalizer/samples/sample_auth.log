@@ -1,0 +1,6 @@
+Sep 14 02:10:11 ip-172-31-20-15 sshd[2110]: Invalid user admin from 198.51.100.23 port 40022
+Sep 14 02:10:11 ip-172-31-20-15 sshd[2110]: Connection closed by invalid user admin 198.51.100.23 port 40022 [preauth]
+Sep 14 06:25:52 ip-172-31-20-15 sudo:   ubuntu : TTY=pts/0 ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/tail -n 50 /var/log/auth.log
+Sep 14 06:25:52 ip-172-31-20-15 sudo: pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+Sep 14 23:50:02 ip-172-31-20-15 useradd[5501]: new user: name=svcbackup, UID=1002, GID=1002, home=/home/svcbackup, shell=/bin/bash, from=none
+Sep 14 23:57:24 ip-172-31-20-15 sshd[5801]: message repeated 2 times: [ Failed password for svcbackup from 203.0.113.45 port 51230 ssh2]
