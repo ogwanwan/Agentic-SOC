@@ -35,6 +35,34 @@
 | `generate_privesc_scenario.py` | `CONSISTENCY-TEST-06` | SUID `find` 악용 → euid=0 전환 → `/etc/shadow` 열람 (network 계층 없음) | 검증 예정 | 파서 검증만 완료 |
 | `generate_persistence_scenario.py` | `CONSISTENCY-TEST-07` | authorized_keys 백도어 + crontab 등록 + 계정 생성 (audit 계층만) | 검증 예정 | 파서 검증만 완료 |
 
+위 재현성은 Gemini(`gemini-3.5-flash-lite`) 기준입니다. Claude 측정 결과는 아래 표를 보세요.
+
+### Claude 재현성 (2026-09-29)
+
+조건: `claude-sonnet-5`, effort 기본값(high), strict 관문(main.py와 같음), 커밋 `564f640`~`7ddb036` 코드,
+`python -m tests.test_consistency --runs 4 --interval 2 --seed-json <seed>`.
+
+| 사건 | 기대 판정 | 판정 일치 | severity | 조사 경로(도구) | 비고 |
+|---|---|---|---|---|---|
+| `CONSISTENCY-TEST-03` | THREAT_CONFIRMED | 4/4 | CRITICAL 4 | network→auth→audit, 4회 동일 | |
+| `CONSISTENCY-TEST-04` | THREAT_CONFIRMED | 8/8 | HIGH 8 | network→web→audit, 8회 동일 | 안전 필터 거절 2회(아래) |
+| `CONSISTENCY-TEST-05` | THREAT_CONFIRMED | 4/4 | HIGH 1·CRITICAL 3 | network→auth→audit, 4회 동일 | severity만 흔들림 |
+| `CONSISTENCY-TEST-06` | THREAT_CONFIRMED | 4/4 | HIGH 4 | audit→auth, 4회 동일 | 07과 따로 측정 |
+| `CONSISTENCY-TEST-07` | THREAT_CONFIRMED | 4/4 | CRITICAL 4 | audit→auth→network, 4회 동일 | 06과 따로 측정 |
+| 실제 트래픽 XMLRPC(POST 1~2건) | FALSE_POSITIVE | 4/4 | LOW 4 | 3~6회(web·audit 반복 횟수만 다름) | 원칙 9 기준 미달 |
+| 실제 트래픽 `/.env`+POST(두 IP 각 1건) | FALSE_POSITIVE | 4/4 | LOW 4 | 5~7회 | 원칙 9 기준 미달 |
+
+- 판정 종류는 32회 모두 기대와 일치했습니다. 흔들린 것은 05의 severity와 confidence(위협 0.90~0.97, 오탐 0.75~0.82)뿐입니다.
+- **06과 07은 사건 시각이 30분 차이라 조회 구간이 겹칩니다.** 두 시나리오를 한꺼번에 append하면 서로의 로그가 섞여
+  보이므로(도구 건수가 같게 나옴) 하나씩 append → 측정 → 원본 복구 순서로 측정했습니다.
+- 04에서 sonnet-5가 공격 로그를 사이버 공격 요청으로 오인해 거절(`stop_reason=refusal`, `category=cyber`)한 일이 8회 중 2회
+  있었습니다. 첫 번째는 대체 모델이 없던 코드라 폴백 판정(판정은 THREAT로 일치), 두 번째는 `7ddb036`의 대체 모델
+  재요청(`claude-sonnet-4-6`)으로 정상 판정되었습니다.
+- 오탐 두 건은 `sample_logs_orig`(9/22 EC2 실제 트래픽)에서 예전 seed 생성 코드(`a1e60ce`)로 만든 seed이며 로그를 append하지
+  않고 측정했습니다. 두 건 모두 같은 호스트의 무관한 관리자 활동(ubuntu `sudo tail`)을 매번 "별도 활동"으로 분리했습니다.
+- 비용은 합성 시나리오 1회 약 $0.12~0.15(시스템 프롬프트 캐시 적중), 실제 트래픽 오탐 사건은 도구 결과가 커서 그보다 큽니다.
+- 한계: 시나리오당 n=4(04만 8). 정상 관리자 sudo 같은 오탐 합성 시나리오는 아직 없습니다.
+
 기존에 프롬프트/코드로 검증한 다른 두 시나리오(`ubuntu` 계정 sudo 접근=정상,
 계정 탐색 후 로그인=애매)는 `tests/test_consistency.py`의 `SEED`를 직접 손으로 채워서
 검증했고 별도 생성 스크립트는 없습니다.
