@@ -1,12 +1,11 @@
-"""로그 읽기·정규화 공용 계층 — 수집(seed 생성)과 조사 도구가 같은 경로로 로그를 읽게 한다.
+"""로그 읽기·정규화 공용 계층 — 조사 도구들이 같은 경로로 로그를 읽게 한다.
 
 역할
-  .env의 <계층>_LOG_LOCAL_PATH 파일을 원본 그대로(파일명·줄 번호 보존) 읽고, 1차 탐지팀 공통 정규화로
+  .env의 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH) 파일을 원본 그대로(파일명·줄 번호 보존) 읽고, 1차 탐지팀 공통 정규화로
   구조화한 뒤 조회 구간 안의 이벤트만 돌려준다. 페이지네이션 인자 검사, 0건일 때 LLM에게 줄 안내문도
   여기서 만든다. 탐지 규칙이나 판정은 하지 않는다.
 
 누가 부르나
-  [8]·[9] agent/raw_log_ingestion.py         → read_documents(), normalize_documents()
   [33] agent/tools/real/fetch_*_log.py, get_process_tree.py → load_window_events(), pagination(), filtered_out_hint()
   agent/tools/real/fetch_event_logs.py        → event_time(), pagination(), query_window()
 
@@ -27,7 +26,10 @@ from .normalizer_adapter import normalize_log_documents
 from .time_utils import parse_iso
 
 SOURCE_TYPES = {"web": "apache", "auth": "auth", "audit": "auditd", "network": "suricata"}
-LOCAL_PATH_ENV = {key: f"{key.upper()}_LOG_LOCAL_PATH" for key in SOURCE_TYPES}
+# 계층별 로그 경로 환경변수. 1차 탐지(run_pipeline.py)와 같은 이름을 써서 한 서버에서 .env 하나로 함께 돈다
+# (2026-09-27 변경: 예전 이름은 WEB/AUTH/AUDIT/NETWORK_LOG_LOCAL_PATH).
+LOCAL_PATH_ENV = {"web": "APACHE_LOG_PATH", "auth": "AUTH_LOG_PATH",
+                  "audit": "AUDIT_LOG_PATH", "network": "SURICATA_LOG_PATH"}
 IP_FILTER_KEYS = {"ip", "src_ip", "dest_ip"}
 
 
@@ -38,12 +40,12 @@ class LogDocument:
 
 
 class LogPathNotConfigured(RuntimeError):
-    """`<계층>_LOG_LOCAL_PATH`가 설정되지 않음 — 설정 오류라 0건과 구분해 알린다."""
+    """계층별 로그 경로(LOCAL_PATH_ENV)가 설정되지 않음 — 설정 오류라 0건과 구분해 알린다."""
 
 
-# [8]·[33] 경유 — 로그 파일 원본 텍스트를 읽는다
+# [33] 경유 — 로그 파일 원본 텍스트를 읽는다
 def read_documents(layer: str, host: str, start: datetime, end: datetime) -> List[LogDocument]:
-    """`.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2라면 /var/log/...)을 원본 그대로 읽는다.
+    """`.env`의 계층별 로그 경로(LOCAL_PATH_ENV, EC2라면 /var/log/...) 파일을 원본 그대로 읽는다.
 
     LOG_LOCAL_HOST가 있으면 다른 host 조회를 거부한다. HOST는 여기서 쓰지 않는다 — main.py의
     수집 대상 이름이고, 합성 시나리오 seed(host=web-01)도 같은 로컬 파일을 읽어야 하기 때문이다.
@@ -51,7 +53,8 @@ def read_documents(layer: str, host: str, start: datetime, end: datetime) -> Lis
     """
     local_path = os.environ.get(LOCAL_PATH_ENV[layer])
     if not local_path:
-        raise LogPathNotConfigured(f"{LOCAL_PATH_ENV[layer]}가 설정되지 않았습니다 (.env에 {layer} 로그 경로 필요)")
+        raise LogPathNotConfigured(f"{LOCAL_PATH_ENV[layer]}가 설정되지 않았습니다 (.env에 {layer} 로그 경로 필요, "
+                                   f"예전 이름 {layer.upper()}_LOG_LOCAL_PATH에서 바뀜)")
     configured_host = os.environ.get("LOG_LOCAL_HOST")
     if configured_host and configured_host != host:
         raise ValueError(f"local host mismatch: expected {configured_host}, got {host}")
@@ -64,7 +67,7 @@ def read_documents(layer: str, host: str, start: datetime, end: datetime) -> Lis
     return [LogDocument(path.as_posix(), text)]
 
 
-# [9]·[34] → normalizer_adapter.normalize_log_documents() → 1차 탐지팀 정규화, 결과를 한 단계 펼친다
+# [34] → normalizer_adapter.normalize_log_documents() → 1차 탐지팀 정규화, 결과를 한 단계 펼친다
 def normalize_documents(layer: str, documents: Iterable[LogDocument],
                         start: datetime, end: datetime) -> List[Dict[str, Any]]:
     """Flatten the shared primary-detection schema, retaining trace metadata."""

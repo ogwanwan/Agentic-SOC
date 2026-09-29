@@ -135,3 +135,9 @@ git diff --check
 ATT&CK 분류 규칙, A 엔진의 gate·provenance 정책, 출력 JSON 스키마는 그대로 유지했습니다. `schema.py`, `reporting/final_report.py`, 공유 벤더 정규화 코드는 수정하지 않았습니다. 기존 검증 보고서도 덮어쓰지 않았습니다.
 
 이 검증은 합성 데이터와 고정 LLM 응답을 사용하는 오프라인 검증입니다. AWS·실제 LLM API 호출이나 실제 운영 탐지 정확도 평가는 포함하지 않았습니다. Python 3.10용 시간 표기 정규화는 기존 함수를 재사용했지만 실제 실행 환경은 3.14.6이며, 다른 운영체제 실행은 확인하지 않았습니다. 또한 결과 파일 두 개를 저장하는 작업 전체가 하나의 트랜잭션인 것은 아니므로, 디스크 오류나 동시 프로세스 간 저장 경쟁에서는 일부 파일만 남을 수 있습니다. 기존 파일 덮어쓰기는 배타적 생성으로 방지합니다.
+
+---
+
+**[0928 희진 기록]** 이 문서는 2026-09-26~27 Rule 매핑(`feature/investigation-attack-mapping`) 기준의 기록이라 본문을 그대로 둔다.
+지금 흐름(`python main.py <사건 파일>` → 조사 결과 저장 → Rule 매핑, 텍스트 보고서 없음)과 RAG 전환 상황은
+[AGENT_ATTACK_MAPPING_FLOW.md](AGENT_ATTACK_MAPPING_FLOW.md) 맨 아래 "0928 기록"과 [RAG A·B·C 협업 규칙](ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)을 참고.

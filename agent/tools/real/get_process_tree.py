@@ -25,7 +25,7 @@ warnings에 이런 한계를 항상 명시한다.
 구현한다 — 조사 목적(웹셸이 어떤 프로세스에서 실행됐는지 등)엔 이 정도로도
 충분하고, boot_id 같은 정보는 공통스키마에 애초에 없다.
 
-필요 환경변수: AUDIT_LOG_LOCAL_PATH (fetch_audit_log.py와 공유)
+필요 환경변수: AUDIT_LOG_PATH (fetch_audit_log.py와 공유)
 """
 
 from __future__ import annotations
@@ -157,12 +157,12 @@ def get_process_tree(args: Dict[str, Any]) -> Dict[str, Any]:
     flat_events = loaded["events"]
 
     if loaded["error"] == "permission_denied":
-        summary = f"{host}의 audit 로그 파일 읽기 권한이 없습니다. AUDIT_LOG_LOCAL_PATH 권한을 확인하세요."
+        summary = f"{host}의 audit 로그 파일 읽기 권한이 없습니다. AUDIT_LOG_PATH 권한을 확인하세요."
         return {"count": 0, "summary": summary, "records": [], "error": loaded["error"]}
     if not flat_events:
         summary = (
             f"{host}의 {start_time}~{end_time} 구간에서 audit 데이터를 찾지 못했습니다. "
-            "host 이름, 기간, 또는 AUDIT_LOG_LOCAL_PATH 설정을 확인하세요."
+            "host 이름, 기간, 또는 AUDIT_LOG_PATH 설정을 확인하세요."
         )
         return {"count": 0, "summary": summary, "records": [],
                 **({"error": loaded["error"]} if loaded["error"] else {})}

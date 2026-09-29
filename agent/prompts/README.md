@@ -20,10 +20,6 @@ agent/prompts/
 전체를 열어야 하는 게 불편했습니다. 내용(yaml)과 조립 로직(py)을 분리해서,
 비개발자도 `investigation.yaml`만 보고 원칙 문구를 수정할 수 있게 했습니다.
 
-**`agent/seed_prompts.py`(seed 생성용 프롬프트)는 이 리팩터링 대상이 아닙니다.**
-1차 탐지가 확정되면 이 코드베이스에서 통째로 빠질 예정이라, 지금 같이 옮기면
-이중 작업이 됩니다.
-
 ## `investigation.yaml`의 섹션
 
 | 섹션 | 내용 |

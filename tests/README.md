@@ -27,37 +27,19 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 
 | 파일 | 확인 내용 |
 | --- | --- |
-| `test_abcd_pipeline.py` | 실제 수집 → seed 생성·검증 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 가짜 참조 거부, 환경변수 복원 |
-| `test_cd_normalizer_integration.py` | A의 벤더 직접 호출과 입력 수집/B 개별 도구/C 사건 조회 결과 비교. audit 분할 객체, gzip, 원본 위치·모호성 |
+| `test_abcd_pipeline.py` | 1차 탐지 형식 Incident 입력 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 가짜 증거 참조 incomplete, 환경변수 복원 |
+| `test_cd_normalizer_integration.py` | A의 벤더 직접 호출과 B 개별 도구/C 사건 조회 결과 비교. audit 분할 객체, gzip, 원본 위치·모호성 |
 | `test_normalizer_parity.py` | 기존 A 어댑터 API와 벤더 결과 비교. `_run()`을 위 통합 테스트에서 호출하므로 전체 pytest에도 포함 |
 | `test_event_window.py` | C의 시간 양끝·시간대·연도 경계·필터·전역 페이지·입력 오류·파일 누락/권한 |
 | `test_provenance.py` | D의 seed/지지·반박 증거/JSON·텍스트 참조 유지, audit 여러 줄, 미등록 참조, 도구 실패 이후 참조 유지, "조회 0건" 증거의 `empty_result_call` 확인(성공한 0건 호출만 인정) |
 | `test_fetch_*_log.py`, `test_get_process_tree.py` | B의 계층별 필터와 프로세스 연결 |
-| `test_raw_log_ingestion.py`, `test_seed_generation.py` | 로그 수집과 사건 후보 우선순위 |
-| `test_pipeline.py` | 여러 seed가 우선순위대로 조사에 전달되는지 검사 |
+| `test_incident_input.py` | 1차 탐지 Incident(실제 출력 `fixtures/primary_detection_incidents.jsonl`) → 조사 루프 입력 변환, 사건 파일 형식(JSONL·배열·객체) |
+| `test_pipeline.py` | 사건 파일의 사건들이 받은 순서대로 조사되고 탐지 근거 참조가 결과까지 이어지는지 |
 | `test_loop.py` | 종료 조건·중복 호출 방지·최대 호출 수·도구 오류 처리 |
-| `test_attack_mapping_cli.py` | ATT&CK 결과 저장, 같은 사건의 여러 조사·반복 실행 보존, 비객체 JSON 뒤의 배치 처리, 출력 폴더 이탈·파일명 충돌 방지 |
-| `test_attack_mapping_killchain.py` | 공격 단계 우선 정렬, UTC 환산 순서·대표 시각, 동일 시각의 안정 정렬, 원래 시각·입력 보존 |
-| `test_attack_mapping_e2e.py` | ATT&CK 매핑 → Kill Chain → CLI 저장 → 최종 보고서 연결 |
-| `test_main_attack_mapping.py` | `main.py`가 저장한 조사 결과 JSON(`report.py` 형식)으로 바로 매핑·최종 보고서 저장, FALSE_POSITIVE 처리, 재조사 파일 보존, 매핑 실패 시 조사 계속, 확인된 0건 증거가 판정 문구 매칭을 막지 않음 |
-| `test_attack_mapping_review_regressions.py` | 실제 Catalog의 명령어 대소문자·부정/도움말·C2 조건, CP949/콘솔 장애·깊은 JSON·BOM·대문자 확장자, 생성물 재입력 차단, 저장 장애 정리·동시 저장 재시도 |
-
-ATT&CK 저장·입력·시간대 회귀 사례의 발생 원인과 수정 전후 결과는
-[버그 수정 보고서](../docs/ATTACK_MAPPING_BUGFIX_REPORT_20260926.md)를 참고하세요.
-후속 점검에서 발견한 매핑 오분류·배치 처리 문제의 수정은
-[추가 수정 보고서](../docs/ATTACK_MAPPING_FIX_REPORT_20260927.md)에 정리했습니다.
-실제 Catalog·조사 출력 형식·CLI를 연결한 검증 자료는 다음 명령으로 새 폴더에 생성할 수 있습니다.
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.verify_attack_mapping_abc
-```
-
-이 명령은 관련/전체 오프라인 pytest와 ABCD 데모를 포함합니다. `--out-dir`을 지정하면
-아직 존재하지 않는 경로를 사용해야 하며, 검사 실패 시 종료 코드 1을 반환합니다.
 
 `test_abcd_pipeline.py`는 네트워크 연결을 차단한 상태에서 실행합니다. LLM 응답만
 고정해 같은 순서로 조사하도록 하고, 로그 처리 함수나 조사 도구의 결과를 성공값으로
-대체하지 않습니다. 도구 테스트는 `tests/_log_files.py`로 임시 로그 파일을 만들어 `<계층>_LOG_LOCAL_PATH`로 지정합니다(S3 읽기 코드와 S3 모사 테스트는 삭제됨).
+대체하지 않습니다. 도구 테스트는 `tests/_log_files.py`로 임시 로그 파일을 만들어 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH`)로 지정합니다(S3 읽기 코드와 S3 모사 테스트는 삭제됨).
 
 ## 실제 LLM 평가와의 차이
 

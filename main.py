@@ -1,35 +1,42 @@
-"""조사 에이전트 실행 진입점 — `python main.py`.
+"""조사 에이전트 실행 진입점 — `python main.py <사건 파일>`.
 
 역할
-  .env 설정을 읽고, 도구 레지스트리와 LLM 클라이언트를 만든 뒤 전체 조사 파이프라인
-  (로그 수집 → 조사할 사건(seed) 고르기 → 사건별 조사 → 보고서)을 한 번 실행한다.
-  결과는 콘솔에 텍스트 보고서로 보여 주고, 원본 JSON은 results/investigation_agent/에 저장한다.
+  1차 탐지가 넘긴 사건(Incident) 파일을 읽고, 도구 레지스트리와 LLM 클라이언트를 만든 뒤
+  사건마다 조사를 끝까지 실행한다(사건 파일 읽기 → 사건별 조사 → 결과 JSON → ATT&CK 매핑).
+  결과 JSON은 results/investigation_agent/에 저장하고, 저장한 파일로 바로 ATT&CK 매핑을 돌린다.
+  콘솔에는 저장한 파일 경로와 사건별 매핑 상태 한 줄만 보여 준다.
+  사건을 찾고 고르는 일(로그 수집·탐지·사건 묶기·우선순위)은 1차 탐지가 한다.
 
 누가 부르나
-  사람이 직접 실행한다 (EC2: `python3 main.py`).
+  사람이 직접 실행한다 (EC2: `python3 main.py <사건 파일>`).
 
 무엇을 부르나
   [2] agent/tools/registry.py   build_default_registry()   조사 도구 목록 만들기
   [3] agent/gemini_client.py    GeminiClient()             LLM 클라이언트 (LLM_PROVIDER=anthropic이면 claude_client.py)
-  [4] agent/pipeline.py         run_investigation_pipeline() 전체 파이프라인 실행
-  [45] agent/report.py          format_text_report()       JSON → 사람이 읽는 텍스트 보고서
+  [4] agent/incident_input.py   load_incidents()           사건 파일 읽기 (JSON 객체·배열 또는 JSONL)
+  [5] agent/pipeline.py         run_investigation_pipeline() 사건별 조사
+  [45] main.py                  save_investigation_result() 결과 JSON 저장
   [46] attack_mapping/cli.py    process_file()             저장된 조사 JSON → ATT&CK 매핑·Kill Chain·최종 보고서
 
 실행 준비
   1. `pip install -r requirements.txt`
   2. .env에 GEMINI_API_KEY(또는 LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY)
-  3. .env에 계층별 로그 파일 경로(WEB/AUTH/AUDIT/NETWORK_LOG_LOCAL_PATH)와 HOST(수집 서버 이름)
-     — EC2라면 /var/log/... 경로 (.env.example 참고)
+  3. .env에 계층별 로그 파일 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)와 HOST(수집 서버 이름)
+     — EC2라면 /var/log/... 경로 (.env.example 참고). 조사 도구가 원본 로그를 다시 읽을 때 쓴다.
+  4. 사건 파일: 1차 탐지 출력(한 줄에 Incident 한 건인 JSONL) 또는 직접 작성한 사건 JSON
 
 결과 저장
-  텍스트 보고서는 따로 저장하지 않는다. format_text_report()가 JSON으로 언제든 다시 만들 수
-  있어서 JSON만 "원본"으로 results/investigation_agent/<investigation_id>_<UTC시각>.json에 보관한다.
+  사건마다 results/investigation_agent/<investigation_id>_<UTC시각>.json에 보관한다.
   저장 직후 그 파일로 ATT&CK 매핑을 돌려 results/attack_mapping/에
   <incident_id>_attack_mapping.json과 <incident_id>_final_report.json을 만든다
-  (어택 매핑 팀 CLI `python -m attack_mapping.cli`와 같은 처리, 같은 사건이면 __2, __3 …).
-  전체 동작 흐름은 docs/AGENT_FLOW.md 참고.
+  (`python -m attack_mapping.cli`와 같은 처리, 같은 사건이면 __2, __3 …).
+  매핑이 실패해도 조사 결과 JSON은 이미 저장돼 있어 CLI로 매핑만 다시 돌릴 수 있다.
+  사람이 읽는 텍스트 보고서는 만들지 않는다 — 최종 보고서(final_report.json)는 조사 결과에
+  매핑 결과를 붙인 JSON이고, 이후 대응 권고 결과도 여기에 합친다.
+  전체 동작 흐름은 docs/AGENT_FLOW.md, 매핑 연결부는 docs/AGENT_ATTACK_MAPPING_FLOW.md 참고.
 """
 
+import argparse
 import json
 import os
 from datetime import datetime, timezone
@@ -37,27 +44,16 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from agent import ClaudeClient, GeminiClient, build_default_registry, run_investigation_pipeline
-from agent.report import format_text_report
+from agent import ClaudeClient, GeminiClient, build_default_registry, load_incidents, run_investigation_pipeline
 from attack_mapping.cli import process_file
 from attack_mapping.rules import ALL_RULES
 
 load_dotenv()  # .env 파일에서 GEMINI_API_KEY / ANTHROPIC_API_KEY / HOST 등을 읽어온다
 
 RESULTS_DIR = "results"
-# 단계별 결과 폴더: 조사 결과(원본 JSON)와 ATT&CK 매핑 결과(매핑·최종 보고서)를 나눠 둔다
+# 단계별 결과 폴더: 이후 단계(ATT&CK 매핑 등)가 붙으면 results/ 아래에 단계별 폴더를 나란히 둔다
 INVESTIGATION_DIR = os.path.join(RESULTS_DIR, "investigation_agent")
 ATTACK_MAPPING_DIR = os.path.join(RESULTS_DIR, "attack_mapping")
-
-# 어택 매핑 결과 상태(mapping_status)를 콘솔에 보여 줄 때의 설명
-MAPPING_STATUS_TEXT = {
-    "mapped": "매핑 완료",
-    "partial": "일부 매핑 (원본 참조가 확인된 증거만 사용)",
-    "no_techniques_matched": "규칙에 맞는 기법 없음",
-    "not_applicable": "매핑 안 함 (FALSE_POSITIVE)",
-    "deferred": "매핑 보류 (INCONCLUSIVE 또는 원본 추적 불가)",
-    "error": "매핑 오류",
-}
 
 
 def build_llm_client():
@@ -97,7 +93,7 @@ def run_attack_mapping(saved_path: str, output_dir: str = ATTACK_MAPPING_DIR) ->
     메모리의 dict가 아니라 저장된 파일을 넘겨, 나중에 CLI로 다시 돌린 결과와 같게 한다.
     매핑 결과에는 "kill_chain"과 이번에 만든 파일 경로 "output_paths"가 붙는다.
     매핑이 실패해도 조사 결과는 이미 저장돼 있으므로 안내만 하고 None을 반환한다
-    (다음 사건 조사·매핑은 계속된다).
+    (다음 사건 조사·매핑은 계속된다). 지금은 Rule 매핑(ALL_RULES)이다 — RAG 매핑은 전환 중.
     """
     before = set(os.listdir(output_dir)) if os.path.isdir(output_dir) else set()
     try:
@@ -110,29 +106,30 @@ def run_attack_mapping(saved_path: str, output_dir: str = ATTACK_MAPPING_DIR) ->
     return mapping_result
 
 
-def format_attack_mapping(mapping_result: dict) -> str:
-    """매핑 결과를 콘솔용 몇 줄로 만든다: 상태, Kill Chain 순서의 기법, 저장 파일."""
+def mapping_summary(mapping_result: Optional[dict]) -> str:
+    """사건별 매핑 상태 한 줄. 자세한 내용은 매핑 결과·최종 보고서 JSON에 있다."""
+    if mapping_result is None:
+        return "ATT&CK 매핑: 실패(위 안내 참고)"
     status = mapping_result["mapping_status"]
-    lines = [f"ATT&CK Mapping: {status} — {MAPPING_STATUS_TEXT.get(status, status)}"]
     if status == "error":
-        lines.extend(f"  - {error}" for error in mapping_result["errors"])
-    for step in mapping_result.get("kill_chain", []):
-        time = f" ({step['time']})" if step["time"] else ""
-        evidence = f" ← {', '.join(step['evidence_ids'])}" if step["evidence_ids"] else ""
-        lines.append(
-            f"  {step['step']}. [{step['tactic_name']}] {step['technique_id']} "
-            f"{step['technique_name']}{time}{evidence}"
-        )
-    if mapping_result.get("excluded_evidence_ids"):
-        lines.append(f"  원본 참조 미확인으로 제외한 증거: {', '.join(mapping_result['excluded_evidence_ids'])}")
-    for path in mapping_result.get("output_paths", []):
-        lines.append(f"  [저장] {path}")
-    return "\n".join(lines)
+        return f"ATT&CK 매핑: error — {'; '.join(mapping_result['errors'])}"
+    ids = ", ".join(step["technique_id"] for step in mapping_result.get("kill_chain", []))
+    return f"ATT&CK 매핑: {status} (기법 {len(mapping_result['techniques'])}개{': ' + ids if ids else ''})"
 
 
-def main() -> None:
-    # 조사 결과·seed에 기록되는 수집 서버 이름 (EC2: `hostname` 결과)
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description="1차 탐지 사건 파일을 읽어 사건마다 조사한다.")
+    parser.add_argument("incidents", help="사건 파일 경로 (JSON 객체·배열 또는 한 줄에 한 건인 JSONL)")
+    args = parser.parse_args(argv)
+
+    # 조사 결과·사건에 기록되는 수집 서버 이름 (EC2: `hostname` 결과). 1차 탐지 Incident에는 host가 없다.
     host = os.environ.get("HOST") or "web-01"  # .env에 HOST= 로 비워 둔 경우도 기본값 사용
+
+    # [4] → agent/incident_input.py load_incidents() — 파일 형식 오류는 LLM 클라이언트를 만들기 전에 알린다
+    incidents = load_incidents(args.incidents)
+    if not incidents:
+        print(f"{args.incidents}에 조사할 사건이 없습니다.")
+        return
 
     # [2] → agent/tools/registry.py build_default_registry()
     #     agent/tools/real/ 폴더에서 "파일명 == 함수명"인 도구를 자동으로 찾아 등록한다.
@@ -141,48 +138,39 @@ def main() -> None:
     # [3] → LLM 클라이언트 생성 (위 build_llm_client: 기본 Gemini, LLM_PROVIDER=anthropic이면 Claude)
     llm_client = build_llm_client()
 
-    # [4] → agent/pipeline.py run_investigation_pipeline() — 수집·seed 생성·조사를 모두 여기서 한다
+    # [5] → agent/pipeline.py run_investigation_pipeline() — 사건을 받은 순서대로 조사한다
     # [44] ← 사건별 조사 결과(JSON dict) 리스트를 돌려받는다
     results = run_investigation_pipeline(
+        incidents,
         host=host,
         llm_client=llm_client,
         tool_registry=tool_registry,
         max_calls=8,
         confidence_threshold=0.85,
         # 도구 1개만 보고 끝나는 조사를 막는 설정 (agent/loop.py 참고)
-        network_precheck=True,      # seed에 src_ip가 있으면 network를 코드가 먼저 조회
+        network_precheck=True,      # 사건에 src_ip가 있으면 network를 코드가 먼저 조회
         strict_termination=True,    # 종료 관문 강화 + 판정이 도구 계산 기준과 어긋나면 종료 거부
     )
 
-    if not results:
-        print(f"{host}의 최근 로그에서 조사할 만한 seed 후보가 없었습니다.")
-        return
-
-    # [45] 결과 출력·저장 → agent/report.py format_text_report()로 텍스트 보고서를 만들어 출력하고,
-    #      원본 JSON은 results/investigation_agent/에 저장해 콘솔에는 파일명만 참고 자료로 보여 준다.
+    # [45] 결과 저장 → 사건마다 결과 JSON을 results/investigation_agent/에 저장한다
     # [46] 저장된 JSON으로 바로 ATT&CK 매핑 → results/attack_mapping/에 매핑 결과·최종 보고서 저장
-    saved_paths = []
+    saved = []
     mapping_paths = []
-    for i, result in enumerate(results, start=1):
+    for result in results:
         saved_path = save_investigation_result(result)
-        saved_paths.append(saved_path)
-        print(f"\n{'='*10} 조사 {i}/{len(results)} — {result['incident_id']} {'='*10}")
-        print(format_text_report(result))
-        print(f"\n[참고 자료] 원본 조사 결과 JSON: {saved_path}")
-
         mapping_result = run_attack_mapping(saved_path)
+        saved.append((saved_path, mapping_summary(mapping_result)))
         if mapping_result is not None:
-            print(f"\n{format_attack_mapping(mapping_result)}")
             mapping_paths.extend(mapping_result["output_paths"])
 
-    print(f"\n--- 저장된 조사 결과 JSON {len(saved_paths)}건 ---")
-    for path in saved_paths:
-        print(f"  {path}")
+    print(f"\n--- 저장된 조사 결과 JSON {len(saved)}건 ---")
+    for path, summary in saved:
+        print(f"  {path}\n    {summary}")
     print(f"\n--- 저장된 ATT&CK 매핑·최종 보고서 JSON {len(mapping_paths)}건 ---")
     for path in mapping_paths:
         print(f"  {path}")
 
 
-# [1] 시작점 — `python main.py`로 실행하면 main()이 불린다
+# [1] 시작점 — `python main.py <사건 파일>`로 실행하면 main()이 불린다
 if __name__ == "__main__":
     main()

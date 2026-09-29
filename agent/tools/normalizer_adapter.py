@@ -10,7 +10,7 @@
   이 파일은 파싱 로직을 갖지 않는다. 1차 탐지팀 코드는 수정하지 않는다.
 
 누가 부르나
-  [9]·[34] agent/tools/log_source.py normalize_documents()   → normalize_log_documents()
+  [34] agent/tools/log_source.py normalize_documents()   → normalize_log_documents()
   tests/test_normalizer_parity.py, scripts/verify_all_tools.py → normalize_auth/audit/web/network()
 
 무엇을 부르나
@@ -23,7 +23,7 @@
   - network(suricata) 정규화 함수는 src_ip/event_type/flow_id/signature만 필터로 지원해서, dst_ip·포트·
     프로토콜 필터는 agent/tools/real/fetch_network_log.py가 결과를 받은 뒤 거른다.
   - primary_detection/은 agent/ 밖(저장소 루트)에 두어 "우리 코드가 아님"을 분명히 했다.
-  - 로그는 .env의 <계층>_LOG_LOCAL_PATH 파일에서만 읽는다(S3 읽기는 삭제).
+  - 로그는 .env의 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH) 파일에서만 읽는다(S3 읽기는 삭제).
 """
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def _local_path(env_name: str) -> str:
 
 
 # 아래 normalize_* 4개는 계층별로 1차 탐지팀 함수를 필터 인자와 함께 직접 부르는 예전 진입점이다.
-# 조사 도구·수집은 normalize_log_documents()를 쓰고, 이 함수들은 정규화 동일성 검증
+# 조사 도구는 normalize_log_documents()를 쓰고, 이 함수들은 정규화 동일성 검증
 # (tests/test_normalizer_parity.py)과 scripts/verify_all_tools.py만 쓴다. 로컬 파일을 그대로
 # 넘기므로 raw_ref가 실제 로그 파일 이름을 가리킨다.
 
@@ -124,7 +124,7 @@ def normalize_auth(
     그대로 전달한다(이름·의미 동일, 새로 정의하지 않음).
     """
     return _normalize_auth_events(
-        _local_path("AUTH_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        _local_path("AUTH_LOG_PATH"), time_window=[start_time, end_time],
         user=user, src_ip=src_ip, event=event, result=result, year=year,
     )
 
@@ -142,7 +142,7 @@ def normalize_audit(
 ) -> List[Dict[str, Any]]:
     """1차 탐지팀 fetch_audit_log()를 그대로 호출 — 공통스키마(layer=system) 이벤트 리스트 반환."""
     return _normalize_audit_events(
-        _local_path("AUDIT_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        _local_path("AUDIT_LOG_PATH"), time_window=[start_time, end_time],
         pid=pid, ppid=ppid, key=key, session_type=session_type,
         exclude_interactive=exclude_interactive,
     )
@@ -161,12 +161,12 @@ def normalize_web(
 ) -> List[Dict[str, Any]]:
     """1차 탐지팀 fetch_apache_log()를 그대로 호출 — 공통스키마(layer=web) 이벤트 리스트 반환.
 
-    WEB_LOG_LOCAL_PATH는 apache의 access.log를 가리켜야 한다(nginx JSON 아님).
+    APACHE_LOG_PATH는 apache의 access.log를 가리켜야 한다(nginx JSON 아님).
     time_window/src_ip/path_pattern/status/method/exclude_self 는 1차 탐지팀
     fetch_apache_log()의 필터를 그대로 전달한다.
     """
     return _normalize_web_events(
-        _local_path("WEB_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        _local_path("APACHE_LOG_PATH"), time_window=[start_time, end_time],
         src_ip=src_ip, path_pattern=path_pattern, status=status,
         method=method, exclude_self=exclude_self,
     )
@@ -184,11 +184,11 @@ def normalize_network(
 ) -> List[Dict[str, Any]]:
     """1차 탐지팀 fetch_network_log()를 그대로 호출 — 공통스키마(layer=network) 이벤트 리스트 반환.
 
-    NETWORK_LOG_LOCAL_PATH는 Suricata eve.json(JSONL)을 가리킨다. time_window/src_ip/
+    SURICATA_LOG_PATH는 Suricata eve.json(JSONL)을 가리킨다. time_window/src_ip/
     event_type(http|alert)/flow_id/signature 는 1차 탐지팀 fetch_network_log()의 필터를
     그대로 전달한다. dst_ip 등 이 함수가 지원하지 않는 필터는 호출부에서 후처리로 거른다.
     """
     return _normalize_network_events(
-        _local_path("NETWORK_LOG_LOCAL_PATH"), time_window=[start_time, end_time],
+        _local_path("SURICATA_LOG_PATH"), time_window=[start_time, end_time],
         src_ip=src_ip, event_type=event_type, flow_id=flow_id, signature=signature,
     )

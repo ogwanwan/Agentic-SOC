@@ -7,10 +7,9 @@
   추측하거나, 인용하지 않은 주장에 로그를 몰래 붙이지 않는다.
 
 누가 부르나
-  [13-2] agent/seed_generation.py      references()                 seed의 evidence_refs 검증
   [18]·[24]·[37] agent/loop.py         references(), validate_citations(), observed_*()
-  [41] agent/report.py                 provenance_report()
-  agent/prompts/, agent/seed_prompts.py strip_trace_fields()        LLM에게 보여줄 사본 정리
+  [41] agent/report.py                 provenance_report(), evidence_ref_sources()
+  agent/prompts/                       strip_trace_fields()        LLM에게 보여줄 사본 정리
 
 무엇을 부르나
   없음 (표준 라이브러리만)
@@ -77,8 +76,32 @@ def observed_locations(result: Dict[str, Any]) -> Dict[str, List[str]]:
     return locations
 
 
+def evidence_ref_sources(evidence: Any, tool_calls: List[Any], seed_refs: List[str]) -> Dict[str, List[Any]]:
+    """증거가 인용한 원본 참조를 어느 도구 호출이 관측했는지 코드가 계산한다(LLM이 적지 않음).
+
+    supporting_tool_calls: 증거의 raw_refs를 결과에서 관측한 도구 호출 sequence(사전 조회 포함).
+      0건 증거는 코드가 확인한 empty_result_call.
+    seed_only_raw_refs: 1차 탐지(seed)에만 있고 어떤 도구 결과에서도 관측되지 않은 참조.
+    조사 종료 시점의 전체 호출 기준이라, 증거를 적은 뒤의 조회로 확인된 참조도 인정한다.
+    ATT&CK 매핑이 "도구로 재확인되지 않은 증거"를 tools_called와 비교해 추정하지 않게 하기 위한 값이다.
+    """
+    if not evidence.raw_refs and evidence.empty_result_call is not None:
+        return {"supporting_tool_calls": [evidence.empty_result_call], "seed_only_raw_refs": []}
+    cited = set(evidence.raw_refs)
+    tool_observed = {ref for call in tool_calls for ref in call.raw_refs}
+    return {
+        "supporting_tool_calls": sorted(call.sequence for call in tool_calls if cited & set(call.raw_refs)),
+        "seed_only_raw_refs": [ref for ref in evidence.raw_refs
+                               if ref not in tool_observed and ref in seed_refs],
+    }
+
+
 def provenance_report(state: Any) -> Dict[str, Any]:
     evidence = state.evidence + state.contradicting_evidence
+    seed_refs = references(state.seed, seed=True)
+    # seed 참조만 인용한 증거는 status를 바꾸지 않는다 — 1차 탐지가 실제 원본 줄에서 읽은 참조다. 표시만 한다.
+    seed_only = [e.evidence_id for e in evidence
+                 if evidence_ref_sources(e, state.tool_calls, seed_refs)["seed_only_raw_refs"]]
     # 코드가 "성공한 0건 조회"로 확인한 증거(empty_result_call)는 인용할 원본 줄이 없는 게 정상이다
     empty_result = [e.evidence_id for e in evidence if not e.raw_refs and e.empty_result_call is not None]
     missing = [e.evidence_id for e in evidence if not e.raw_refs and e.empty_result_call is None]
@@ -88,6 +111,7 @@ def provenance_report(state: Any) -> Dict[str, Any]:
     if issues or missing or ambiguous:
         status = "incomplete"
     return {"status": status, "raw_ref_count": len(state.raw_refs),
-            "seed_raw_refs": references(state.seed, seed=True),
+            "seed_raw_refs": seed_refs,
             "evidence_without_raw_refs": missing, "empty_result_evidence": empty_result,
+            "seed_only_evidence": seed_only,
             "ambiguous_raw_refs": ambiguous, "issues": issues}

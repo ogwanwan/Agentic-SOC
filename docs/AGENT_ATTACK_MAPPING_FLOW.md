@@ -255,3 +255,58 @@ python -m scripts.verify_attack_mapping_abc               # 어택 매핑 A/B/C 
 | 조사 프롬프트·증거 기록 규칙 | 오프라인 테스트 + 실제 LLM으로 시나리오 조사 후 매핑 결과 확인(`scenarios/README.md`) |
 | 매핑 규칙(`attack_mapping/rules/`) | `tests/test_attack_mapping_*`, `tests/test_main_attack_mapping.py`, `verify_attack_mapping_abc` |
 | provenance 규칙(`agent/loop.py`, `agent/provenance.py`) | `tests/test_provenance.py`, `tests/test_main_attack_mapping.py` |
+
+---
+
+## [0928 희진 기록] 현재 흐름 (브랜치 `integrate-attack-mapping-rag`)
+
+위 본문은 2026-09-27 `feature/investigation-attack-mapping`(`a1e60ce`) 기준 기록이라 그대로 둔다.
+그 뒤 조사 쪽이 `feature/Agentic-SOC-Investigation-Agent`(개인 `integrate-investigation`)에서 바뀌었고
+(`d802dbb`에서 매핑 삭제, `1e81525`에서 로그 수집·seed 생성 제거, `166e83f`에서 텍스트 보고서 제거),
+0928에 그 최신(`051dda7`) 위에 매핑을 되살려 다시 연결했다. 지금 실제로 도는 순서는 아래와 같다.
+
+```
+python main.py <사건 파일>              사건 파일 = 1차 탐지 Incident JSONL 또는 직접 작성한 사건 JSON
+ │
+ ├─ [2]~[4]  준비: 도구 레지스트리 · LLM 클라이언트 · agent/incident_input.py load_incidents()
+ │
+ ├─ 조사 단계 (agent/)  ── LLM 사용 ─────────────────────────────────────────────
+ │   ├─ incident_input.to_investigation_seed()   1차 탐지 Incident → 조사 입력
+ │   │                                           (src_ip·window·evidence_refs·detection 요약·incident_key)
+ │   ├─ [5] pipeline → loop                      network 사전 조회, 종료 관문 (a)~(h)
+ │   │                                           ((g) 1차 탐지 참조 계층 미조회, (h) 1차 탐지 룰별 원본 미확인 — 0927 추가)
+ │   └─ report.build_investigation_result()      결과 JSON
+ │        + 증거별 supporting_tool_calls·seed_only_raw_refs, provenance.seed_only_evidence (a30a52e)
+ │        + 최상위 incident_key·incident_snapshot (051dda7)
+ │
+ ├─ [45] save_investigation_result()  → results/investigation_agent/<investigation_id>_<UTC시각>.json
+ │
+ └─ [46] run_attack_mapping(저장 경로) → attack_mapping/cli.py process_file(경로, ALL_RULES, results/attack_mapping)
+          ── LLM 사용 안 함(Rule 매핑) ──
+          engine.map_investigation → killchain.build_kill_chain → reporting.build_final_report
+          → results/attack_mapping/<incident_id>_attack_mapping.json, _final_report.json (재조사면 __2, __3 …)
+```
+
+본문과 달라진 점:
+
+| 본문 위치 | 지금 |
+|---|---|
+| 1장 `[6]` 로그 수집, `[7]`~`[15]` seed 생성 | 없음. 사건을 찾고 고르는 일은 1차 탐지가 하고, 조사는 사건 파일을 받는다 |
+| 6장 콘솔 | 조사 텍스트 보고서와 매핑 상세 출력(`format_attack_mapping`)이 없다. 저장 경로와 사건별 한 줄만 나온다 |
+| 4장 매핑이 읽는 필드 | 그대로. 새 필드(`seed_only_raw_refs`, `supporting_tool_calls`, `incident_key`)는 Rule 엔진이 읽지 않는다. RAG 쪽 `validate.py`가 `seed_only_raw_refs`를 읽는다 |
+| 5장 매핑 단계 | 그대로(Rule 경로). RAG 전환 중이며 담당 A의 `catalog.py`·`validate.py`·`schema.py`만 들어와 있고 아직 `main.py`에서 쓰지 않는다 |
+| 사건 식별 | 매핑 결과·최종 보고서와 사건은 최상위 `incident_key`, `null`이면 `incident_id`로 잇는다(지금 Rule 경로의 파일명은 여전히 `incident_id` 기준) |
+
+콘솔 예시:
+
+```
+--- 저장된 조사 결과 JSON 1건 ---
+  results/investigation_agent/INV-INC-7d29ffde-20260928-001_20260928T101500Z.json
+    ATT&CK 매핑: mapped (기법 2개: T1059.004, T1505.003)
+
+--- 저장된 ATT&CK 매핑·최종 보고서 JSON 2건 ---
+  results/attack_mapping/INC-7d29ffde_attack_mapping.json
+  results/attack_mapping/INC-7d29ffde_final_report.json
+```
+
+관련 문서: [RAG A·B·C 협업 규칙](ATTACK_MAPPING_RAG_ABC_COLLABORATION.md), [담당 A 인계](ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md), [증거 출처 필드](EVIDENCE_REF_SOURCES.md)

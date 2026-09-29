@@ -1,6 +1,6 @@
 """테스트용 로그 파일 설치 도우미.
 
-조사 도구는 `.env`의 `<계층>_LOG_LOCAL_PATH`가 가리키는 파일만 읽는다(S3 읽기는 2026-09-25 삭제).
+조사 도구는 `.env`의 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH`)가 가리키는 파일만 읽는다(S3 읽기는 2026-09-25 삭제).
 테스트는 `{"<조각 이름>": {"<파일 이름>": bytes}}` 형태로 로그 조각을 넘기면, 계층별로 임시 폴더에
 하나의 파일로 합쳐 쓰고 해당 환경변수를 그 파일로 설정한다. 조각 이름의 `source_type=<종류>`로
 계층을 정하고(예: `raw/source_type=auditd/...`), 조각이 없으면 `layer`로 빈 파일을 만든다.
@@ -16,7 +16,8 @@ from typing import Dict, Iterable, Optional
 
 SOURCE_TO_LAYER = {"apache": "web", "auth": "auth", "auditd": "audit", "suricata": "network"}
 DEFAULT_NAME = {"web": "access.log", "auth": "auth.log", "audit": "audit.log", "network": "eve.json"}
-LOG_ENVS = tuple(f"{layer.upper()}_LOG_LOCAL_PATH" for layer in DEFAULT_NAME)
+LOG_ENV = {"web": "APACHE_LOG_PATH", "auth": "AUTH_LOG_PATH", "audit": "AUDIT_LOG_PATH", "network": "SURICATA_LOG_PATH"}
+LOG_ENVS = tuple(LOG_ENV.values())
 
 _installed_dirs = []
 
@@ -27,7 +28,7 @@ def clear_log_envs() -> None:
 
 
 def install_log_files(pieces: Dict[str, Dict[str, bytes]], layer: Optional[str] = None) -> None:
-    """조각들을 계층별 파일로 합쳐 쓰고 `<계층>_LOG_LOCAL_PATH`를 설정한다."""
+    """조각들을 계층별 파일로 합쳐 쓰고 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH`)를 설정한다."""
     by_layer: Dict[str, list] = {}
     for piece in sorted(pieces):
         match = re.search(r"source_type=([^/]+)", piece)
@@ -44,7 +45,7 @@ def install_log_files(pieces: Dict[str, Dict[str, bytes]], layer: Optional[str] 
         path = os.path.join(directory, name)
         with open(path, "wb") as f:
             f.write(data)
-        os.environ[f"{piece_layer.upper()}_LOG_LOCAL_PATH"] = path
+        os.environ[LOG_ENV[piece_layer]] = path
 
 
 def uninstall_log_files(modules: Iterable[str] = ()) -> None:

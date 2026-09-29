@@ -121,7 +121,7 @@ def test_reject_invalid_query_before_io(args):
 
 def test_missing_and_permission_errors_are_not_empty_success(tmp_path, monkeypatch):
     local_log(tmp_path, monkeypatch, "web", web_line(WINDOW[0]))
-    monkeypatch.setenv("AUTH_LOG_LOCAL_PATH", str(tmp_path / "missing.log"))
+    monkeypatch.setenv("AUTH_LOG_PATH", str(tmp_path / "missing.log"))
     result = query(layers=["web", "auth"])
     assert result["partial"] is True and result["count"] == 1
     assert result["errors"] == {"auth": "not_found"}

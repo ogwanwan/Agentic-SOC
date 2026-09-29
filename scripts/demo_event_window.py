@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.loop import InvestigationAgent
-from agent.report import format_text_report
 from agent.tools import build_default_registry
 from agent.tools.log_source import LOCAL_PATH_ENV
 
@@ -58,7 +57,6 @@ def main():
         result = InvestigationAgent(DemoInvestigator(), build_default_registry()).run(seed)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(format_text_report(result))
     print(f"\nSaved: {args.output.resolve()}")
     return result
 

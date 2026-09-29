@@ -1,31 +1,32 @@
 # Agentic-SOC — 조사 에이전트 (Investigation Agent)
 
-LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로그에서 조사할 사건(seed)을 고르고,
-사건마다 LLM이 로그 조회 도구를 골라 가며 증거를 모아 `THREAT_CONFIRMED` / `FALSE_POSITIVE` /
-`INCONCLUSIVE`로 판정하고 보고서를 만든다.
+LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 1차 탐지가 넘긴 사건(Incident)마다 LLM이 로그 조회
+도구를 골라 가며 증거를 모아 `THREAT_CONFIRMED` / `FALSE_POSITIVE` / `INCONCLUSIVE`로 판정하고 결과 JSON을 만든다.
+사건을 찾고 고르는 일(로그 수집·탐지·사건 묶기·우선순위)은 1차 탐지가 한다.
 
-이 브랜치(`feature/investigation-attack-mapping`)는 조사 에이전트에 어택 매핑 팀의 ATT&CK 매핑을 합친 통합 브랜치다.
-조사 결과가 저장되면 바로 ATT&CK 기법·Kill Chain을 붙인 최종 보고서까지 만든다. 조사 에이전트 수정도 이 브랜치에서 한다.
-
-- **전체 흐름(조사 → ATT&CK 매핑 → 최종 보고서, 두 단계 연결부)**: [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md)
-- **조사 단계 동작 흐름(파일·함수 순서, 코드 주석 `[N]` 번호 대응)**: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
+- **동작 흐름(파일·함수 순서, 코드 주석 `[N]` 번호 대응)**: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
 - **조사 프롬프트 설명(원칙별 역할·생긴 이유·코드 대응)**: [docs/PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md)
 - 변경 이력과 검증 결과: [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)
 - A·B·C·D 연결과 테스트 안내: [docs/ABCD_TEST_GUIDE.md](docs/ABCD_TEST_GUIDE.md), [docs/C_D_IMPLEMENTATION.md](docs/C_D_IMPLEMENTATION.md)
-- ATT&CK 매핑 통합 결과와 규칙 보완 요청: [docs/ATTACK_MAPPING_INTEGRATION_FEEDBACK_20260927.md](docs/ATTACK_MAPPING_INTEGRATION_FEEDBACK_20260927.md)
 - 작업 규칙: [AGENTS.md](AGENTS.md)
+
+**ATT&CK 매핑 (이 브랜치 `integrate-attack-mapping-rag`)** — `python main.py <사건 파일>`이 조사 결과 JSON을 저장한 직후
+ATT&CK 매핑(지금은 Rule 매핑)을 돌려 `results/attack_mapping/`에 매핑 결과와 최종 보고서 JSON을 만든다.
+
+- 전체 흐름(조사 → ATT&CK 매핑 → 최종 보고서): [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md) — 본문은 0927 기록, 현재 흐름은 맨 아래 "0928 기록"
+- RAG 전환과 담당 A·B·C 협업 규칙: [docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)
+- 담당 A(공식 Catalog·Schema·Validation) 인계, ATT&CK 파일 받기(`python -m scripts.fetch_attack_catalog`): [docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md](docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md)
+- 조사 결과 증거 출처 필드·사건 연결 키: [docs/EVIDENCE_REF_SOURCES.md](docs/EVIDENCE_REF_SOURCES.md)
+- 0926~0927 Rule 매핑 기록: [통합 결과·규칙 보완 요청](docs/ATTACK_MAPPING_INTEGRATION_FEEDBACK_20260927.md), [버그 수정](docs/ATTACK_MAPPING_BUGFIX_REPORT_20260926.md), [추가 점검](docs/ATTACK_MAPPING_REVIEW_20260927.md), [추가 수정](docs/ATTACK_MAPPING_FIX_REPORT_20260927.md)
 
 ## 전체 흐름
 
 ```
-로그 파일 (.env의 <계층>_LOG_LOCAL_PATH — EC2는 /var/log/...)
-  → agent/raw_log_ingestion.py   4계층(web/auth/audit/network) 파일 끝 N건을 1차 탐지팀 정규화로 구조화
-  → agent/seed_generation.py     LLM triage로 조사할 사건 후보 + 우선순위
-  → agent/pipeline.py            우선순위 순서로 사건마다 조사 루프 실행
-  → agent/loop.py                LLM 판단 → 도구 실행 → 결과 관찰 반복, 종료 관문 통과 시 종료
-  → agent/report.py              결과 JSON(results/investigation_agent/*.json) + 텍스트 보고서
-  → attack_mapping/ (어택 매핑 팀) 저장된 JSON → ATT&CK 기법·Kill Chain (LLM 호출 없음, 규칙 기반)
-  → reporting/final_report.py    조사 결과 + 매핑 결과 = 최종 보고서 (results/attack_mapping/)
+사건 파일 (1차 탐지 Incident JSONL 또는 직접 작성한 사건 JSON)
+  → agent/incident_input.py      사건 읽기 → 조사 루프 입력으로 변환 (IP·구간·탐지 근거 원본 참조·탐지 사유)
+  → agent/pipeline.py            받은 순서대로 사건마다 조사 루프 실행
+  → agent/loop.py                LLM 판단 → 도구 실행(.env의 로그 파일을 다시 읽음) → 결과 관찰 반복, 종료 관문 통과 시 종료
+  → agent/report.py              결과 JSON(results/investigation_agent/*.json)
 ```
 
 | 역할 | 쉽게 말하면 | 위치 |
@@ -39,23 +40,20 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 서버 로
 
 ```
 agent/
-  pipeline.py            전체 파이프라인 (수집 → seed → 조사)
-  raw_log_ingestion.py   seed 생성용 로그 수집
-  seed_generation.py     LLM triage (seed_prompts.py = 그 프롬프트)
+  incident_input.py      사건 파일 읽기 + 1차 탐지 Incident → 조사 루프 입력 변환
+  pipeline.py            사건별 조사 실행
   loop.py                조사 루프 + 종료 관문 + 원본 참조 검증
   models.py              조사 상태(AgentState)·증거 구조
   prompts/               조사 프롬프트 — 판정 원칙 본문은 investigation.yaml
   gemini_client.py       LLM 호출 (기본) / claude_client.py
   provenance.py          원본 참조 전달·검증
-  report.py              결과 JSON·텍스트 보고서
+  report.py              결과 JSON 조립
   tools/
     registry.py          도구 등록·실행 (real/<도구이름>.py 자동 연결)
     log_source.py        로그 파일 읽기·정규화·시간창 필터 (수집과 도구 공용)
     normalizer_adapter.py 1차 탐지팀 정규화 코드와의 연결 지점
     real/                실제 조사 도구
 primary_detection/normalizer/   1차 탐지팀 공통 정규화 코드 (수정 금지, 원본 그대로 복사)
-attack_mapping/          어택 매핑 팀 코드: 매핑 엔진·규칙(rules/)·Kill Chain·CLI
-reporting/               최종 보고서 합치기 (어택 매핑 팀 코드, 이후 대응 단계 결과도 여기서 합칠 예정)
 scenarios/               로컬 재현 시험용 합성 공격 로그 생성
 scripts/                 점검·데모 스크립트 (verify_all_tools, demo_abcd 등)
 tests/                   오프라인 테스트 (test_consistency.py = 실제 LLM 재현성 측정)
@@ -77,18 +75,16 @@ cp .env.example .env               # 키와 로그 경로를 채운다
 ```
 GEMINI_API_KEY=발급받은_키
 HOST=<수집 서버 이름, EC2는 hostname 결과>
-WEB_LOG_LOCAL_PATH=/var/log/apache2/access.log
-AUTH_LOG_LOCAL_PATH=/var/log/auth.log
-AUDIT_LOG_LOCAL_PATH=/var/log/audit/audit.log
-NETWORK_LOG_LOCAL_PATH=/var/log/suricata/eve.json
-RAW_LOG_LOCAL_MAX_LINES=50
+APACHE_LOG_PATH=/var/log/apache2/access.log
+AUTH_LOG_PATH=/var/log/auth.log
+AUDIT_LOG_PATH=/var/log/audit/audit.log
+SURICATA_LOG_PATH=/var/log/suricata/eve.json
 ```
 
 ```bash
-python main.py                                  # 전체 실행 → 보고서 출력, results/investigation_agent/에 JSON 저장 → ATT&CK 매핑(results/attack_mapping/)
-python -m attack_mapping.cli results/investigation_agent/<파일>.json  # 저장된 조사 결과만 다시 매핑 (--all-in-dir results/investigation_agent 로 일괄)
+python main.py <사건 파일>                      # 사건별 조사 → results/investigation_agent/에 JSON 저장 (콘솔에는 경로만)
+python main.py tests/fixtures/primary_detection_incidents.jsonl   # 예: 1차 탐지 샘플 출력 (로그 경로는 primary_detection/normalizer/samples/)
 python -m pytest -q                             # 오프라인 테스트 (API 키 불필요)
-python -m scripts.verify_attack_mapping_abc     # 어택 매핑 A/B/C 통합 검증
 python -m tests.test_normalizer_parity          # 1차 탐지 정규화 결과와 동일성 검증
 python -m scripts.verify_all_tools              # .env 로그 경로로 도구 일괄 점검
 python -m tests.test_consistency --runs 3 --seed-json seed.json   # 같은 seed 반복 판정 재현성 (실제 LLM)

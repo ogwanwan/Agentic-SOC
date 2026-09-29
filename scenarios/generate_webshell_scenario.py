@@ -12,7 +12,7 @@
      하지 않는 행위(php-fpm이 셸을 스폰하는 것 자체가 강한 침해 신호)
   4. network: 웹서버 -> 공격자 IP 아웃바운드 통신 + Suricata "Possible Webshell" alert
 
-.env의 *_LOG_LOCAL_PATH가 가리키는 로그 파일(에이전트 도구가 실제로 읽는 파일)에 append한다.
+.env의 *_LOG_PATH가 가리키는 로그 파일(에이전트 도구가 실제로 읽는 파일)에 append한다.
 """
 
 import json

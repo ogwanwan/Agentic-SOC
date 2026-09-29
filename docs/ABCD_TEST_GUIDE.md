@@ -1,6 +1,6 @@
 # A·B·C·D 통합 테스트와 쉬운 설명
 
-> **S3 읽기 코드는 삭제됐다.** 로그는 `.env`의 `<계층>_LOG_LOCAL_PATH` 파일(EC2는 `/var/log/...`)에서만 읽는다. 아래의 S3 객체·`s3://` 참조·S3 모사 테스트 설명은 기록으로만 남아 있고 현재 코드에는 해당하지 않는다. 현재 동작 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md).
+> **S3 읽기 코드는 삭제됐다.** 로그는 `.env`의 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH`) 파일(EC2는 `/var/log/...`)에서만 읽는다. 아래의 S3 객체·`s3://` 참조·S3 모사 테스트 설명은 기록으로만 남아 있고 현재 코드에는 해당하지 않는다. 현재 동작 흐름은 [AGENT_FLOW.md](AGENT_FLOW.md).
 
 이 문서는 `codex/merge-cd-investigation` 브랜치의 코드 기준이다.
 먼저 아래 명령으로 실행해 보고, 동작 원리가 궁금하면 뒤의 설명을 읽으면 된다.
@@ -41,7 +41,7 @@ python3 -m venv .venv
 데모의 정상 출력은 아래와 같다. 실행 환경에 따라 저장 경로는 달라진다.
 
 ```text
-[A] Normalized seed input: 4 events
+[A] Incident input: 4 detections / 4 raw references
 [B] Real investigation tools: 5 calls
 [C] Incident window query: 4 events / 2 pages
 [D] Provenance: passed / 5 raw references
@@ -49,13 +49,13 @@ LLM: scripted offline responses; threat classification not evaluated.
 Saved: .../results/investigation_agent/abcd_demo.json
 ```
 
-- **4개 이벤트:** web/auth/audit/network에서 각각 한 개씩 읽었다.
+- **탐지 4건:** 1차 탐지 Incident 형식의 데모 사건이 web/auth/audit/network 첫 이벤트를 하나씩 탐지 근거로 넘긴다.
 - **B 도구 5회:** 계층별 조회 4회와 audit 기반 프로세스 조회 1회다.
 - **C 페이지 2개:** 전체 4개 이벤트를 2개씩 나눠 조회했다. 전체 도구 호출 수는 B 5회 + C 2회 = 7회다.
 - **원본 참조 5개:** audit은 원본 2줄을 합쳐 이벤트 한 개로 만들므로 총 5줄이다.
 - **`passed`:** 원본 참조 전달·인용 검사가 통과했다. 공격 여부가 확정됐다는 뜻은 아니다.
 
-JSON에는 입력(`seed_input`), 도구별 응답(`tool_observations`), 최종 보고서(`results[0]`)가 들어 있다.
+JSON에는 입력 사건(`incident_input`), 도구별 응답(`tool_observations`), 최종 보고서(`results[0]`)가 들어 있다.
 `results[0].raw_refs`, `raw_ref_locations`, `evidence_chain`, `provenance`를 보면 원본 추적 결과를 확인할 수 있다.
 실행 시각·증거 ID·절대경로는 매 실행 또는 컴퓨터에 따라 달라질 수 있다.
 
@@ -65,12 +65,12 @@ JSON에는 입력(`seed_input`), 도구별 응답(`tool_observations`), 최종 �
 .\.venv\Scripts\python.exe -m scripts.demo_abcd --layers web --output results/investigation_agent/abcd_web_demo.json
 ```
 
-이 경우 수집 입력은 4계층 그대로이고, 사건 후보와 조사는 web만 선택한다.
+이 경우 데모 사건의 탐지 근거와 조사가 web만 포함한다.
 B 1회, C 1개 이벤트/1페이지, 원본 참조 1개가 정상이다.
 
 ## 2. A·B·C·D는 무슨 일을 하나?
 
-로그를 **사건의 원본 기록**, seed를 **조사할 사건의 메모**라고 생각하면 쉽다.
+로그를 **사건의 원본 기록**, 1차 탐지가 넘긴 Incident를 **조사할 사건의 메모**라고 생각하면 쉽다.
 
 | 역할 | 하는 일 | 예시 |
 | --- | --- | --- |
@@ -84,24 +84,20 @@ A·B·C·D를 따로 실행하는 네 개의 서버가 있는 구조는 아니�
 한 Python 파이프라인 안에서 아래처럼 연결된다.
 
 ```text
-원본 로그 파일 또는 S3 객체
-    ↓ log_source: 원본 이름과 줄 위치를 확보
-A 공통 정규화 함수: 내용을 공통 필드로 변환
-    ↓ raw_log_ingestion: 정규화된 입력 수집
-SeedGenerator: 조사할 사건 메모(seed)를 생성하고 입력 참조를 검증
-    ↓ 사건 메모의 host·window·evidence_refs 전달
+1차 탐지 Incident (entity·window·seeds[].evidence_refs)
+    ↓ incident_input: 조사 루프 입력(host·src_ip·window·evidence_refs)으로 변환
 InvestigationAgent 조사 루프
     ├─ B: 계층별 조회 / 프로세스 조회
     └─ C: 사건 시간 구간으로 여러 계층 조회
-          ↓ 두 경로 모두 log_source → A를 재사용
+          ↓ 두 경로 모두 log_source(원본 이름·줄 위치 확보) → A 공통 정규화를 재사용
 D: 조회한 원본 참조를 모으고 증거의 인용을 검증
     ↓
-최종 JSON·텍스트 보고서
+최종 JSON
 ```
 
-실제 실행에서는 LLM이 어떤 사건을 조사하고 어떤 도구를 호출할지 결정한다.
+실제 실행에서는 LLM이 어떤 도구를 호출하고 어떻게 판정할지 결정한다.
 데모에서는 그 선택만 Python의 고정 응답으로 바꿔 누구나 같은 흐름을 재현하게 했다.
-파일 읽기·정규화·조회·seed 검증·조사 루프·보고서 생성은 실제 구현을 사용한다.
+사건 변환·파일 읽기·정규화·조회·조사 루프·보고서 생성은 실제 구현을 사용한다.
 
 ## 3. 통합할 때 무엇을 바꿨나?
 
@@ -148,7 +144,7 @@ IP 등의 조건은 계층별 `filters`로 지정한다. 사건 메모의 IP를 
 `s3://버킷/객체키:줄번호`로 연결한다. audit처럼 여러 줄이 한 이벤트가 되면 모든 원본 줄을
 `raw_refs`에 보존한다. 모델이 대표 참조 한 개만 인용해도 조사 루프가 해당 그룹을 복원한다.
 
-입력에 참조가 있는데 seed가 없는 참조를 인용하면 생성 단계에서 거부한다.
+1차 탐지가 넘긴 참조는 고쳐 쓰지 않고 관측된 참조로 그대로 등록한다.
 조사 증거의 참조가 누락·미등록·모호하면 검증 결과를 `incomplete`로 표시하고
 해당 증거의 신뢰도 기여를 제외한다. 실제 보안 판정 문장의 참/거짓까지 확인하는 기능은 아니다.
 
@@ -158,16 +154,15 @@ IP 등의 조건은 계층별 `filters`로 지정한다. 사건 메모의 IP를 
 Agentic-SOC/
 ├─ primary_detection/normalizer/       A의 공통 정규화 원본(통합 때 수정하지 않음)
 ├─ agent/
-│  ├─ raw_log_ingestion.py             같은 정규화 경로로 seed 입력 수집
-│  ├─ seed_generation.py               seed 우선순위 정렬·입력 참조 확인
-│  ├─ pipeline.py                      수집 → seed → 조사 연결
+│  ├─ incident_input.py                1차 탐지 Incident → 조사 루프 입력 (0927 추가)
+│  ├─ pipeline.py                      사건별 조사 실행
 │  ├─ loop.py                          도구 호출·C 기본 인자·D 참조 누적
 │  ├─ models.py                        조사 상태와 증거에 참조 저장
 │  ├─ provenance.py                    D 참조 검증
 │  ├─ report.py                        최종 보고서에 참조·검증 결과 포함
 │  └─ tools/
 │     ├─ normalizer_adapter.py         A 호출 + 원본 위치 매핑
-│     ├─ log_source.py                 수집·조회가 공유하는 읽기/필터/페이지 처리
+│     ├─ log_source.py                 조사 도구가 공유하는 읽기/필터/페이지 처리
 │     ├─ registry.py                   실제 도구 등록 및 인자 검사
 │     └─ real/
 │        ├─ fetch_web_log.py           B 웹 조회
@@ -215,9 +210,9 @@ Agentic-SOC/
 
 1. `python -m pip install -r requirements.txt`로 운영 의존성을 설치한다.
 2. `.env.example`을 `.env`로 복사하고 선택한 모델의 API 키를 입력한다.
-3. `HOST`, `LOG_LOCAL_HOST`, 계층별 `*_LOG_LOCAL_PATH`를 내 수집 서버와 파일에 맞춘다.
+3. `HOST`, `LOG_LOCAL_HOST`, 계층별 `*_LOG_PATH`를 내 수집 서버와 파일에 맞춘다.
 4. auth가 연도 없는 syslog이면 `AUTH_LOG_YEAR`를 실제 로그 연도로 맞춘다.
-5. `python main.py`를 실행한다. 조사 결과가 있으면 `results/investigation_agent/`에 JSON이 저장되고, 이어서 ATT&CK 매핑 결과가 `results/attack_mapping/`에 저장된다.
+5. `python main.py <사건 파일>`을 실행한다(1차 탐지 Incident JSONL 또는 사건 JSON). 사건마다 `results/investigation_agent/`에 JSON이 저장된다.
 
 Windows의 복사 명령은 `Copy-Item .env.example .env`, macOS/Linux는 `cp .env.example .env`다.
 이미 `.env`가 있으면 필요한 항목만 수정한다. 키가 들어간 `.env`는 커밋하지 않는다.
@@ -227,17 +222,14 @@ Windows의 복사 명령은 `Copy-Item .env.example .env`, macOS/Linux는 `cp .e
 | `LLM_PROVIDER` | `gemini` 또는 `anthropic` |
 | `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | 선택한 모델의 실제 API 키 |
 | `HOST` / `LOG_LOCAL_HOST` | 수집 서버 이름. 웹 요청의 도메인 이름과 구분 |
-| `WEB_LOG_LOCAL_PATH` | 현재 템플릿은 존재하는 `sample_logs/sample_apache_web.log`를 사용 |
-| `AUTH_LOG_LOCAL_PATH`, `AUDIT_LOG_LOCAL_PATH`, `NETWORK_LOG_LOCAL_PATH` | 해당 원본 로그 파일 경로 |
+| `APACHE_LOG_PATH` | 현재 템플릿은 존재하는 `sample_logs/sample_apache_web.log`를 사용 |
+| `AUTH_LOG_PATH`, `AUDIT_LOG_PATH`, `SURICATA_LOG_PATH` | 해당 원본 로그 파일 경로 |
 | `AUTH_LOG_YEAR` | 연도 없는 인증 로그 해석에 사용할 실제 연도 |
-| `RAW_LOG_LOCAL_MAX_LINES` | 계층별 마지막 완성 이벤트 수. audit 여러 줄을 중간에서 자르지 않음 |
-| `RAW_LOG_LOCAL_MAX_LINES` | seed 입력으로 계층별 로그 파일 끝에서 볼 이벤트 수 |
 
-로컬 수집은 과거 샘플도 재생하도록 현재 시각 기준 필터를 생략한다. B/C 조회에는 사건 시간이
-적용되므로 내 샘플의 날짜에 맞는 seed/window가 필요하다. 직접 Python에서 도구를 호출할 때는
+B/C 조회에는 사건 시간이 적용되므로 내 샘플의 날짜에 맞는 사건 window가 필요하다. 직접 Python에서 도구를 호출할 때는
 `.env`를 자동으로 읽지 않으므로 환경변수를 지정하거나 `load_dotenv()`를 호출한다.
 
-`*_LOG_LOCAL_PATH`는 필수다(S3 읽기는 삭제됨). 경로가 비어 있으면 설정 오류로 알린다.
+`*_LOG_PATH`는 필수다(S3 읽기는 삭제됨). 경로가 비어 있으면 설정 오류로 알린다.
 객체 경로는 `raw/source_type=<apache|auth|auditd|suricata>/host=<서버>/dt=<UTC 날짜>/...`다.
 상세 호출 예시는 [C/D 구현 안내](C_D_IMPLEMENTATION.md)에 있다.
 

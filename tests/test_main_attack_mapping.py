@@ -2,6 +2,8 @@
 
 조사 결과는 agent/report.py의 build_investigation_result()로 만들어, 실제 main.py가
 저장하는 것과 같은 형식으로 어택 매핑 팀 규칙(ALL_RULES)을 통과시킨다.
+2026-09-28: main.py가 1차 탐지 사건 파일을 받고 텍스트 보고서를 만들지 않는 구조로 바뀐 뒤
+매핑 연결을 다시 붙였다. 콘솔에는 사건별 매핑 상태 한 줄(mapping_summary)만 나온다.
 """
 import json
 
@@ -45,10 +47,7 @@ def test_saved_investigation_is_mapped_into_kill_chain_and_final_report(tmp_path
     assert {k: v for k, v in report.items() if k != "attack_mapping"} == source
     assert report["attack_mapping"]["kill_chain"] == mapping["kill_chain"]
 
-    text = main.format_attack_mapping(mapping)
-    assert "ATT&CK Mapping: mapped" in text
-    assert "1. [Execution] T1059.004" in text and "2. [Persistence] T1505.003" in text
-    assert "EVID-002" in text
+    assert main.mapping_summary(mapping) == "ATT&CK 매핑: mapped (기법 2개: T1059.004, T1505.003)"
 
 
 def test_false_positive_is_saved_as_not_applicable(tmp_path):
@@ -57,7 +56,7 @@ def test_false_positive_is_saved_as_not_applicable(tmp_path):
     assert mapping["mapping_status"] == "not_applicable"
     assert mapping["kill_chain"] == []
     assert len(mapping["output_paths"]) == 2
-    assert "매핑 안 함" in main.format_attack_mapping(mapping)
+    assert main.mapping_summary(mapping) == "ATT&CK 매핑: not_applicable (기법 0개)"
 
 
 def test_reinvestigated_incident_keeps_earlier_mapping_files(tmp_path):
@@ -101,3 +100,25 @@ def test_mapping_failure_does_not_stop_main(tmp_path, capsys):
     assert main.run_attack_mapping(str(broken), str(out_dir)) is None
     assert "매핑 실패" in capsys.readouterr().out
     assert not out_dir.exists() or not list(out_dir.iterdir())
+    assert main.mapping_summary(None) == "ATT&CK 매핑: 실패(위 안내 참고)"
+
+
+def test_main_saves_investigation_then_maps_each_incident(tmp_path, monkeypatch, capsys):
+    # 사건 파일 → 조사(LLM 대신 준비된 결과) → 결과 JSON 저장 → 매핑·최종 보고서 저장까지 main() 전체
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "load_incidents", lambda path: [{"incident_id": "A"}, {"incident_id": "B"}])
+    monkeypatch.setattr(main, "build_llm_client", lambda: object())
+    monkeypatch.setattr(main, "run_investigation_pipeline", lambda incidents, **kwargs: [
+        investigation(incident_id="INC-MAIN-A"), investigation("FALSE_POSITIVE", incident_id="INC-MAIN-B")])
+
+    main.main(["incidents.jsonl"])
+
+    out = capsys.readouterr().out
+    assert "--- 저장된 조사 결과 JSON 2건 ---" in out
+    assert "ATT&CK 매핑: mapped (기법 2개: T1059.004, T1505.003)" in out
+    assert "ATT&CK 매핑: not_applicable (기법 0개)" in out
+    assert "--- 저장된 ATT&CK 매핑·최종 보고서 JSON 4건 ---" in out
+    assert len(list((tmp_path / "results" / "investigation_agent").iterdir())) == 2
+    assert sorted(p.name for p in (tmp_path / "results" / "attack_mapping").iterdir()) == [
+        "INC-MAIN-A_attack_mapping.json", "INC-MAIN-A_final_report.json",
+        "INC-MAIN-B_attack_mapping.json", "INC-MAIN-B_final_report.json"]

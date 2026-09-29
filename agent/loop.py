@@ -49,6 +49,11 @@ LOG_TOOLS = frozenset({"fetch_web_log", "fetch_auth_log", "fetch_audit_log", "fe
                        "fetch_event_logs", "get_process_tree"})
 # 로그인 성공 뒤 후속 행위를 볼 수 있는 도구 (종료 관문 (e))
 AUDIT_TOOLS = frozenset({"fetch_audit_log", "get_process_tree"})
+# 1차 탐지 탐지 계층(detection.rules[].layer, system = audit) → 그 계층 원본을 확인하는 도구 (종료 관문 (g))
+DETECTION_LAYER_TOOLS = {
+    "web": ("fetch_web_log",), "auth": ("fetch_auth_log",),
+    "audit": ("fetch_audit_log", "get_process_tree"), "network": ("fetch_network_log",),
+}
 
 
 def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -326,6 +331,13 @@ class InvestigationAgent:
           (f) audit 명령 인자에 등장한 외부 IP(state.command_external_ips)를 network로 조회하지 않음
               (fetch_network_log의 ip/src_ip/dst_ip 또는 fetch_event_logs의 filters.network).
               로그인 IP와 유출 목적지가 다른 시나리오에서 새 목적지를 "추가 조회 권장"으로만 남겼다(3/3).
+          (g) 1차 탐지가 넘긴 참조(seed detection.rules[].evidence_refs)를 도구 결과에서 관측하지 않은 채
+              증거로 인용했고, 그 참조의 계층을 도구로 한 번도 조회하지 않음(_unverified_detection_refs).
+              1차 탐지 Incident로 바꾼 첫 실제 실행(2026-09-27)에서 LLM이 detection의 명령 인자를 그대로
+              증거로 옮겨 audit을 한 번도 보지 않고 THREAT_CONFIRMED로 끝냈다.
+          (h) 1차 탐지 룰(seed detection.rules) 중 탐지 근거 참조를 도구 결과에서 하나도 관측하지 못했고,
+              unknowns에 그 룰 이름이나 참조를 남기지도 않은 룰이 있음(_unverified_detection_rules).
+              (g) 수정 뒤 재실행에서 audit은 봤지만 sudo 자식인 useradd(계정 생성) 룰 2개를 확인하지 않고 끝냈다.
         """
         attempted = {t.tool_name for t in state.tool_calls}
         queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
@@ -365,6 +377,28 @@ class InvestigationAgent:
                 + "로 조회해 경보·통신을 확인하십시오"
             )
 
+        # (g) 1차 탐지 정보는 조사 단서다. 그 참조를 인용한 증거는 해당 계층 원본을 도구로 본 뒤에만 인정한다.
+        unverified = self._unverified_detection_refs(state)
+        if self.strict_termination and unverified:
+            reasons.append(
+                "1차 탐지가 넘긴 참조를 도구로 조회하지 않고 증거로 인용함("
+                + ", ".join(f"{layer}: {', '.join(refs[:3])}" for layer, refs in unverified.items())
+                + "). detection 정보는 단서일 뿐이므로 "
+                + " / ".join(DETECTION_LAYER_TOOLS[layer][0] for layer in unverified)
+                + "로 그 원본을 조회해 raw_observations에서 확인한 뒤 판단하십시오"
+            )
+
+        # (h) 1차 탐지 룰마다 원본을 확인했거나, 확인하지 못한 사실을 unknowns에 남겼어야 한다
+        unchecked_rules = self._unverified_detection_rules(state)
+        if self.strict_termination and unchecked_rules:
+            reasons.append(
+                "1차 탐지 룰 중 탐지 근거 원본을 도구로 확인하지 않은 것이 있음: "
+                + "; ".join(unchecked_rules[:5])
+                + (f" 외 {len(unchecked_rules) - 5}개" if len(unchecked_rules) > 5 else "")
+                + ". 그 원본을 도구로 조회해 확인하거나(자식 프로세스는 fetch_audit_log ppid=<부모 pid>), "
+                "조회해도 찾을 수 없으면 unknowns에 룰 이름과 이유를 남기십시오"
+            )
+
         if termination_reason == TerminationReason.CONFIDENCE_SUFFICIENT.value:
             successful = {t.tool_name for t in chosen if t.success}
             distinct = max(len(successful), len(chosen_layers))
@@ -395,6 +429,56 @@ class InvestigationAgent:
                     + self._untried_tool_hint(attempted)
                 )
         return reasons
+
+    def _unverified_detection_refs(self, state: AgentState) -> Dict[str, list]:
+        """종료 관문 (g): 증거가 인용한 1차 탐지 참조 중, 도구 결과에서 관측되지 않았고 그 계층을
+        도구로 한 번도 조회하지 않은 것을 계층별로 돌려준다. 계층을 알 수 없는 참조(직접 작성한 사건의
+        evidence_refs)나 등록되지 않은 도구의 계층은 보지 않는다. 조회는 시도만 해도 인정한다(조건이
+        맞지 않아 원본이 안 보여도 LLM이 결과를 보고 판단한 것으로 본다)."""
+        ref_layers: Dict[str, str] = {}
+        for rule in (state.seed.get("detection") or {}).get("rules") or []:
+            layer = "audit" if rule.get("layer") == "system" else rule.get("layer")
+            for ref in rule.get("evidence_refs") or []:
+                ref_layers.setdefault(ref, layer)
+        if not ref_layers:
+            return {}
+        registered = {spec.name for spec in self.tool_registry.list_tools()}
+        attempted = {t.tool_name for t in state.tool_calls}
+        queried_layers = {layer for t in state.tool_calls for layer in t.queried_layers}
+        observed = {ref for t in state.tool_calls for ref in t.raw_refs}
+        unverified: Dict[str, list] = {}
+        for evidence in state.evidence + state.contradicting_evidence:
+            for ref in evidence.raw_refs:
+                layer = ref_layers.get(ref)
+                tools = DETECTION_LAYER_TOOLS.get(layer, ())
+                if (ref in observed or not (registered & set(tools))
+                        or attempted & set(tools) or layer in queried_layers):
+                    continue
+                if ref not in unverified.setdefault(layer, []):
+                    unverified[layer].append(ref)
+        return unverified
+
+    @staticmethod
+    def _unverified_detection_rules(state: AgentState) -> list:
+        """종료 관문 (h): 탐지 근거 참조를 도구 결과에서 하나도 관측하지 못했고 unknowns에도 언급되지 않은
+        1차 탐지 룰의 안내 문구 목록. 같은 룰 이름·참조 조합이 여러 번 탐지됐으면 한 번만 적는다."""
+        observed = {ref for t in state.tool_calls for ref in t.raw_refs}
+        unknowns = " ".join(str(u) for u in state.unknowns)
+        hints, seen = [], set()
+        for rule in (state.seed.get("detection") or {}).get("rules") or []:
+            refs = [ref for ref in rule.get("evidence_refs") or [] if isinstance(ref, str)]
+            name = rule.get("rule_name") or rule.get("reason") or "?"
+            key = (name, tuple(refs))
+            if not refs or key in seen or observed & set(refs):
+                continue
+            seen.add(key)
+            if name in unknowns or any(ref in unknowns for ref in refs):
+                continue
+            layer = "audit" if rule.get("layer") == "system" else rule.get("layer")
+            detail = rule.get("detail") or {}
+            where = ", ".join(f"{k}={detail[k]}" for k in ("pid", "ppid", "user", "src_ip") if detail.get(k) is not None)
+            hints.append(f"{name}({layer}, {refs[0]}" + (f", {where}" if where else "") + ")")
+        return hints
 
     # 거부 사유에 붙이는 "다음에 볼 도구" 안내. 예전 문구("도구 1종류만 사용됨")만으로는 LLM이
     # 무엇을 더 봐야 할지 몰라 같은 종료를 반복했다(EC2 xmlrpc 사건).
@@ -621,14 +705,22 @@ class InvestigationAgent:
                 contribution = 0.0
             # "조회 결과 0건" 증거는 인용할 원본 줄이 없다. LLM이 적은 empty_result_call이 실제로
             # 성공한 0건 조회인지 코드가 확인한 경우에만 원본 누락으로 세지 않는다(2026-09-27: 이 증거들
-            # 때문에 provenance가 incomplete가 되어 ATT&CK 매핑이 partial·판정 문구 매칭 꺼짐으로 바뀌었다).
+            # 때문에 원본 추적에 문제가 없는데도 provenance가 incomplete로 나왔다).
+            # 확인에 실패한 번호(없는 호출·실패한 호출·결과가 있던 호출)는 지어낸 참조와 같이 기여를 0으로
+            # 막는다 — 2026-09-27 실제 실행에서 호출하지 않은 fetch_auth_log의 "0건"을 없는 번호로 인용해
+            # 신뢰도를 임계값까지 채우고 FALSE_POSITIVE로 끝냈다. 번호를 아예 안 적은 경우는 복사 실수로 보고
+            # 위 raw_ref 누락과 같이 기여를 반영한다.
             empty_call = None
             if not raw_refs and not unknown_refs and ev.get("empty_result_call") is not None:
                 empty_call = _verified_empty_call(state, ev["empty_result_call"])
                 if empty_call is None:
+                    contribution = 0.0
+                    state.provenance_issues.append(
+                        {"sequence": sequence, "unverified_empty_result_call": ev["empty_result_call"]})
                     state.notes.append(f"증거 {sequence}: empty_result_call={ev['empty_result_call']!r}은 "
-                                       "성공한 0건 조회가 아니어서 확인하지 못했습니다(provenance 미완료).")
-            if not raw_refs and not unknown_refs and empty_call is None and state.raw_refs:
+                                       "성공한 0건 조회가 아니어서 신뢰도 기여를 제외했습니다(provenance 미완료).")
+            if (not raw_refs and not unknown_refs and ev.get("empty_result_call") is None
+                    and state.raw_refs):
                 state.notes.append(f"증거 {sequence}: raw_ref 인용이 없습니다(신뢰도 기여는 반영, provenance 미완료).")
             # 같은 로그를 다시 인용한 증거는 신뢰도에 두 번 반영하지 않는다. 종료 관문이 거부된 뒤 LLM이
             # 이미 기록한 사실을 새 evidence로 다시 만들어 임계값을 채우는 사례가 main.py 실행에서

@@ -137,3 +137,11 @@ python main.py
 - **조사 에이전트 작업 위치:** 조사 쪽 수정도 앞으로 이 통합 브랜치(`feature/investigation-attack-mapping`)에서 합니다. 조사 결과가 매핑 결과를 바로 바꾸기 때문에 매핑까지 같이 검증하기 위해서입니다. `feature/Agentic-SOC-Investigation-Agent`는 통합 전 기준점으로 남겨 두고 더 수정하지 않습니다.
 - **작업 기준 브랜치:** 이 통합 브랜치가 팀 레포에 올라간 뒤에는 이 브랜치를 기준으로 작업해 주시면 병합이 편합니다.
 - **파일 이름(선택):** 조사 결과는 `INV-<incident>-<날짜>-001_<UTC시각>.json`인데 매핑 결과는 `<incident_id>__N_*.json`이라 이름만으로는 짝이 안 맞습니다. 파일 안의 `investigation_id`로 연결은 됩니다. 입력 파일 이름 기준으로 바꿀지는 편하신 대로 정해 주세요.
+
+---
+
+**[0928 희진 기록]** 이 문서는 2026-09-27 기준 기록이라 본문을 그대로 둔다. 그 뒤 바뀐 점:
+- 조사 에이전트 수정은 이 통합 브랜치가 아니라 `feature/Agentic-SOC-Investigation-Agent`(개인 `integrate-investigation`)에서 한다. 매핑과 합친 브랜치는 개인 저장소 `integrate-attack-mapping-rag`(조사 `051dda7` 위에 매핑을 되살림)이다.
+- 5장의 조사 쪽 수정 이후 조사 쪽에 종료 관문 (g)(h), 증거별 출처 필드(`supporting_tool_calls`, `seed_only_raw_refs`), 최상위 `incident_key`가 추가됐다. 설명은 [EVIDENCE_REF_SOURCES.md](EVIDENCE_REF_SOURCES.md).
+- 4장의 규칙 공백(유출·Discovery·파일 삭제 등)은 Rule 보완 대신 공식 ATT&CK 전체를 검색하는 RAG 전환으로 다룬다: [RAG A·B·C 협업 규칙](ATTACK_MAPPING_RAG_ABC_COLLABORATION.md), [담당 A 인계](ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md).
+- 지금 흐름은 [AGENT_ATTACK_MAPPING_FLOW.md](AGENT_ATTACK_MAPPING_FLOW.md) 맨 아래 "0928 기록" 참고.

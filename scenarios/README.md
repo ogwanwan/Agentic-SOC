@@ -4,7 +4,7 @@
 모음입니다. 실제 EC2 서버를 건드리지 않고, `sample_logs/*.log`에 특정 공격 시나리오에
 해당하는 줄을 append하는 방식으로 동작합니다.
 
-[2026-09-24] append 대상은 `.env`의 `*_LOG_LOCAL_PATH`가 가리키는 파일입니다
+[2026-09-24] append 대상은 `.env`의 `*_LOG_PATH`가 가리키는 파일입니다
 (`_log_paths.py`, 에이전트 도구가 실제로 읽는 파일과 같음). 예전처럼 `sample_web.log`/
 `sample_network.log`에 고정으로 쓰면, `.env`가 `sample_apache_web.log`/`sample_network_recent.log`를
 가리킬 때 도구가 시나리오 로그를 전혀 보지 못했습니다. 시나리오 seed의 host는 `web-01`이며,
@@ -57,7 +57,7 @@
    넣으세요. **`src_ip`/`dest_ip` 방향을 실제 트래픽 방향과 일치시키세요.**
 6. 로그를 만든 뒤에는 **API를 호출하기 전에 반드시 도구를 직접 호출해 `count`를 확인**하세요:
    ```powershell
-   python -c "from agent.tools.real.fetch_audit_log import fetch_audit_log; import os; os.environ['AUDIT_LOG_LOCAL_PATH']='sample_logs/sample_audit.log'; r = fetch_audit_log({'host':'web-01','start_time':'...','end_time':'...'}); print(r['count'])"
+   python -c "from agent.tools.real.fetch_audit_log import fetch_audit_log; import os; os.environ['AUDIT_LOG_PATH']='sample_logs/sample_audit.log'; r = fetch_audit_log({'host':'web-01','start_time':'...','end_time':'...'}); print(r['count'])"
    ```
    이 확인 없이 바로 `tests/test_consistency.py`를 돌리면, 도구가 증거를 못 찾아서 나오는
    결과와 프롬프트/판단 로직 자체의 문제를 구분하기 어렵습니다.

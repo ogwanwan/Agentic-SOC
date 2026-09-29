@@ -5,7 +5,6 @@
 
 - 프롬프트 본문: `agent/prompts/investigation.yaml`
 - 조립 코드: `agent/prompts/__init__.py` (`build_system_prompt`, `build_user_prompt`)
-- seed 생성 프롬프트(별도): `agent/seed_prompts.py`
 
 ---
 
@@ -71,13 +70,24 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
   - "이 구간에는 로그 기록 자체가 없습니다"는 "활동 없음"이 아니라 **로그 미확보** → INCONCLUSIVE.
   - IP 평판("악성으로 알려진 IP")은 그걸 조회하는 도구가 없으면 말하지 않는다. 행위로만 판단한다.
   - 도구 결과에 없는 지명·조직명·평판을 만들어내지 않는다.
-  - seed의 `severity_hint`, `confidence_initial`은 힌트일 뿐 근거가 아니다.
+  - seed의 `severity_hint`, `confidence_initial`, `trigger_description`, `detection`(1차 탐지 룰·detail), `llm_reason`은
+    1차 탐지가 준 단서일 뿐 근거가 아니다.
+  - `detection.rules[].detail`의 명령·경로를 그대로 증거로 옮기지 않는다. 그 룰의 계층 도구로 원본을 조회해
+    records에서 확인한 뒤 그 raw_ref를 인용한다(2026-09-27).
+  - 1차 탐지 룰마다 탐지 근거 원본을 도구로 확인하고, 찾을 수 없으면 unknowns에 룰 이름과 이유를 남긴다(2026-09-27).
 
 **왜 생겼나**
 - **severity_hint 오염**: 0918에 실제 자동 생성 seed(INC-001)로 반복 실행했더니, seed의 초기 추정치가
   최종 판정을 끌고 가서 같은 증거로 재현성이 50%까지 떨어졌다. "힌트일 뿐"을 명시해 100%로 회복했다.
 - **IP 평판 지어내기**: 평판 조회 도구가 없는데 "악성 IP로 알려진"처럼 쓰는 사례를 막는다.
 - **로그 미확보**: 로그가 없는 날짜의 seed를 LLM이 "활동 없음"으로 읽고 4번 중 3번 FALSE_POSITIVE로 판정했다.
+- **1차 탐지 detail 받아 적기**: 입력을 1차 탐지 Incident로 바꾼 첫 실제 실행(Gemini, 웹셸 → 권한 상승 사건)에서
+  LLM이 `detection`의 `sh -c curl ...`, `sudo su`, `useradd ...`를 첫 턴에 그대로 증거로 적어 신뢰도 1.0을 채우고,
+  audit은 한 번도 조회하지 않은 채 THREAT_CONFIRMED로 끝냈다. 1차 탐지 참조는 관측된 참조로 등록되므로 원본
+  추적도 passed였다. 판정은 맞았지만 1차 탐지 결과를 다시 확인하지 않고 받아 적은 것이라 종료 관문 (g)로 막는다.
+- **1차 탐지 룰 일부 누락**: (g)를 넣은 뒤 재실행에서는 audit부터 제대로 조회했지만(pid=1200 → ppid=1200), sudo(pid 5320)의
+  자식인 `useradd -m -G sudo svcbackup`(pid 5501)과 auth의 계정 생성 기록은 확인하지 않고 끝냈다. 1차 탐지가 두 룰로
+  탐지한 지속성 확보 행위가 조사 결과에서 빠진 것이라 룰마다 확인(또는 unknowns 기록)을 요구하는 관문 (h)를 더했다.
 
 **코드 뒷받침**
 - 도구가 `window_total`(필터 전 구간 전체 건수)을 돌려주고, 0이면 summary에 "로그 기록 자체가 없음"을 붙인다.
@@ -87,7 +97,9 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
 
 **지시**
 - 모든 로그를 다 보지 말고, 부족한 증거에 맞는 도구만 고른다.
-- 첫 도구는 seed 단서로: 웹 단서(URI·업로드·메서드) → `fetch_web_log`, 인증 단서(SSH·로그인) → `fetch_auth_log`.
+- 첫 도구는 seed 단서(`trigger_description`, `detection.rules[].layer`)로: 웹 단서(URI·업로드·메서드) → `fetch_web_log`,
+  인증 단서(SSH·로그인) → `fetch_auth_log`, 명령 실행·프로세스·서버 파일 변경(system) → `fetch_audit_log`
+  (`detection.rules[].detail`의 pid·ppid로 조회, 2026-09-27 추가).
 - **조회 구간**: 각 계층의 첫 호출은 `query_windows` 구간을 그대로 쓴다(web ±1시간, audit -30분~+1시간,
   network ±30분, auth 24시간). 다른 구간은 두 번째 호출부터 실제 기록 시각을 근거로 바꾼다.
 - audit은 넓은 구간을 필터 없이 조회하지 않는다. 먼저 `[후속 침해 확인]` 집계를 보고, 원본이 필요하면
@@ -146,13 +158,18 @@ LLM은 매 턴 **"지금까지 알게 된 것 정리 + 다음 행동(도구 호�
 **지시**: 계층별로 따로 결론 내지 말고 한 공격 시나리오로 엮는다. 한 계층에서 얻은 IP·시간·프로세스를 다음 조회 조건으로 쓴다.
 - auth → audit: 로그인 세션의 sshd pid로 `fetch_audit_log(ppid=<pid>)` — 세션에서 실행한 명령은 그 pid의 자식이다.
 - web → audit/network: 같은 src_ip·시간대.
+- audit 프로세스 체인: 자식은 `fetch_audit_log(ppid=<부모 pid>)`. sudo·su 뒤 명령은 sudo의 자식이라 `ppid=<sudo pid>`로
+  한 단계 더 내려간다. `get_process_tree`는 조상 방향만 보여 준다(2026-09-27 추가).
 - 서버에서 외부로 나간 통신: `dst_ip=<외부 IP>` (외부 IP를 src_ip로 넣으면 아웃바운드가 안 잡힌다).
+  ip 필터에는 IP만 쓴다. 명령에 도메인만 있으면 IP 필터 없이 구간으로 조회해 http 이벤트의 hostname·dest_ip를 본다.
 
 **왜 생겼나**: "조인 엔진" 코드 없이 LLM이 계층을 연결하도록 한 설계. 0918 시나리오 비교에서 audit을
 `user=ubuntu`로 조회해 0건이 나왔는데, audit의 `user`는 실행 계정(sudo 뒤에는 root)이라 세션 명령이 빠졌다.
 
 **코드 뒷받침**: 로그인 성공이 보이는데 audit을 안 보면 종료 관문이 거부하고 사유에 `ppid=<sshd pid>`를 적어 준다.
-network 사전 조회는 방향 무관 `ip` 필터를 써서 역방향 셸도 잡는다.
+network 사전 조회는 방향 무관 `ip` 필터를 써서 역방향 셸도 잡는다. 1차 탐지 룰의 자식 프로세스 행위를 놓치면
+관문 (h)가 룰 이름과 pid/ppid를 적어 거부한다. network 도구는 ip 필터에 도메인이 오면 오류를 돌려준다(2026-09-27
+실제 실행에서 `ip="raw.githubusercontent.com"`이 조용히 0건이었다).
 
 ### 원칙 6. 권한 사용(sudo) 사건과 audit 단독 증거의 함정
 
@@ -290,16 +307,20 @@ LLM은 매 턴 이 JSON 하나로 답한다.
     따라 0건을 증거로 적고 있었다. 실제 동작에 맞춰 문장을 통일했다(2026-09-25).
   - **`empty_result_call`에 0건이었던 도구 호출의 sequence를 적는다**(2026-09-27). `loop._verified_empty_call()`이
     그 호출이 성공했고 결과가 0건인지 확인하면 원본 누락으로 세지 않는다(보고서 `[도구 호출 #N 0건 확인]`,
-    JSON `provenance.empty_result_evidence`). 실패한 호출·결과가 있던 호출·없는 번호면 지금처럼 `incomplete`.
-    신뢰도 기여(±0.05)는 확인 여부와 관계없이 그대로다.
-  - 왜: 이 증거들 때문에 `incomplete`가 되면 ATT&CK 매핑이 `partial`이 되고 판정 문구 매칭이 꺼져, 판정 문구로만
-    붙는 기법(예: XML-RPC 대입의 T1110)이 0개가 된다. 기존 결과의 `incomplete`는 전부 이 경우였다. 같은 SSH seed가
-    `incomplete`·`partial` → `passed`·`mapped`(실제 Gemini 2/2).
+    JSON `provenance.empty_result_evidence`). 실패한 호출·결과가 있던 호출·없는 번호면 `incomplete`이고
+    **신뢰도 기여도 0**이다(`provenance.issues`에 `unverified_empty_result_call`). 번호를 아예 안 적으면 기여는 반영한다.
+    호출하지 않은 도구의 결과를 evidence·reasoning에 적지 않는다.
+  - 왜(기여 0): 1차 탐지 사건 재실행(2026-09-27)에서 LLM이 호출하지 않은 fetch_auth_log에 대해 "이 IP의 인증 시도
+    없음"을 없는 호출 번호(#4)로 인용하고 reasoning에도 "추가로 수행한 auth 로그 조회"라고 적었다. 확인 실패여도
+    +0.05가 반영돼 0.80 → 0.85로 임계값을 넘었고 FALSE_POSITIVE로 종료됐다. 지어낸 참조(unknown_refs)와 같은 기준으로 막는다.
+  - 왜: 성공한 0건 조회는 원본 추적 오류가 아닌데 `incomplete`로 나와, 후속 단계(당시 연결했던 이전 ATT&CK 매핑,
+    이후 폐기)가 이 결과를 원본 미확인으로 취급했다. 기존 결과의 `incomplete`는 전부 이 경우였다. 같은 SSH seed가
+    `incomplete` → `passed`(실제 Gemini 2/2).
 - **공격 흐름의 단계는 합치지 말고 단계마다 증거 하나**(압축·전송·삭제면 3개, `sh -c`의 하위 id·whoami는 한 단계).
   **명령은 요약하지 말고 인자까지 원문 그대로** 적는다. 타임라인에만 있고 증거에 없는 행위를 만들지 않는다(2026-09-27).
-  - 왜: 유출 시나리오에서 LLM이 tar·curl·rm을 "tar 압축 및 curl 전송, 이후 삭제" 한 증거로 요약하자 ATT&CK 매핑이
-    T1560까지 놓쳐 기법 0개가 됐고, `rm -f`는 타임라인에만 있었다. 매핑은 증거 문장만 본다. 수정 후 3/3 단계별 증거·
-    명령 원문·T1560 매핑.
+  - 왜: 유출 시나리오에서 LLM이 tar·curl·rm을 "tar 압축 및 curl 전송, 이후 삭제" 한 증거로 요약해 단계별 행위와
+    명령 인자가 사라졌고, `rm -f`는 타임라인에만 있었다. 후속 단계(ATT&CK 매핑 등)는 증거 문장만 본다. 수정 후 3/3
+    단계별 증거·명령 원문.
 - `contradicting`은 "현재 주요 가설을 약화시키는가"다. "정상이었다"가 자동으로 반박은 아니다(가설이 "정상 관리 행위"면 지지).
 
 ### 신뢰도 산정 (confidence_contribution)
@@ -328,6 +349,7 @@ LLM은 매 턴 이 JSON 하나로 답한다.
 |---|---|---|---|
 | 1 로그 미확보 | 원칙 1 | 도구 `window_total`, `log_source.filtered_out_hint()` | `loop._verdict_conflicts()` |
 | 2 조회 구간 | 원칙 2 | `prompts.layer_query_windows()` | — |
+| 1 1차 탐지 단서 확인 | 원칙 1·2·4 | `incident_input.to_investigation_seed()`(detection 요약) | `_termination_rejections()` (g) `_unverified_detection_refs()`, (h) `_unverified_detection_rules()` |
 | 4 종료 조건·사전 조회 | 원칙 4 | `loop.network_precheck_args()`, `fetch_audit_log.command_external_ips()` | `loop._termination_rejections()` (a)–(d), (f) |
 | 5 로그인 후 audit | 원칙 5 | — | `_termination_rejections()` (e) |
 | 7 SSH | 원칙 7 | `fetch_auth_log.principle7_check()` | `_verdict_conflicts()`, `_rule_determined_verdict()` |
@@ -339,28 +361,23 @@ LLM은 매 턴 이 JSON 하나로 답한다.
 
 ---
 
-## 8. seed 생성 프롬프트 (`agent/seed_prompts.py`) — 참고
-
-조사 프롬프트와 별개로, 로그 더미에서 조사할 사건을 고르는 경량 triage용 프롬프트다.
-1차 탐지팀이 seed를 만들어 주게 되면 빠질 예정이라 yaml로 옮기지 않았다.
-
-| 원칙 | 내용 |
-|---|---|
-| 1 | 로그에 실제로 나타난 내용만 근거로 |
-| 2 | 후보는 0개일 수 있다 — 억지로 만들지 않는다 |
-| 3 | 같은 원인의 여러 줄은 한 후보로 (같은 IP 실패 24회 = 후보 1개) |
-| 4 | priority는 후보끼리의 상대 순위 (1이 가장 급함) |
-| 5 | confidence_initial은 초기 추정치, 과신 금지 (보통 0.3~0.7) |
-| 6 | evidence_refs는 입력 로그의 raw_ref 원문 그대로 — 코드가 실제 입력과 대조해 없는 참조면 멈춘다 |
-
----
-
-## 9. 알려진 한계와 정책 결정이 필요한 것
+## 8. 알려진 한계와 정책 결정이 필요한 것
 
 - 원칙 6·8은 코드 뒷받침이 없어 LLM 판단에 의존한다(0918 seed로는 일관된 결과).
 - 원칙 9의 기준값(POST 10회, 경로 20개)은 팀 판정 정책으로 정한 값이다. 실제 로그 분포를 보고 조정할 수 있다.
 - `/.git/config` 같은 민감 파일 탐색(8건, 404)은 원칙 9 수치로는 FALSE_POSITIVE지만 LLM은 일관되게 THREAT_CONFIRMED(LOW)로 판정한다 — 팀 정책 결정 후 원칙 9에 명시할 것.
 - "Jetpack 정상 연동" 같은 판단은 IP 소유를 확인하는 도구가 없어서 할 수 없다(현재는 횟수 기준만).
+- **원칙 9 미충족 + 다른 계층 로그 미확보 → FALSE_POSITIVE인가 INCONCLUSIVE인가** (2026-09-27, 1차 탐지 통합 회의에서 결정):
+  - 사례: 1차 탐지 샘플 사건 `INC-960a3db8`(IP 하나가 `GET /.env` 404, `POST /` 503 두 건). web에는 기록이 있지만 그 시간대
+    audit·network 로그가 비어 있다(`window_total` 0). 같은 사건을 4번 실행해 INCONCLUSIVE 2번, FALSE_POSITIVE 2번이 나왔다.
+  - 원인: 원칙 9는 "소량 요청이고 침해 신호가 없으면 FALSE_POSITIVE, INCONCLUSIVE로 판정하지 말 것"이고, 원칙 1은 "로그가
+    없는 것은 활동 없음이 아니다"라서 이 경우에 서로 다른 판정을 가리킨다. `_verdict_conflicts()`는 조회한 **모든** 계층이
+    0건일 때만 INCONCLUSIVE를 강제하므로 web에 기록이 있으면 둘 다 통과한다.
+  - 함께 볼 표현 문제: FALSE_POSITIVE 판정의 reasoning에 로그가 없던 audit·network를 "확인 결과 후속 침해 징후 없음"으로
+    적었다(unknowns에는 "로그 미확보"로 맞게 적음). 기준과 무관하게 "미확보"로 써야 하는 부분이라 기준을 정할 때 같이 고친다.
+  - 회의에서 정할 것: (1) 이 조합의 판정 (2) 1차 탐지가 이런 단발성 사건을 조사 대상으로 넘길지(triage 변경으로 줄어들 수 있음).
+  - 정하면 고칠 곳: `investigation.yaml` 원칙 1·9, `_verdict_conflicts()`·`_rule_determined_verdict()`, 반복 측정
+    (`python -m tests.test_consistency`). 샘플은 계층마다 날짜가 달라 이 상황이 과장되게 나온다 — EC2 실로그로도 확인할 것.
 
 ### 정합성 정리 — 남은 후보 (2026-09-25 검토)
 - **B′. 코드와 중복된 기준 숫자 → 코드 상수를 프롬프트에 자동으로 채우기** (다음에 할 것): 원칙 7(실패 5회·계정 2개·

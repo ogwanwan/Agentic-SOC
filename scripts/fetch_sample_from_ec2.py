@@ -91,9 +91,8 @@ def fetch_all_layers(
     반환값: {"web": "sample_apache_web.log", ...} — 실제로 받아진 것만 포함.
 
     2026-09-22: web 출력 파일명을 sample_web.log -> sample_apache_web.log로 변경.
-    기존 sample_logs/sample_web.log(nginx JSON)는 raw_log_ingestion.py의 아직
-    안 옮긴 web 수집 branch가 계속 쓰므로, 새로 받는 apache 샘플과 이름이
-    겹치면 실수로 덮어쓸 위험이 있다 — 그래서 다른 이름으로 분리한다.
+    기존 sample_logs/sample_web.log(nginx JSON)와 이름이 겹쳐 실수로 덮어쓰지
+    않도록 다른 이름으로 분리한다.
     """
     layers: Tuple[Tuple[str, str, str], ...] = (
         ("web", web_path, "sample_apache_web.log"),

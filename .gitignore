@@ -1,4 +1,7 @@
 .env
+# .env 백업(.env.bak 등)에도 API 키가 들어 있다 — 예시 파일만 추적한다
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.pyc
@@ -7,5 +10,8 @@ results/
 # 로컬 개발용 로그 (EC2 실제 트래픽 포함 — 저장소에 올리지 않음)
 sample_logs/
 sample_logs_orig/
+# ATT&CK 공식 STIX(약 54MB) — manifest.json만 추적, 파일은 scripts/fetch_attack_catalog.py로 받음
+data/attack/enterprise-attack.json
+data/attack/*.tmp
 # tests.test_consistency 기본 출력
 consistency_results.json

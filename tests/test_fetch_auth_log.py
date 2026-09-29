@@ -1,6 +1,6 @@
 ﻿"""fetch_auth_log(agent/tools/real/fetch_auth_log.py) 단독 테스트.
 
-실제 AWS에 붙지 않고, 임시 로그 파일을 <계층>_LOG_LOCAL_PATH로 지정해서(tests/_log_files.py)
+실제 AWS에 붙지 않고, 임시 로그 파일을 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH)로 지정해서(tests/_log_files.py)
 - ssh_failed(root/invalid user)/ssh_accepted/sudo_command 이벤트가 정확히 분류되는지
 - sudo는 rhost가 없으면 src_ip가 None인지
 - src_ip/user/event_type/result 필터가 되는지
@@ -28,14 +28,14 @@ from tests._log_files import install_log_files, uninstall_log_files
 
 # normalizer 벤더 코드(primary_detection/normalizer/tools/fetch_auth_log.py, 1차 탐지팀
 # 원본 그대로)가 파일 맨 아래에서 무조건 load_dotenv()를 호출한다. 그래서 아래 import가
-# 처음 실행되는 순간, 로컬 .env에 적어둔 AUTH_LOG_LOCAL_PATH 같은 값이 os.environ에
+# 처음 실행되는 순간, 로컬 .env에 적어둔 AUTH_LOG_PATH 같은 값이 os.environ에
 # 들어와 버릴 수 있다 — 그 값이 남아있으면 이 파일의 테스트들이 만든 임시 로그 파일 대신
 # 실제 로컬 파일을 읽어버려서 count가 안 맞는 식으로 깨진다(재현·확인함).
 # sys.modules 캐시 덕분에 load_dotenv()는 프로세스당 한 번만 실행되므로, 여기서 미리
 # import를 한 번 트리거하고 곧바로 관련 환경변수를 비워서 이후 모든 테스트가 항상
 # 테스트가 만든 임시 로그 파일만 읽도록 만든다.
 import agent.tools.real.fetch_auth_log as _load_dotenv_trigger  # noqa: F401
-for _env_name in ("AUTH_LOG_LOCAL_PATH", "AUDIT_LOG_LOCAL_PATH", "WEB_LOG_LOCAL_PATH", "NETWORK_LOG_LOCAL_PATH"):
+for _env_name in ("AUTH_LOG_PATH", "AUDIT_LOG_PATH", "APACHE_LOG_PATH", "SURICATA_LOG_PATH"):
     os.environ.pop(_env_name, None)
 
 
