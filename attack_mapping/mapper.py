@@ -9,6 +9,7 @@ from .prompts import (
     build_mapping_user_prompt,
 )
 from .schema import (
+    AttackMappingEntry,
     CandidateTechnique,
     MappingDecision,
     MappingUnit,
@@ -322,3 +323,168 @@ def judge_and_validate_mapping_unit(
     )
 
     return accepted, rejected
+
+def build_attack_mapping_entries(
+    selections: Sequence[ValidatedSelection],
+    *,
+    catalog: Any,
+) -> list[AttackMappingEntry]:
+    """검증 완료 Selection들을 최종 ATT&CK Technique 항목으로 병합한다.
+
+    규칙:
+    - 같은 technique_id는 하나의 Entry로 합친다.
+    - evidence_ids / raw_refs / times / reasons / flags는 중복 제거한다.
+    - name / tactic / parent는 공식 Catalog 값만 사용한다.
+    - 같은 Mapping Unit에서 parent와 sub-technique이 함께 선택되면
+      sub-technique을 남기고 parent 선택은 제거한다.
+    """
+
+    # 같은 Unit에서 parent + sub-technique이 함께 선택된 경우
+    # parent 선택을 제거하기 위한 집합.
+    suppressed_parents: set[tuple[str, str]] = set()
+
+    for selection in selections:
+        parent_id = selection.technique.parent_id
+
+        if parent_id:
+            suppressed_parents.add(
+                (
+                    selection.mapping_unit_id,
+                    parent_id,
+                )
+            )
+
+    filtered: list[ValidatedSelection] = []
+
+    for selection in selections:
+        key = (
+            selection.mapping_unit_id,
+            selection.technique.technique_id,
+        )
+
+        if key in suppressed_parents:
+            continue
+
+        filtered.append(selection)
+
+    grouped: dict[str, list[ValidatedSelection]] = {}
+
+    for selection in filtered:
+        technique_id = selection.technique.technique_id
+
+        grouped.setdefault(
+            technique_id,
+            [],
+        ).append(selection)
+
+    entries: list[AttackMappingEntry] = []
+
+    for technique_id in sorted(grouped):
+        group = grouped[technique_id]
+
+        first = group[0]
+        technique = first.technique
+
+        if not technique.tactics:
+            raise ValueError(
+                f"{technique_id} has no ATT&CK tactics"
+            )
+
+        # 공식 순서의 첫 tactic을 기존 호환용 대표 tactic으로 사용.
+        representative_tactic = technique.tactics[0]
+
+        tactics = [
+            tactic.as_dict()
+            for tactic in technique.tactics
+        ]
+
+        evidence_ids: list[str] = []
+        raw_refs: list[str] = []
+        times: list[str] = []
+        flags: list[str] = []
+        selection_reasons = []
+        matches = []
+
+        for selection in group:
+            for evidence_id in selection.evidence_ids:
+                if evidence_id not in evidence_ids:
+                    evidence_ids.append(evidence_id)
+
+            for raw_ref in selection.raw_refs:
+                if raw_ref not in raw_refs:
+                    raw_refs.append(raw_ref)
+
+            if (
+                selection.time is not None
+                and selection.time not in times
+            ):
+                times.append(selection.time)
+
+            for flag in selection.flags:
+                if flag not in flags:
+                    flags.append(flag)
+
+            selection_reasons.append(
+                {
+                    "mapping_unit_id": selection.mapping_unit_id,
+                    "evidence_ids": list(
+                        selection.evidence_ids
+                    ),
+                    "reason": selection.reason,
+                }
+            )
+
+            matches.append(
+                {
+                    "tactic_id": representative_tactic.tactic_id,
+                    "tactic_name": representative_tactic.tactic_name,
+                    "matched_by": "evidence",
+                    "matched_keywords": [],
+                    "evidence_ids": list(
+                        selection.evidence_ids
+                    ),
+                    "time": selection.time,
+                    "raw_refs": list(
+                        selection.raw_refs
+                    ),
+                }
+            )
+
+        parent_technique = None
+
+        if technique.parent_id:
+            parent = catalog.lookup(
+                technique.parent_id
+            )
+
+            if parent is None:
+                raise ValueError(
+                    f"parent technique not found: "
+                    f"{technique.parent_id}"
+                )
+
+            parent_technique = {
+                "technique_id": parent.technique_id,
+                "technique_name": parent.name,
+            }
+
+        entry: AttackMappingEntry = {
+            "technique_id": technique.technique_id,
+            "technique_name": technique.name,
+            "tactic_id": representative_tactic.tactic_id,
+            "tactic_name": representative_tactic.tactic_name,
+            "tactics": tactics,
+            "matched_by": ["evidence"],
+            "matched_keywords": [],
+            "evidence_ids": evidence_ids,
+            "raw_refs": raw_refs,
+            "times": times,
+            "matches": matches,
+            "parent_technique": parent_technique,
+            "selections": selection_reasons,
+            "flags": flags,
+        }
+
+        entries.append(entry)
+
+    return entries
