@@ -3,6 +3,7 @@
 from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Mapping, Protocol, Sequence
+from .killchain import build_kill_chain
 
 from .prompts import (
     build_mapping_system_prompt,
@@ -832,3 +833,64 @@ def map_investigation(
         )
 
     return result
+
+def build_rag_kill_chain(
+    techniques: Sequence[Mapping[str, Any]],
+    *,
+    catalog: Any,
+) -> list[dict[str, Any]]:
+    """RAG ATT&CK 결과를 공식 v19 tactic 순서로 Kill Chain 정렬한다.
+
+    기존 build_kill_chain()은 시간 계산과 출력 형식을 재사용한다.
+    단, 최종 tactic 순서만 catalog.tactic_order 기준으로 다시 정렬한다.
+
+    Rule 경로의 기존 TACTIC_ORDER는 건드리지 않는다.
+    """
+
+    # 기존 Kill Chain 구현을 이용해
+    # 대표 시간과 기본 출력 구조를 만든다.
+    chain = build_kill_chain(
+        list(techniques)
+    )
+
+    tactic_order = getattr(
+        catalog,
+        "tactic_order",
+        (),
+    )
+
+    tactic_rank = {
+        tactic.tactic_id: index
+        for index, tactic in enumerate(
+            tactic_order
+        )
+    }
+
+    unknown_rank = len(
+        tactic_rank
+    )
+
+    # 같은 tactic 내부에서는 기존 build_kill_chain이 계산한
+    # 시간 순서를 보존하기 위해 기존 step을 2차 정렬 키로 사용.
+    ordered = sorted(
+        chain,
+        key=lambda item: (
+            tactic_rank.get(
+                item["tactic_id"],
+                unknown_rank,
+            ),
+            item["step"],
+        ),
+    )
+
+    # 정렬 후 step을 다시 1부터 부여.
+    return [
+        {
+            **item,
+            "step": index,
+        }
+        for index, item in enumerate(
+            ordered,
+            start=1,
+        )
+    ]
