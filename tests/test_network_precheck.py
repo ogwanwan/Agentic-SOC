@@ -341,6 +341,9 @@ def test_audit_rule_check_counts_whole_result_not_page():
     text = _audit_stats(noise + shell, check)
     assert "웹 서버 계정(www-data/apache/nginx/http) 실행 1건 중 셸·의심 명령 1건" in text
     assert audit_rule_check(noise)["web_server_suspicious"] == 0
+    # IP 사건과 잇기 위한 명령 실행 시각 (웹 서버 계정의 셸·의심 명령만)
+    assert check["web_suspicious_times"] == ["2026-09-22T13:45:52Z"]
+    assert audit_rule_check(noise)["web_suspicious_times"] == []
 
 
 def test_audit_rule_check_ignores_routine_system_commands():
@@ -463,6 +466,67 @@ def test_gate_rejects_verdicts_contradicting_tool_facts():
         {**SEED, "confidence_initial": 0.95})
     assert result["final_verdict"]["severity"] == "HIGH"
     assert any("웹 서버 계정의 의심 명령 실행 1건" in n for n in result["investigation_notes"])
+
+
+def _web_exec_registry(request_time, command_time):
+    """seed src_ip의 웹 요청 1건(request_time)과 웹 서버 계정 셸 명령(command_time)을 돌려주는 도구."""
+    web = lambda _args: {"count": 1, "summary": "web", "window_total": 50, "records": [
+        {"src_ip": SEED["src_ip"], "timestamp": request_time, "raw_ref": "access.log:1"}]}
+    audit = lambda _args: {"count": 1, "summary": "audit", "records": [], "window_total": 300, "rule_checks": [{
+        "rule": "audit_post_exploitation", "web_server_exec": 3, "web_server_suspicious": 3, "suspicious": 0,
+        "examples": ["www-data: sh -c sudo su 2>&1 (audit.log:9)"], "web_suspicious_times": [command_time]}]}
+    return build_default_registry(handlers={**MOCK_HANDLERS, "fetch_web_log": web, "fetch_audit_log": audit})
+
+
+def test_unrelated_web_server_commands_do_not_decide_ip_incident():
+    """EC2 2026-09-29: /.git/config 404 한 건(06:39)인 IP 사건이, 19분 뒤 다른 IP가 일으킨 www-data
+    `sudo su`를 근거로 THREAT_CONFIRMED CRITICAL이 됐다(관문이 FALSE_POSITIVE를 거부). 시간상 연결되지
+    않은 명령은 이 사건의 판정 기준이 아니다."""
+    seed = {**SEED, "window": ["2026-09-29T06:39:14Z", "2026-09-29T06:39:14Z"], "trigger_time": "2026-09-29T06:39:14Z",
+            "confidence_initial": 0.9}
+    registry = _web_exec_registry("2026-09-29T06:39:14Z", "2026-09-29T06:58:24Z")
+    llm = RecordingLLM([_call("fetch_web_log"), _call("fetch_audit_log"), _fp()])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(seed)
+    assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
+    assert not any("웹 서버 계정의 의심 명령 실행" in n for n in result["investigation_notes"])
+    assert any("같은 호스트의 별도 사건일 수 있음" in n and "sudo su" in n for n in result["investigation_notes"])
+
+
+def test_web_server_command_right_after_ip_request_still_decides():
+    """0918 웹셸 시나리오처럼 그 IP의 요청 직후(1초) 명령이 실행되면 지금처럼 TC·HIGH 이상만 승인."""
+    seed = {**SEED, "window": ["2026-09-29T06:58:23Z", "2026-09-29T06:58:23Z"], "trigger_time": "2026-09-29T06:58:23Z",
+            "confidence_initial": 0.9}
+    registry = _web_exec_registry("2026-09-29T06:58:23Z", "2026-09-29T06:58:24Z")
+    high = _terminate("confidence_sufficient", 0.9)
+    high["final_verdict"] = {**high["final_verdict"], "severity": "HIGH"}
+    llm = RecordingLLM([_call("fetch_web_log"), _call("fetch_audit_log"), _fp(), high])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(seed)
+    assert result["final_verdict"]["verdict"] == "THREAT_CONFIRMED"
+    assert any("웹 서버 계정의 의심 명령 실행 3건" in n for n in result["investigation_notes"])
+    assert not any("별도 사건" in n for n in result["investigation_notes"])
+
+
+def test_web_request_found_after_audit_query_links_the_command():
+    """audit을 먼저 보고 나중에 web에서 그 IP의 요청(명령 직전)이 나와도 연결한다(조회 순서와 무관)."""
+    seed = {**SEED, "window": ["2026-09-29T05:00:00Z", "2026-09-29T07:00:00Z"], "trigger_time": "2026-09-29T05:00:00Z",
+            "confidence_initial": 0.9}
+    registry = _web_exec_registry("2026-09-29T06:58:23Z", "2026-09-29T06:58:24Z")
+    high = _terminate("confidence_sufficient", 0.9)
+    high["final_verdict"] = {**high["final_verdict"], "severity": "HIGH"}
+    llm = RecordingLLM([_call("fetch_audit_log"), _call("fetch_web_log"), _fp(), high])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(seed)
+    assert result["final_verdict"]["verdict"] == "THREAT_CONFIRMED"
+
+
+def test_pid_incident_web_server_command_decides_without_request_link():
+    """src_ip가 없는 사건(1차 탐지 pid 사건)은 명령 자체가 사건이므로 연결 조건 없이 지금처럼 적용."""
+    seed = {**SEED, "src_ip": None, "confidence_initial": 0.9}
+    registry = _web_exec_registry("2026-09-29T06:00:00Z", "2026-09-29T06:58:24Z")
+    high = _terminate("confidence_sufficient", 0.9)
+    high["final_verdict"] = {**high["final_verdict"], "severity": "HIGH"}
+    llm = RecordingLLM([_call("fetch_web_log"), _call("fetch_audit_log"), _fp(), high])
+    result = InvestigationAgent(llm, registry, network_precheck=True, strict_termination=True).run(seed)
+    assert result["final_verdict"]["verdict"] == "THREAT_CONFIRMED"
 
 
 def test_bruteforce_without_login_success_cannot_be_high_severity():

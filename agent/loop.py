@@ -44,6 +44,9 @@ from .tools import ToolRegistry, ToolValidationError
 from .tools.time_utils import parse_iso
 
 NETWORK_PRECHECK_PAD = timedelta(minutes=30)
+# IP 사건에서 audit의 웹 서버 계정 명령을 이 사건의 침해 신호로 보려면, seed src_ip의 웹 요청 뒤 이 시간 안에
+# 실행돼야 한다(웹셸은 요청 직후 명령이 실행된다). 멀리 떨어진 명령은 같은 호스트의 별도 사건일 수 있다.
+WEB_EXEC_LINK = timedelta(seconds=120)
 NETWORK_PRECHECK_LIMIT = 20
 # no_more_evidence 관문에서 "아직 안 본 계층이 남았는가"를 따질 때 세는 로그 조회 도구
 LOG_TOOLS = frozenset({"fetch_web_log", "fetch_auth_log", "fetch_audit_log", "fetch_network_log",
@@ -86,6 +89,13 @@ def network_precheck_args(seed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "ip": seed["src_ip"],
         "limit": NETWORK_PRECHECK_LIMIT,
     }
+
+
+def _parse_utc(value: Any) -> Optional[Any]:
+    try:
+        return parse_iso(value).astimezone(timezone.utc)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def _verified_empty_call(state: AgentState, value: Any) -> Optional[int]:
@@ -167,6 +177,10 @@ class InvestigationAgent:
         state.raw_refs = references(seed, seed=True)   # seed가 인용한 원본 참조도 "관측됨"으로 등록
         state.current_confidence = float(seed.get("confidence_initial", 0.5))
         state.record_confidence("initial", seed.get("trigger_description", "Triage 판정"))
+        if seed.get("src_ip"):
+            # IP 사건의 window·trigger_time은 1차 탐지가 본 그 IP의 요청 시각이다 (웹 서버 명령 연결 근거)
+            state.src_ip_request_times = list(dict.fromkeys(
+                t for t in [seed.get("trigger_time"), *(seed.get("window") or [])] if isinstance(t, str)))
         # [19-1] → _run_network_precheck(): src_ip가 있으면 첫 LLM 턴 전에 network를 코드가 먼저 조회
         if self.network_precheck:
             self._run_network_precheck(state)
@@ -183,6 +197,16 @@ class InvestigationAgent:
             termination_reason = TerminationReason.LLM_UNAVAILABLE.value
             final_verdict = self._incomplete_verdict(state, incomplete_reason)
             state.notes.append(f"⚠ 조사 미완료 — LLM API 일시 오류로 조사를 끝내지 못했습니다: {incomplete_reason}")
+
+        if state.unlinked_web_exec:
+            count = sum(c.get("web_server_suspicious", 0) for c in state.unlinked_web_exec)
+            examples = [e for c in state.unlinked_web_exec for e in c.get("examples", [])][:2]
+            state.notes.append(
+                f"같은 시간대 audit에 웹 서버 계정의 셸·의심 명령 {count}건이 있었지만 seed src_ip"
+                f"({state.seed.get('src_ip')})의 웹 요청 직후({int(WEB_EXEC_LINK.total_seconds())}초 이내)에 실행된 것이 "
+                f"아니라 이 사건의 판정 기준으로 쓰지 않았습니다 — 같은 호스트의 별도 사건일 수 있음"
+                + (f" (예: {' / '.join(examples)})" if examples else "")
+            )
 
         # [41] → agent/report.py build_investigation_result(): state에 쌓인 조사 내용으로 최종 JSON 생성
         result = build_investigation_result(state, termination_reason, final_verdict,
@@ -630,6 +654,19 @@ class InvestigationAgent:
         return conflicts
 
     @staticmethod
+    def _link_web_exec(state: AgentState) -> None:
+        """seed src_ip의 요청 직후(WEB_EXEC_LINK 이내)에 실행된 웹 서버 계정 명령이 있는 audit 집계만
+        rule_floors(이 사건의 침해 신호)로 옮긴다. 요청 시각은 도구 결과가 더 쌓이면 늘어나므로 매 호출 뒤 다시 본다.
+        웹셸은 요청 하나에 명령 하나가 바로 실행되므로 짧은 간격으로 잇는다(0918 웹셸 시나리오: 1초 이내)."""
+        requests = [t for t in (_parse_utc(v) for v in state.src_ip_request_times) if t]
+        for check in list(state.unlinked_web_exec):
+            commands = [t for t in (_parse_utc(v) for v in check.get("web_suspicious_times") or []) if t]
+            if any(timedelta(0) <= c - r <= WEB_EXEC_LINK for c in commands for r in requests):
+                state.unlinked_web_exec.remove(check)
+                if check not in state.rule_floors:
+                    state.rule_floors.append(check)
+
+    @staticmethod
     def _unchecked_command_ips(state: AgentState) -> list:
         """audit 명령에 등장한 외부 IP 중 아직 network 조회(ip/src_ip/dst_ip 인자)를 시도하지 않은 것."""
         queried = set()
@@ -826,18 +863,30 @@ class InvestigationAgent:
                               if layer not in result.get("errors", {})]
             # [37-1] 종료 관문 [25-2]용: 도구가 계산한 원칙 기준(rule_checks) 중 seed src_ip에 해당하는 것
             src_ip = state.seed.get("src_ip")
+            # seed src_ip의 요청 시각 — 아래 웹 서버 계정 명령과 이 사건을 잇는 근거
+            for record in result.get("records") or []:
+                if (isinstance(record, dict) and src_ip and record.get("src_ip") == src_ip
+                        and record.get("timestamp") and record["timestamp"] not in state.src_ip_request_times):
+                    state.src_ip_request_times.append(record["timestamp"])
             for check in result.get("rule_checks") or []:
                 principle9_met = (check.get("rule") == "principle_9" and src_ip and check.get("src_ip") == src_ip
                                   and (check.get("auth_bruteforce") or check.get("path_scan")))
                 web_exec_met = check.get("rule") == "audit_post_exploitation" and check.get("web_server_suspicious")
                 # 원칙 7은 충족(무차별 대입)·미충족(단발성 실패) 모두 판정 기준이라 둘 다 기록한다.
                 principle7_seen = check.get("rule") == "principle_7" and src_ip and check.get("src_ip") == src_ip
-                if (principle9_met or web_exec_met or principle7_seen) and check not in state.rule_floors:
+                if web_exec_met and src_ip and "web_suspicious_times" in check:
+                    # IP 사건: 같은 시간대 audit에 웹 서버 계정 명령이 있다는 것만으로는 이 IP의 침해가 아니다.
+                    # 2026-09-29 EC2: /.git/config 404 한 건(06:39)인 IP 사건이, 무관한 다른 IP의 웹셸
+                    # 명령(06:58)을 근거로 THREAT_CONFIRMED CRITICAL이 됐다 — 이 관문이 FALSE_POSITIVE를 거부했다.
+                    if check not in state.unlinked_web_exec:
+                        state.unlinked_web_exec.append(check)
+                elif (principle9_met or web_exec_met or principle7_seen) and check not in state.rule_floors:
                     state.rule_floors.append(check)
                 # 종료 관문 (f)용: audit 명령에 등장한 외부 IP
                 for ip in check.get("external_ips") or []:
                     if ip not in state.command_external_ips:
                         state.command_external_ips.append(ip)
+            self._link_web_exec(state)
             # 필터 전 구간 전체 건수 — 모두 0이면 로그 미확보로 보고 [25-2]가 INCONCLUSIVE만 허용한다
             if "window_total" in result:
                 state.window_totals.append(result["window_total"])

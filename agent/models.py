@@ -152,6 +152,12 @@ class AgentState:
     # audit 명령 인자에 등장한 외부 IP(다운로드·전송·역방향 셸 대상). network로 조회하지 않은 채 남아 있으면
     # 종료 관문 (f)가 거부한다 (loop.py strict_termination).
     command_external_ips: List[str] = field(default_factory=list)
+    # seed src_ip의 웹 요청 시각(seed window·trigger_time + 도구 결과에서 그 IP의 레코드 시각).
+    # audit의 웹 서버 계정 명령이 이 요청 직후에 실행됐을 때만 이 사건의 침해 신호로 본다 (loop.py).
+    src_ip_request_times: List[str] = field(default_factory=list)
+    # seed src_ip의 웹 요청과 시간상 아직 연결되지 않은 웹 서버 계정 명령 집계(audit_post_exploitation).
+    # 뒤이은 조회로 연결되면 rule_floors로 옮긴다. 끝까지 남으면 같은 호스트의 별도 사건일 수 있다.
+    unlinked_web_exec: List[Dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def _to_hashable(value: Any) -> Any:
