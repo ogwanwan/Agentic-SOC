@@ -239,3 +239,63 @@ def map_mapping_unit(
         validated.append(validated_selection)
 
     return validated
+
+def merge_validated_selections(
+    selections: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """동일 technique_id의 검증 완료 Selection을 하나로 합친다.
+
+    현재 단계에서는 C가 확실히 소유하는 값만 병합한다:
+    - technique_id
+    - evidence_ids
+    - reason
+
+    공식 name / tactic / parent / raw_refs / time 등은
+    A의 실제 Validator/Catalog 계약을 받은 뒤 연결한다.
+    """
+
+    merged: dict[str, dict[str, Any]] = {}
+
+    for selection in selections:
+        technique_id = selection.get("technique_id")
+
+        if not isinstance(technique_id, str) or not technique_id.strip():
+            raise ValueError(
+                "validated selection must have a non-empty technique_id"
+            )
+
+        technique_id = technique_id.strip()
+
+        evidence_ids = selection.get("evidence_ids", [])
+        if not isinstance(evidence_ids, list):
+            raise ValueError(
+                "validated selection evidence_ids must be a list"
+            )
+
+        reason = selection.get("reason", "")
+        if not isinstance(reason, str):
+            raise ValueError(
+                "validated selection reason must be a string"
+            )
+
+        if technique_id not in merged:
+            merged[technique_id] = {
+                "technique_id": technique_id,
+                "evidence_ids": [],
+                "reasons": [],
+            }
+
+        target = merged[technique_id]
+
+        for evidence_id in evidence_ids:
+            if evidence_id not in target["evidence_ids"]:
+                target["evidence_ids"].append(evidence_id)
+
+        cleaned_reason = reason.strip()
+        if (
+            cleaned_reason
+            and cleaned_reason not in target["reasons"]
+        ):
+            target["reasons"].append(cleaned_reason)
+
+    return list(merged.values())

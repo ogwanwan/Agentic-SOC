@@ -332,3 +332,87 @@ def test_map_mapping_unit_keeps_successful_selection_when_one_fails():
 
     assert len(result) == 1
     assert result[0]["technique_id"] == "T1059.004"
+
+def test_merge_validated_selections_merges_same_technique():
+    from attack_mapping.mapper import merge_validated_selections
+
+    result = merge_validated_selections(
+        [
+            {
+                "technique_id": "T1059.004",
+                "evidence_ids": ["EVID-001"],
+                "reason": "sh -c 실행",
+            },
+            {
+                "technique_id": "T1059.004",
+                "evidence_ids": ["EVID-002"],
+                "reason": "bash 명령 실행",
+            },
+        ]
+    )
+
+    assert len(result) == 1
+    assert result[0]["technique_id"] == "T1059.004"
+    assert result[0]["evidence_ids"] == [
+        "EVID-001",
+        "EVID-002",
+    ]
+    assert result[0]["reasons"] == [
+        "sh -c 실행",
+        "bash 명령 실행",
+    ]
+
+
+def test_merge_validated_selections_keeps_different_techniques():
+    from attack_mapping.mapper import merge_validated_selections
+
+    result = merge_validated_selections(
+        [
+            {
+                "technique_id": "T1059.004",
+                "evidence_ids": ["EVID-003"],
+                "reason": "sh -c 실행",
+            },
+            {
+                "technique_id": "T1033",
+                "evidence_ids": ["EVID-003"],
+                "reason": "whoami 실행",
+            },
+        ]
+    )
+
+    assert len(result) == 2
+    assert {
+        item["technique_id"]
+        for item in result
+    } == {
+        "T1059.004",
+        "T1033",
+    }
+
+
+def test_merge_validated_selections_deduplicates_evidence_and_reason():
+    from attack_mapping.mapper import merge_validated_selections
+
+    result = merge_validated_selections(
+        [
+            {
+                "technique_id": "T1059.004",
+                "evidence_ids": ["EVID-003"],
+                "reason": "sh -c 실행",
+            },
+            {
+                "technique_id": "T1059.004",
+                "evidence_ids": ["EVID-003"],
+                "reason": "sh -c 실행",
+            },
+        ]
+    )
+
+    assert result == [
+        {
+            "technique_id": "T1059.004",
+            "evidence_ids": ["EVID-003"],
+            "reasons": ["sh -c 실행"],
+        }
+    ]
