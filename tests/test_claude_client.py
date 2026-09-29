@@ -26,7 +26,7 @@ from agent.tools import build_default_registry
 @pytest.fixture(autouse=True)
 def isolated_env(monkeypatch):
     # 실행하는 셸에 CLAUDE_MODEL·CLAUDE_EFFORT가 있어도 기본값을 확인할 수 있게 비운다
-    for name in ("CLAUDE_MODEL", "CLAUDE_EFFORT"):
+    for name in ("CLAUDE_MODEL", "CLAUDE_EFFORT", "CLAUDE_REFUSAL_FALLBACK_MODEL"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -52,9 +52,11 @@ class _FakeMessages:
             raise reply
         usage = types.SimpleNamespace(input_tokens=100, output_tokens=20,
                                       cache_creation_input_tokens=0, cache_read_input_tokens=80)
+        details = reply.get("stop_details")
         return types.SimpleNamespace(
             content=[types.SimpleNamespace(type="text", text=reply["text"])],
             stop_reason=reply.get("stop_reason", "end_turn"), usage=usage,
+            stop_details=types.SimpleNamespace(**details) if details else None,
         )
 
 
@@ -130,6 +132,47 @@ def test_unparsable_response_leaves_response_head_in_notes(monkeypatch):
     failures = [n for n in result["investigation_notes"] if "해석 실패" in n]
     assert len(failures) == 2 and all("판단할 근거가 부족합니다" in n for n in failures)
     assert result["final_verdict"]["reasoning"].startswith("[자동 폴백 판정")
+
+
+REFUSAL = {"text": "", "stop_reason": "refusal", "stop_details": {"type": "refusal", "category": "cyber"}}
+
+
+def test_refusal_is_retried_on_fallback_model_and_noted(monkeypatch):
+    # 2026-09-29 재현성 측정: 웹셸 시나리오에서 sonnet-5가 연속 2번 거절(refusal) → 폴백 판정.
+    # sonnet-5는 서버 측 fallbacks 대상이 없어 대체 모델로 같은 요청을 직접 다시 보낸다.
+    created = _install_fake_anthropic(monkeypatch, [REFUSAL, _decision()])
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    client = ClaudeClient(api_key="k")
+    decision = client.complete_json("sys", "user")
+    first, second = created["messages"].calls
+    assert (first["model"], second["model"]) == ("claude-sonnet-5", "claude-sonnet-4-6")
+    assert second["system"] == first["system"] and second["messages"] == first["messages"]
+    assert first["output_config"] == {"effort": "high"} and "output_config" not in second
+    assert decision["next_action"] == "call_tool"
+    assert any("category=cyber" in n and "claude-sonnet-4-6" in n for n in decision["investigation_notes"])
+    assert (client.usage_totals["refusals"], client.usage_totals["fallback_calls"]) == (1, 1)
+
+
+def test_refusal_note_reaches_investigation_result(monkeypatch):
+    verdict = {"verdict": "INCONCLUSIVE", "confidence": 0.5, "severity": "LOW", "attack_type": "x",
+               "affected_systems": [], "summary": "s", "reasoning": "r"}
+    terminate = _decision(next_action="terminate", tool_call=None,
+                          termination_reason="no_more_evidence", final_verdict=verdict)
+    _install_fake_anthropic(monkeypatch, [REFUSAL, _decision(), terminate])
+    result = InvestigationAgent(ClaudeClient(api_key="k"), build_default_registry()).run(SEED)
+    assert result["final_verdict"]["reasoning"] == "r"  # 폴백 판정이 아니라 대체 모델의 LLM 판정
+    assert any("안전 필터로 응답을 거절" in n for n in result["investigation_notes"])
+
+
+@pytest.mark.parametrize("setting,calls", [("off", 1), (None, 2)])
+def test_refusal_without_usable_fallback_is_decision_error_with_category(monkeypatch, setting, calls):
+    # off: 대체 호출 없이 실패 / 기본: 대체 모델도 거절하면 실패 — 둘 다 category를 첫 줄에 남긴다
+    if setting:
+        monkeypatch.setenv("CLAUDE_REFUSAL_FALLBACK_MODEL", setting)
+    created = _install_fake_anthropic(monkeypatch, [REFUSAL])
+    with pytest.raises(ClaudeDecisionError, match=r"거절했습니다\(refusal, category=cyber"):
+        ClaudeClient(api_key="k").complete_json("sys", "user")
+    assert len(created["messages"].calls) == calls
 
 
 def test_truncated_response_raises_decision_error(monkeypatch):

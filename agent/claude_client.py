@@ -21,6 +21,8 @@
 
 필요 환경변수: ANTHROPIC_API_KEY. 모델은 CLAUDE_MODEL(없으면 claude-sonnet-5).
 선택 환경변수: CLAUDE_EFFORT(low|medium|high|xhigh|max) — 없으면 API 기본값(high).
+  CLAUDE_REFUSAL_FALLBACK_MODEL — 안전 필터 거절(stop_reason=refusal) 시 같은 요청을 다시 보낼 모델
+  (없으면 claude-sonnet-4-6, none/off면 대체 호출 없이 해석 실패로 처리). 대체 호출은 결과 notes에 남는다.
 테스트에서는 같은 인터페이스의 가짜 클라이언트로 바꿔 쓴다(tests/test_loop.py, tests/test_claude_client.py).
 """
 
@@ -34,6 +36,8 @@ from .llm_json import parse_llm_json
 from .prompts import build_system_prompt, build_user_prompt
 
 DEFAULT_MODEL = "claude-sonnet-5"
+# 거절 시 대체 모델: sonnet-5는 sonnet-4.6보다 사이버 보안 주제를 더 엄격하게 거른다(Anthropic 문서).
+DEFAULT_REFUSAL_FALLBACK_MODEL = "claude-sonnet-4-6"
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # SDK 재시도 뒤에도 이 상태 코드면 일시 오류로 본다(429 한도, 5xx·529 과부하, 408 시간 초과)
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
@@ -48,6 +52,11 @@ def _is_transient(exc: Exception) -> bool:
         return True
     return status_error is not None and isinstance(exc, status_error) and (
         getattr(exc, "status_code", None) in TRANSIENT_STATUS)
+
+
+def _refusal_category(response: Any) -> Optional[str]:
+    """거절 분류(cyber 등). 정보용이라 없을 수 있다(None)."""
+    return getattr(getattr(response, "stop_details", None), "category", None)
 
 
 class ClaudeDecisionError(Exception):
@@ -84,10 +93,15 @@ class ClaudeClient:
         self.effort = (effort or os.environ.get("CLAUDE_EFFORT") or "").strip().lower() or None
         if self.effort is not None and self.effort not in EFFORT_LEVELS:
             raise ValueError(f"CLAUDE_EFFORT는 {', '.join(EFFORT_LEVELS)} 중 하나여야 합니다: {self.effort}")
-        # 이 클라이언트로 한 모든 호출의 토큰 합계 (비용 추정용)
+        # 안전 필터 거절(refusal) 시 같은 요청을 다시 보낼 모델. 비우거나 none/off면 대체 호출 없이 실패로 처리.
+        fallback = os.environ.get("CLAUDE_REFUSAL_FALLBACK_MODEL")
+        fallback = DEFAULT_REFUSAL_FALLBACK_MODEL if fallback is None else fallback.strip()
+        self.refusal_fallback_model = None if fallback.lower() in ("", "none", "off") else fallback
+        # 이 클라이언트로 한 모든 호출의 토큰 합계 (비용 추정용)와 거절·대체 호출 횟수
         self.usage_totals: Dict[str, int] = {
             "calls": 0, "input_tokens": 0, "output_tokens": 0,
             "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            "refusals": 0, "fallback_calls": 0,
         }
 
     # [21] ← agent/loop.py [20] _safe_reason()에서 매 턴 호출 (GeminiClient.reason과 같은 인자)
@@ -118,10 +132,47 @@ class ClaudeClient:
     # [22] 실제 Claude 호출 — 조사 루프의 reason()이 여기로 온다
     def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         """범용 호출: 어떤 system/user 프롬프트든 받아서 JSON으로 파싱해 돌려준다."""
-        extra: Dict[str, Any] = {"output_config": {"effort": self.effort}} if self.effort else {}
+        notes = []
+        response = self._create(self.model, system_prompt, user_prompt, effort=self.effort)
+        if getattr(response, "stop_reason", None) == "refusal":
+            # 안전 분류기가 공격 로그(웹셸 명령 등)를 사이버 공격 요청으로 오인해 거절할 수 있다(2026-09-29
+            # 재현성 측정: 웹셸 시나리오 4회 중 1회 연속 2번 거절 → 폴백 판정). sonnet-5는 서버 측 fallbacks
+            # 대상 모델이 없어(allowed_fallback_models 빈 목록) 같은 요청을 대체 모델로 한 번 직접 다시 보낸다.
+            category = _refusal_category(response)
+            self.usage_totals["refusals"] += 1
+            fallback = self.refusal_fallback_model
+            if not fallback or fallback == self.model:
+                raise ClaudeDecisionError(
+                    f"Claude가 응답을 거절했습니다(refusal, category={category}, 대체 모델 없음)")
+            notes.append(f"Claude({self.model})가 안전 필터로 응답을 거절해(refusal, category={category}) "
+                         f"같은 요청을 {fallback}로 다시 보냄")
+            # effort 단계는 모델마다 달라(xhigh는 4.7 이후) 대체 모델에는 보내지 않는다
+            response = self._create(fallback, system_prompt, user_prompt, effort=None)
+            self.usage_totals["fallback_calls"] += 1
+            if getattr(response, "stop_reason", None) == "refusal":
+                raise ClaudeDecisionError(
+                    f"Claude가 응답을 거절했습니다(refusal, category={category}, 대체 모델 {fallback}도 거절: "
+                    f"category={_refusal_category(response)})")
+        text = "".join(getattr(block, "text", "") for block in response.content if block.type == "text")
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            # 잘린 JSON은 고칠 수 없다 — loop.py가 해석 실패로 보고 1회 재시도, 그래도 실패하면 폴백 판정
+            raise ClaudeDecisionError(
+                f"Claude 응답이 출력 한도({self.max_tokens} 토큰)에서 잘렸습니다.\n원본 응답(앞부분):\n{text[:500]}"
+            )
+        if not text.strip():
+            raise ClaudeDecisionError(f"Claude가 빈 응답을 반환했습니다. (stop_reason={getattr(response, 'stop_reason', None)})")
+        # Gemini와 달리 JSON만 내보내게 강제하는 설정이 없어 앞뒤에 설명 문장이 붙을 수 있다 — 공용 파서가 꺼낸다
+        decision = parse_llm_json(text, ClaudeDecisionError, label="Claude")
+        if notes:
+            # 결과 JSON의 investigation_notes에 남도록 결정에 붙인다(loop.py가 notes에 더한다)
+            decision["investigation_notes"] = list(decision.get("investigation_notes") or []) + notes
+        return decision
+
+    def _create(self, model: str, system_prompt: str, user_prompt: str, effort: Optional[str]) -> Any:
+        extra: Dict[str, Any] = {"output_config": {"effort": effort}} if effort else {}
         try:
             response = self._client.messages.create(
-                model=self.model,
+                model=model,
                 max_tokens=self.max_tokens,
                 # 시스템 프롬프트(원칙·도구 목록·출력 형식)는 매 턴 같아서 캐시해 두고 다시 읽는다.
                 system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
@@ -135,16 +186,7 @@ class ClaudeClient:
                 ) from exc
             raise
         self._add_usage(getattr(response, "usage", None))
-        text = "".join(getattr(block, "text", "") for block in response.content if block.type == "text")
-        if getattr(response, "stop_reason", None) == "max_tokens":
-            # 잘린 JSON은 고칠 수 없다 — loop.py가 해석 실패로 보고 1회 재시도, 그래도 실패하면 폴백 판정
-            raise ClaudeDecisionError(
-                f"Claude 응답이 출력 한도({self.max_tokens} 토큰)에서 잘렸습니다.\n원본 응답(앞부분):\n{text[:500]}"
-            )
-        if not text.strip():
-            raise ClaudeDecisionError(f"Claude가 빈 응답을 반환했습니다. (stop_reason={getattr(response, 'stop_reason', None)})")
-        # Gemini와 달리 JSON만 내보내게 강제하는 설정이 없어 앞뒤에 설명 문장이 붙을 수 있다 — 공용 파서가 꺼낸다
-        return parse_llm_json(text, ClaudeDecisionError, label="Claude")
+        return response
 
     def _add_usage(self, usage: Any) -> None:
         self.usage_totals["calls"] += 1
