@@ -26,16 +26,38 @@ MAX_REVIEW = 20                      # 한 번에 검토할 상위 사건 수 �
 REVIEW_PRIORITIES = ("P1", "P2")     # LLM 재검토 대상 우선순위
 
 _SYSTEM = (
-    "너는 SOC 트리아지 보조자다. 각 사건 요약(결정론 점수·계층·연결·탐지 사유)을 보고 "
-    "보안 분석가가 심층 조사(investigate)해야 하는지 true/false 로 판단하고, "
-    "그 이유를 한국어 한 줄로 단다. 반드시 JSON 배열만 출력한다: "
+    "너는 SOC 트리아지 보조자다. 각 사건 요약(점수·계층·연결·탐지 사유)과 evidence(실제 실행 명령어·"
+    "요청 원문)를 보고 보안 분석가가 심층 조사(investigate)해야 하는지 true/false 로 판단한다. "
+    "evidence 의 실제 명령을 근거로 정상 동작(예: --version 체크, 정상 배포)인지 공격(예: 웹셸 명령·"
+    "외부 다운로드·권한상승)인지 가려라. 이유는 한국어 한 줄. 반드시 JSON 배열만 출력한다: "
     '[{"incident_id": "...", "investigate": true, "reason": "..."}]. 그 외 텍스트 금지.'
 )
 
+_EVIDENCE_MAX = 6      # 사건당 LLM 에 줄 증거 줄 수
+_LINE_MAX = 160        # 증거 한 줄 최대 길이
 
-def _digest(inc):
-    """LLM 에 보낼 최소 요약 — 증거 원문/refs 말고 판단에 필요한 필드만(토큰 절약·프라이버시)."""
-    return {
+
+def _evidence_line(ev):
+    """이벤트 → 판단용 한 줄(계층별 핵심 필드). exec_args 가 list 여도 안전 처리."""
+    ld = ev.get("layer_data", {}) or {}
+    layer = ev.get("layer", "?")
+    if layer == "system":
+        args = ld.get("exec_args") or ld.get("argv") or ""
+        if isinstance(args, (list, tuple)):
+            args = " ".join(str(a) for a in args)
+        return ("[system] %s %s" % (ld.get("comm") or ld.get("exe") or "", args)).strip()
+    if layer == "web":
+        return ("[web] %s %s %s" % (ld.get("method", ""), ld.get("path", ""), ld.get("status", ""))).strip()
+    if layer == "network":
+        return ("[network] %s %s" % (ld.get("method", ""), ld.get("url_path") or ld.get("url", ""))).strip()
+    if layer == "auth":
+        return ("[auth] %s user=%s" % (ld.get("method", ""), ld.get("user") or ld.get("invalid_user", ""))).strip()
+    return "[%s]" % layer
+
+
+def _digest(inc, by_ref=None):
+    """LLM 에 보낼 요약 + evidence(실제 명령어). by_ref(raw_ref→event) 있으면 원문 명령을 붙인다."""
+    d = {
         "incident_id": inc.get("incident_id"),
         "score": inc.get("triage_score"),
         "priority": inc.get("priority"),
@@ -45,6 +67,26 @@ def _digest(inc):
         "detect_reasons": [s.get("reason") for s in inc.get("seeds", []) or [] if s.get("reason")][:5],
         "score_parts": inc.get("triage_parts"),
     }
+    if by_ref:
+        refs = []
+        for s in inc.get("seeds", []) or []:      # 탐지 근거 줄 우선
+            refs += (s.get("evidence_refs") or [])
+        refs += (inc.get("members", []) or [])     # 그다음 나머지 멤버
+        seen, cmds = set(), []
+        for r in refs:
+            if r in seen:
+                continue
+            seen.add(r)
+            ev = by_ref.get(r)
+            if not ev:
+                continue
+            line = _evidence_line(ev)[:_LINE_MAX]
+            if line and line not in cmds:
+                cmds.append(line)
+            if len(cmds) >= _EVIDENCE_MAX:
+                break
+        d["evidence"] = cmds
+    return d
 
 
 def _parse(text):
@@ -73,10 +115,11 @@ def _default_call(digests):
     return _parse(text)
 
 
-def llm_review(incidents, call=None, priorities=REVIEW_PRIORITIES, max_review=MAX_REVIEW):
+def llm_review(incidents, events=None, call=None, priorities=REVIEW_PRIORITIES, max_review=MAX_REVIEW):
     """triage() 결과 상위 사건에 llm_investigate(bool)·llm_reason(str) 를 덧붙인다.
 
     입력은 triage() 가 이미 만든 복사본 리스트라 제자리에서 필드만 추가한다(순서·점수 불변).
+    events: 정규화 이벤트 리스트. 주면 raw_ref→명령어를 digest 에 실어 LLM 오탐 판별을 정밀화.
     call: 주입 가능한 호출 함수(digests -> [{incident_id,investigate,reason}]). 테스트/대체용.
           None 이면 실제 Haiku 호출. 키 없거나 예외 발생 시 조용히 결정론-only 로 통과.
     """
@@ -88,8 +131,9 @@ def llm_review(incidents, call=None, priorities=REVIEW_PRIORITIES, max_review=MA
             print("[triage] ANTHROPIC_API_KEY 없음 → LLM 재검토 생략, 결정론 결과만 사용")
             return incidents            # 키 없음 → 안전장치로 결정론-only
         call = _default_call
+    by_ref = {e["raw_ref"]: e for e in events if e.get("raw_ref")} if events else None
     try:
-        verdicts = call([_digest(i) for i in targets])
+        verdicts = call([_digest(i, by_ref) for i in targets])
     except Exception as exc:             # 네트워크/한도/파싱 실패 → 파이프라인 유지
         print("[triage] LLM 재검토 생략(%s)" % exc)
         return incidents

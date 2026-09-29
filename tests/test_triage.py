@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from triage.triage import triage, triage_score, route
+from triage.triage import triage, triage_score, route, incident_key
 
 
 def _inc(iid, layers, joins, seeds, member_count=None, oversized=False):
@@ -69,7 +69,22 @@ def _run():
     assert all("triage_score" in i and "route" in i and "triage_parts" in i for i in out)
     assert "triage_score" not in src[0], "원본 Incident 변형됨"
 
-    print("test_triage OK →", [(i["incident_id"], i["triage_score"], i["priority"]) for i in out])
+    # 7) incident_key: 안정 키
+    def _k(val, reasons, iid="INC-x", mc=1):
+        return {"incident_id": iid, "entity": {"type": "src_ip", "value": val},
+                "seeds": [{"reason": r} for r in reasons],
+                "members": [f"x:{i}" for i in range(mc)]}
+    a = _k("1.1.1.1", ["웹셸 기록", "정찰"], mc=2)
+    b = _k("1.1.1.1", ["정찰", "웹셸 기록"], mc=99)         # 사유 순서·멤버 수만 다름
+    assert incident_key(a) == incident_key(b), "정렬·멤버 무관하게 같아야(안정)"
+    assert incident_key(a).startswith("K-")
+    assert incident_key(a) != incident_key(_k("1.1.1.1", ["웹셸 기록"])), "사유집합 다르면 달라야"
+    assert incident_key(a) != incident_key(_k("2.2.2.2", ["웹셸 기록", "정찰"])), "entity 다르면 달라야"
+    noent = {"incident_id": "INC-x", "entity": {"type": "src_ip", "value": None}, "seeds": []}
+    assert incident_key(noent) == "INC-x", "entity 없으면 incident_id 로 대체"
+    assert all("incident_key" in i for i in out), "triage() 출력에 incident_key 포함"
+
+    print("test_triage OK →", [(i["incident_id"], i["incident_key"], i["triage_score"], i["priority"]) for i in out])
 
 
 if __name__ == "__main__":

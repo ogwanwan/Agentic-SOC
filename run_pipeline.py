@@ -78,7 +78,7 @@ def main() -> int:
 
     # ④-b 트리아지 뒷단(LLM): 상위(P1~P2) 사건을 경량 LLM(Claude Haiku)으로 재검토 —
     # 점수/정렬 불변, llm_investigate·llm_reason 만 부착. 키 없으면 결정론 결과만 사용(안 죽음).
-    incidents = llm_review(incidents)
+    incidents = llm_review(incidents, events=events)
     reviewed = sum(1 for i in incidents if "llm_reason" in i)
     print(f"[triage] LLM 재검토 {reviewed}건(P1~P2 상위)")
 
