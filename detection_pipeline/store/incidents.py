@@ -196,3 +196,54 @@ def stats(conn):
         "priority": count_by("priority"),
         "route": count_by("route"),
     }
+
+
+# --- 조사 큐 소비 (조사 폴러가 씀) -------------------------------------------
+# 상태 전이: pending --claim--> investigating --finish--> done
+#                                    └ release/stale ──> pending(재시도)
+# "SQL 은 store/ 에만" 규칙에 따라 소비자 쪽 쓰기도 여기 둔다.
+
+def claim_incident(conn, key, now_iso):
+    """pending 사건을 investigating 으로 선점한다. 성공하면 True.
+
+    이미 다른 폴러가 집었거나 상태가 바뀌었으면 한 행도 안 바뀌어 False(중복 조사 방지)."""
+    with transaction(conn):
+        cur = conn.execute(
+            "UPDATE incidents SET status = 'investigating', claimed_at = ? "
+            "WHERE incident_key = ? AND status = 'pending'",
+            (now_iso, key),
+        )
+    return cur.rowcount == 1
+
+
+def finish_incident(conn, key):
+    """조사 완료. 조사 중 새 활동이 붙었으면(has_update) done 대신 pending 으로 재오픈한다."""
+    with transaction(conn):
+        conn.execute(
+            "UPDATE incidents SET "
+            "status = CASE WHEN has_update = 1 THEN 'pending' ELSE 'done' END, "
+            "has_update = 0, claimed_at = NULL "
+            "WHERE incident_key = ? AND status = 'investigating'",
+            (key,),
+        )
+
+
+def release_incident(conn, key):
+    """조사 실패·미완료 → pending 으로 되돌려 다음 틱에 다시 조사(누락보다 중복)."""
+    with transaction(conn):
+        conn.execute(
+            "UPDATE incidents SET status = 'pending', claimed_at = NULL "
+            "WHERE incident_key = ? AND status = 'investigating'",
+            (key,),
+        )
+
+
+def reclaim_stale(conn, cutoff_iso):
+    """investigating 에 낀 채 오래된(폴러가 도중에 죽음) 사건을 pending 으로 회수. 회수 건수 반환."""
+    with transaction(conn):
+        cur = conn.execute(
+            "UPDATE incidents SET status = 'pending', claimed_at = NULL "
+            "WHERE status = 'investigating' AND (claimed_at IS NULL OR claimed_at < ?)",
+            (cutoff_iso,),
+        )
+    return cur.rowcount
