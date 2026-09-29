@@ -1,10 +1,11 @@
 ﻿import pytest
 
 from attack_mapping.mapper import (
-    MappingDecisionFormatError,
     judge_mapping_unit,
     map_mapping_unit,
+    merge_validated_selections,
 )
+from attack_mapping.schema import DecisionFormatError
 
 
 class FakeLLM:
@@ -43,16 +44,32 @@ def _candidates():
             "technique_id": "T1059.004",
             "name": "Unix Shell",
             "description": "Unix shell command execution",
-            "tactics": ["Execution"],
+            "tactics": [
+                {
+                    "tactic_id": "TA0002",
+                    "tactic_name": "Execution",
+                    "shortname": "execution",
+                }
+            ],
+            "parent_id": "T1059",
             "rank": 1,
+            "score": 0.95,
             "sources": ["bm25", "vector"],
         },
         {
             "technique_id": "T1033",
             "name": "System Owner/User Discovery",
             "description": "Identify the current user",
-            "tactics": ["Discovery"],
+            "tactics": [
+                {
+                    "tactic_id": "TA0007",
+                    "tactic_name": "Discovery",
+                    "shortname": "discovery",
+                }
+            ],
+            "parent_id": None,
             "rank": 2,
+            "score": 0.83,
             "sources": ["vector"],
         },
     ]
@@ -83,10 +100,11 @@ def test_judge_mapping_unit_supports_multiple_selections():
         candidates=_candidates(),
     )
 
-    assert decision["decision"] == "SELECT"
-    assert len(decision["selections"]) == 2
-    assert decision["selections"][0]["technique_id"] == "T1059.004"
-    assert decision["selections"][1]["technique_id"] == "T1033"
+    assert decision.decision == "SELECT"
+    assert len(decision.selections) == 2
+    assert decision.selections[0].technique_id == "T1059.004"
+    assert decision.selections[1].technique_id == "T1033"
+    assert decision.selections[0].evidence_ids == ("EVID-003",)
     assert len(llm.calls) == 1
 
 
@@ -104,10 +122,8 @@ def test_judge_mapping_unit_supports_abstain():
         candidates=_candidates(),
     )
 
-    assert decision == {
-        "decision": "ABSTAIN",
-        "selections": [],
-    }
+    assert decision.decision == "ABSTAIN"
+    assert decision.selections == ()
 
 
 def test_select_requires_non_empty_selections():
@@ -119,8 +135,8 @@ def test_select_requires_non_empty_selections():
     )
 
     with pytest.raises(
-        MappingDecisionFormatError,
-        match="SELECT must have at least one selection",
+        DecisionFormatError,
+        match="SELECT requires at least one selection",
     ):
         judge_mapping_unit(
             llm_client=llm,
@@ -144,8 +160,8 @@ def test_abstain_requires_empty_selections():
     )
 
     with pytest.raises(
-        MappingDecisionFormatError,
-        match="ABSTAIN must have an empty selections list",
+        DecisionFormatError,
+        match="ABSTAIN must have no selections",
     ):
         judge_mapping_unit(
             llm_client=llm,
@@ -163,7 +179,7 @@ def test_invalid_decision_type_is_rejected():
     )
 
     with pytest.raises(
-        MappingDecisionFormatError,
+        DecisionFormatError,
         match="decision must be SELECT or ABSTAIN",
     ):
         judge_mapping_unit(
@@ -173,7 +189,9 @@ def test_invalid_decision_type_is_rejected():
         )
 
 
-def test_missing_selection_reason_is_rejected():
+def test_empty_selection_reason_is_left_for_validator():
+    """빈 reason은 JSON 형식 오류가 아니라 A Validator의 EMPTY_REASON 대상이다."""
+
     llm = FakeLLM(
         {
             "decision": "SELECT",
@@ -187,15 +205,15 @@ def test_missing_selection_reason_is_rejected():
         }
     )
 
-    with pytest.raises(
-        MappingDecisionFormatError,
-        match="reason must be a non-empty string",
-    ):
-        judge_mapping_unit(
-            llm_client=llm,
-            target_evidence=_target(),
-            candidates=_candidates(),
-        )
+    decision = judge_mapping_unit(
+        llm_client=llm,
+        target_evidence=_target(),
+        candidates=_candidates(),
+    )
+
+    assert decision.decision == "SELECT"
+    assert decision.selections[0].technique_id == "T1059.004"
+    assert decision.selections[0].reason == ""
 
 
 def test_map_mapping_unit_runs_retrieval_llm_and_validator():
@@ -207,9 +225,12 @@ def test_map_mapping_unit_runs_retrieval_llm_and_validator():
         return _candidates()
 
     def fake_validator(selection):
-        validated.append(selection["technique_id"])
+        validated.append(selection.technique_id)
+
         return {
-            **selection,
+            "technique_id": selection.technique_id,
+            "evidence_ids": list(selection.evidence_ids),
+            "reason": selection.reason,
             "validated": True,
         }
 
@@ -272,7 +293,11 @@ def test_map_mapping_unit_does_not_validate_abstain():
 
     def fake_validator(selection):
         validator_calls.append(selection)
-        return selection
+        return {
+            "technique_id": selection.technique_id,
+            "evidence_ids": list(selection.evidence_ids),
+            "reason": selection.reason,
+        }
 
     llm = FakeLLM(
         {
@@ -297,11 +322,13 @@ def test_map_mapping_unit_keeps_successful_selection_when_one_fails():
         return _candidates()
 
     def fake_validator(selection):
-        if selection["technique_id"] == "T1033":
+        if selection.technique_id == "T1033":
             return None
 
         return {
-            **selection,
+            "technique_id": selection.technique_id,
+            "evidence_ids": list(selection.evidence_ids),
+            "reason": selection.reason,
             "validated": True,
         }
 
@@ -333,9 +360,8 @@ def test_map_mapping_unit_keeps_successful_selection_when_one_fails():
     assert len(result) == 1
     assert result[0]["technique_id"] == "T1059.004"
 
-def test_merge_validated_selections_merges_same_technique():
-    from attack_mapping.mapper import merge_validated_selections
 
+def test_merge_validated_selections_merges_same_technique():
     result = merge_validated_selections(
         [
             {
@@ -364,8 +390,6 @@ def test_merge_validated_selections_merges_same_technique():
 
 
 def test_merge_validated_selections_keeps_different_techniques():
-    from attack_mapping.mapper import merge_validated_selections
-
     result = merge_validated_selections(
         [
             {
@@ -382,6 +406,7 @@ def test_merge_validated_selections_keeps_different_techniques():
     )
 
     assert len(result) == 2
+
     assert {
         item["technique_id"]
         for item in result
@@ -392,8 +417,6 @@ def test_merge_validated_selections_keeps_different_techniques():
 
 
 def test_merge_validated_selections_deduplicates_evidence_and_reason():
-    from attack_mapping.mapper import merge_validated_selections
-
     result = merge_validated_selections(
         [
             {

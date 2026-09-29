@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
 from .prompts import (
     build_mapping_system_prompt,
     build_mapping_user_prompt,
 )
+from .schema import (
+    CandidateTechnique,
+    MappingDecision,
+    MappingUnit,
+    SelectionRejection,
+    ValidatedSelection,
+)
 
+from .schema import (
+    CandidateTechnique,
+    MappingDecision,
+    MappingUnit,
+    SelectionRejection,
+    ValidatedSelection,
+)
+from .validate import validate_decision
 
 class JsonLLMClient(Protocol):
     """ATT&CK Mapper가 필요로 하는 최소 LLM 인터페이스."""
@@ -22,121 +36,6 @@ class JsonLLMClient(Protocol):
         ...
 
 
-class MappingDecisionFormatError(ValueError):
-    """LLM 응답이 MappingDecision 형식을 지키지 않았을 때 발생."""
-
-
-def _as_mapping(value: Any, *, label: str) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-
-    if is_dataclass(value) and not isinstance(value, type):
-        converted = asdict(value)
-        if isinstance(converted, Mapping):
-            return converted
-
-    raise TypeError(
-        f"{label} must be a mapping or dataclass instance"
-    )
-
-
-def _validate_decision_shape(
-    raw_decision: Any,
-) -> dict[str, Any]:
-    """LLM 응답의 최소 구조만 검사한다.
-
-    ATT&CK ID가 실제 존재하는지,
-    Candidate 안에 있었는지,
-    Evidence/raw_ref가 유효한지는
-    A 담당 Validator가 이후에 검사한다.
-    """
-
-    decision = _as_mapping(
-        raw_decision,
-        label="LLM decision",
-    )
-
-    decision_type = decision.get("decision")
-    selections = decision.get("selections")
-
-    if decision_type not in {"SELECT", "ABSTAIN"}:
-        raise MappingDecisionFormatError(
-            "decision must be SELECT or ABSTAIN"
-        )
-
-    if not isinstance(selections, list):
-        raise MappingDecisionFormatError(
-            "selections must be a list"
-        )
-
-    if decision_type == "ABSTAIN":
-        if selections:
-            raise MappingDecisionFormatError(
-                "ABSTAIN must have an empty selections list"
-            )
-
-        return {
-            "decision": "ABSTAIN",
-            "selections": [],
-        }
-
-    if not selections:
-        raise MappingDecisionFormatError(
-            "SELECT must have at least one selection"
-        )
-
-    normalized_selections: list[dict[str, Any]] = []
-
-    for index, selection in enumerate(selections):
-        item = _as_mapping(
-            selection,
-            label=f"selections[{index}]",
-        )
-
-        technique_id = item.get("technique_id")
-        evidence_ids = item.get("evidence_ids")
-        reason = item.get("reason")
-
-        if not isinstance(technique_id, str) or not technique_id.strip():
-            raise MappingDecisionFormatError(
-                f"selections[{index}].technique_id "
-                "must be a non-empty string"
-            )
-
-        if (
-            not isinstance(evidence_ids, list)
-            or not evidence_ids
-            or any(
-                not isinstance(evidence_id, str)
-                or not evidence_id.strip()
-                for evidence_id in evidence_ids
-            )
-        ):
-            raise MappingDecisionFormatError(
-                f"selections[{index}].evidence_ids "
-                "must be a non-empty list of strings"
-            )
-
-        if not isinstance(reason, str) or not reason.strip():
-            raise MappingDecisionFormatError(
-                f"selections[{index}].reason "
-                "must be a non-empty string"
-            )
-
-        normalized_selections.append(
-            {
-                "technique_id": technique_id.strip(),
-                "evidence_ids": list(evidence_ids),
-                "reason": reason.strip(),
-            }
-        )
-
-    return {
-        "decision": "SELECT",
-        "selections": normalized_selections,
-    }
-
-
 def judge_mapping_unit(
     *,
     llm_client: JsonLLMClient,
@@ -145,21 +44,17 @@ def judge_mapping_unit(
     related_evidence: Sequence[Any] = (),
     contradicting_evidence: Sequence[Any] = (),
     remaining_unknowns: Sequence[Any] = (),
-) -> dict[str, Any]:
-    """한 Mapping Unit에 대해 LLM의 SELECT/ABSTAIN 판단을 받는다.
+) -> MappingDecision:
+    """한 Mapping Unit에 대한 LLM 결정을 공식 MappingDecision으로 파싱한다.
 
-    이 함수는 Technique을 최종 확정하지 않는다.
+    역할:
+        Evidence + Candidate
+        → Prompt 생성
+        → LLM 호출
+        → MappingDecision.from_dict()
 
-    여기서는:
-      Evidence + Candidate
-      → Prompt
-      → LLM
-      → MappingDecision 형식 확인
-
-    까지만 수행한다.
-
-    Technique ID / Candidate / Evidence / raw_ref의 의미 검증은
-    이후 A 담당 Validator가 수행한다.
+    ATT&CK ID / Candidate / Evidence / raw_ref의 의미 검증은
+    이후 A 담당 validate_decision()에서 수행한다.
     """
 
     system_prompt = build_mapping_system_prompt()
@@ -177,7 +72,8 @@ def judge_mapping_unit(
         user_prompt,
     )
 
-    return _validate_decision_shape(raw_decision)
+    return MappingDecision.from_dict(raw_decision)
+
 
 def map_mapping_unit(
     *,
@@ -189,26 +85,21 @@ def map_mapping_unit(
     contradicting_evidence: Sequence[Any] = (),
     remaining_unknowns: Sequence[Any] = (),
 ) -> list[Any]:
-    """Mapping Unit 하나를 Retrieval → LLM → Validation 순서로 처리한다.
+    """테스트 대역을 이용한 Mapping Unit 오케스트레이션.
 
-    현재 단계에서는 A/B 실제 구현에 직접 의존하지 않는다.
+    이 함수는 A/B 실제 구현이 준비되기 전에
+    C 흐름을 독립적으로 시험하기 위해 유지한다.
 
-    retrieve_candidates_fn:
-        Mapping Unit을 받아 Candidate 목록을 반환하는 테스트 대역.
-        나중에 B의 실제 Retriever와 연결한다.
-
-    validate_selection_fn:
-        LLM Selection 하나를 받아 검증 결과를 반환하는 테스트 대역.
-        나중에 A의 실제 Validator와 연결한다.
-
-    Validator가 None을 반환하면 해당 Selection은 거부된 것으로 본다.
+    실제 RAG 경로에서는 이후
+    judge_and_validate_mapping_unit()과
+    B의 Retriever를 사용한다.
     """
 
     candidates = list(
         retrieve_candidates_fn(mapping_unit)
     )
 
-    # 검색 후보가 없다면 LLM을 호출할 이유가 없다.
+    # 후보가 없으면 LLM을 호출하지 않는다.
     if not candidates:
         return []
 
@@ -221,18 +112,18 @@ def map_mapping_unit(
         remaining_unknowns=remaining_unknowns,
     )
 
-    # LLM이 근거 부족으로 보류한 경우 Validator도 호출하지 않는다.
-    if decision["decision"] == "ABSTAIN":
+    # ABSTAIN은 정상적인 "매핑하지 않음".
+    if decision.decision == "ABSTAIN":
         return []
 
     validated: list[Any] = []
 
-    for selection in decision["selections"]:
+    for selection in decision.selections:
         validated_selection = validate_selection_fn(
             selection
         )
 
-        # 실패한 Selection만 버린다.
+        # 실패한 Selection만 제외한다.
         if validated_selection is None:
             continue
 
@@ -240,18 +131,86 @@ def map_mapping_unit(
 
     return validated
 
+
+def judge_and_validate_mapping_unit(
+    *,
+    llm_client: JsonLLMClient,
+    mapping_unit: MappingUnit,
+    candidates: Sequence[CandidateTechnique],
+    catalog: Any,
+    eligibility: Mapping[str, Any],
+    related_evidence: Sequence[Any] = (),
+    contradicting_evidence: Sequence[Any] = (),
+    remaining_unknowns: Sequence[Any] = (),
+) -> tuple[list[ValidatedSelection], list[SelectionRejection]]:
+    """Mapping Unit 하나를 LLM 판단 후 A Validator로 실제 검증한다.
+
+    실제 흐름:
+
+        MappingUnit
+            ↓
+        CandidateTechnique 목록
+            ↓
+        Prompt
+            ↓
+        LLM SELECT / ABSTAIN
+            ↓
+        MappingDecision
+            ↓
+        A validate_decision()
+            ↓
+        ValidatedSelection / SelectionRejection
+
+    후보가 없거나 LLM이 ABSTAIN하면
+    정상적으로 빈 결과를 반환한다.
+    """
+
+    # 검색 후보가 없다면 LLM을 호출할 이유가 없다.
+    if not candidates:
+        return [], []
+
+    decision = judge_mapping_unit(
+        llm_client=llm_client,
+        target_evidence=mapping_unit,
+        candidates=candidates,
+        related_evidence=related_evidence,
+        contradicting_evidence=contradicting_evidence,
+        remaining_unknowns=remaining_unknowns,
+    )
+
+    # ABSTAIN은 오류가 아니라 정상적인 판단 결과.
+    if decision.decision == "ABSTAIN":
+        return [], []
+
+    accepted, rejected = validate_decision(
+        decision,
+        unit=mapping_unit,
+        candidate_ids=[
+            candidate.technique_id
+            for candidate in candidates
+        ],
+        catalog=catalog,
+        eligibility=eligibility,
+    )
+
+    return accepted, rejected
+
+
 def merge_validated_selections(
     selections: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """동일 technique_id의 검증 완료 Selection을 하나로 합친다.
 
-    현재 단계에서는 C가 확실히 소유하는 값만 병합한다:
+    이 함수는 Fake A/B 기반 C 단위 테스트를 위해 유지한다.
+
+    현재 병합 대상:
+
     - technique_id
     - evidence_ids
     - reason
 
-    공식 name / tactic / parent / raw_refs / time 등은
-    A의 실제 Validator/Catalog 계약을 받은 뒤 연결한다.
+    A의 실제 ValidatedSelection을 AttackMappingEntry로 만드는
+    공식 RAG 병합 로직은 이후 별도로 구현한다.
     """
 
     merged: dict[str, dict[str, Any]] = {}
@@ -266,13 +225,21 @@ def merge_validated_selections(
 
         technique_id = technique_id.strip()
 
-        evidence_ids = selection.get("evidence_ids", [])
+        evidence_ids = selection.get(
+            "evidence_ids",
+            [],
+        )
+
         if not isinstance(evidence_ids, list):
             raise ValueError(
                 "validated selection evidence_ids must be a list"
             )
 
-        reason = selection.get("reason", "")
+        reason = selection.get(
+            "reason",
+            "",
+        )
+
         if not isinstance(reason, str):
             raise ValueError(
                 "validated selection reason must be a string"
@@ -289,13 +256,69 @@ def merge_validated_selections(
 
         for evidence_id in evidence_ids:
             if evidence_id not in target["evidence_ids"]:
-                target["evidence_ids"].append(evidence_id)
+                target["evidence_ids"].append(
+                    evidence_id
+                )
 
         cleaned_reason = reason.strip()
+
         if (
             cleaned_reason
             and cleaned_reason not in target["reasons"]
         ):
-            target["reasons"].append(cleaned_reason)
+            target["reasons"].append(
+                cleaned_reason
+            )
 
     return list(merged.values())
+
+def judge_and_validate_mapping_unit(
+    *,
+    llm_client: JsonLLMClient,
+    mapping_unit: MappingUnit,
+    candidates: Sequence[CandidateTechnique],
+    catalog: Any,
+    eligibility: Mapping[str, Any],
+    related_evidence: Sequence[Any] = (),
+    contradicting_evidence: Sequence[Any] = (),
+    remaining_unknowns: Sequence[Any] = (),
+) -> tuple[list[ValidatedSelection], list[SelectionRejection]]:
+    """Mapping Unit 하나를 LLM 판단 후 A Validator로 검증한다.
+
+    흐름:
+        Candidate
+        → Prompt
+        → LLM SELECT / ABSTAIN
+        → MappingDecision
+        → A validate_decision()
+    """
+
+    # 후보 자체가 없으면 LLM을 호출할 이유가 없다.
+    if not candidates:
+        return [], []
+
+    decision = judge_mapping_unit(
+        llm_client=llm_client,
+        target_evidence=mapping_unit,
+        candidates=candidates,
+        related_evidence=related_evidence,
+        contradicting_evidence=contradicting_evidence,
+        remaining_unknowns=remaining_unknowns,
+    )
+
+    # ABSTAIN은 정상적인 "매핑하지 않음"이다.
+    if decision.decision == "ABSTAIN":
+        return [], []
+
+    accepted, rejected = validate_decision(
+        decision,
+        unit=mapping_unit,
+        candidate_ids=[
+            candidate.technique_id
+            for candidate in candidates
+        ],
+        catalog=catalog,
+        eligibility=eligibility,
+    )
+
+    return accepted, rejected

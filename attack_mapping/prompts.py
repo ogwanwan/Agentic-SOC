@@ -27,8 +27,9 @@ _CANDIDATE_FIELDS = (
     "name",
     "description",
     "tactics",
-    "parent_technique",
+    "parent_id",
     "rank",
+    "score",
     "sources",
 )
 

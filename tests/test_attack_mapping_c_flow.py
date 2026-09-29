@@ -103,7 +103,11 @@ def test_c_flow_maps_multiple_units_and_merges_same_technique():
         return _candidates()
 
     def fake_validator(selection):
-        return selection
+        return {
+            "technique_id": selection.technique_id,
+            "evidence_ids": list(selection.evidence_ids),
+            "reason": selection.reason,
+    }
 
     validated = []
 
@@ -176,7 +180,11 @@ def test_c_flow_keeps_abstained_unit_unmapped():
         return _candidates()
 
     def fake_validator(selection):
-        return selection
+        return {
+            "technique_id": selection.technique_id,
+            "evidence_ids": list(selection.evidence_ids),
+            "reason": selection.reason,
+    }
 
     validated = []
 
