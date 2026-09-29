@@ -24,6 +24,10 @@ def _run():
     # 1-b) 버그#3: 배열 뒤에 또 다른 [..] 나 인용이 붙어도 첫 배열만 파싱(rfind 방식은 여기서 깨졌음)
     assert _parse('[{"incident_id":"a","investigate":true,"reason":"웹셸[1] 참고"}] 추가설명 [1]') == \
         [{"incident_id": "a", "investigate": True, "reason": "웹셸[1] 참고"}]
+    # 1-c) 잘린 배열(max_tokens 초과) 구제: 완결 객체만이라도 살림
+    truncated = '[{"incident_id":"a","investigate":true,"reason":"r1"},{"incident_id":"b","inve'
+    got = _parse(truncated)
+    assert got == [{"incident_id": "a", "investigate": True, "reason": "r1"}], f"잘린 배열 구제 실패: {got}"
 
     # 2) 가짜 call 주입 → P1/P2 만 llm 필드 부착, P3 는 손 안 댐
     seen = {}
