@@ -9,7 +9,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "detection_pipeline"))
 
 from tools.fetch_apache_log import fetch_apache_log
 from tools.fetch_network_log import fetch_network_log
@@ -18,7 +18,7 @@ from tools.normalize import normalize_all
 
 
 def _sample_lines(name, n):
-    with open(os.path.join(ROOT, "tools", name), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "detection_pipeline", "samples", name), encoding="utf-8") as fh:
         return [line for line in fh if line.strip()][:n]
 
 

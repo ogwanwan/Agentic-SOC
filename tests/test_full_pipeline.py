@@ -7,7 +7,7 @@ tests/test_full_pipeline.py
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "detection_pipeline"))
 
 from collections import Counter
 
@@ -51,7 +51,7 @@ check("모든 이벤트에 timestamp/layer/raw_ref 존재",
 
 # ---- ② 탐지 ---------------------------------------------------
 section("② 탐지  detect/engine.py + suricata_seed.py")
-rules = load_rules(os.path.join(os.path.dirname(__file__), "..", "detect", "rules", "sigma"))
+rules = load_rules(os.path.join(os.path.dirname(__file__), "..", "detection_pipeline", "detect", "rules", "sigma"))
 by_dir = dict(Counter(r.path.parent.name for r in rules))
 check("Sigma 룰 로드", len(rules) > 0, f"{len(rules)}개 {by_dir}")
 

@@ -1,4 +1,8 @@
+import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "detection_pipeline"))
 
 from detect.suricata_seed import build_suricata_seeds
 from detect.web_network_correlation import build_web_network_correlation_index

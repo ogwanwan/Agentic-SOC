@@ -1,5 +1,9 @@
+import os
 import random
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "detection_pipeline"))
 
 from common.seed import VALID_SIGNAL_TAGS, validate as validate_seed
 from detect.suricata_seed import build_suricata_seeds

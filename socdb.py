@@ -15,7 +15,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "detection_pipeline"))
 
 from store.db import DB_FILE, connect  # noqa: E402
 from store.incidents import STATUS_LABELS, get_incident, list_queue, stats  # noqa: E402

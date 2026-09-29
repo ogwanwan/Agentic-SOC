@@ -24,7 +24,9 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_ROOT, "detection_pipeline"))
+sys.path.insert(0, os.path.join(_ROOT, "llm"))
 
 from correlate.grouping import correlate  # noqa: E402
 from detect.aggregate import aggregate_seeds  # noqa: E402
@@ -36,7 +38,7 @@ from pipeline.state import diff_incidents, incident_key, run_lock  # noqa: E402
 from store.db import DB_FILE, connect, import_state_json, migrate  # noqa: E402
 from store.incidents import load_state_view, record_run  # noqa: E402
 from tools.normalize import normalize_all  # noqa: E402
-from triage.llm_review import llm_review  # noqa: E402
+from triage_review.llm_review import llm_review  # noqa: E402
 from triage.triage import triage  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -48,7 +50,7 @@ def main() -> int:
     ap.add_argument("--auth")
     ap.add_argument("--network")
     ap.add_argument("--audit")
-    ap.add_argument("--rules", default=str(HERE / "detect" / "rules" / "sigma"), help="Sigma 룰 디렉터리(재귀)")
+    ap.add_argument("--rules", default=str(HERE / "detection_pipeline" / "detect" / "rules" / "sigma"), help="Sigma 룰 디렉터리(재귀)")
     ap.add_argument("--window", type=int, default=60, help="seed window 반경(초)")
     ap.add_argument("--min-count", type=int, default=5,
                     help="seed 집계 후 저심각(low/medium) 최소 발생 수(미만이면 버림)")
