@@ -1,4 +1,4 @@
-"""Kill chain assembly: orders A's deduped techniques into ATT&CK tactic stages.
+"""Kill chain assembly: orders deduped techniques by observed event chronology.
 
 Consumes AttackMappingResult["techniques"] (MappedTechnique dicts) exactly as
 produced by attack_mapping.engine.map_investigation. This module never reads
@@ -9,14 +9,13 @@ technique that has none, and never mutates its input.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from primary_detection.normalizer.common.timeparse import normalize_iso
 
 from .schema import TACTIC_ORDER, MappedTechnique
 
 _TACTIC_RANK = {name: rank for rank, name in enumerate(TACTIC_ORDER)}
-_UNKNOWN_TACTIC_RANK = len(TACTIC_ORDER)
 _UNKNOWN_TIME = datetime.max.replace(tzinfo=timezone.utc)
 
 
@@ -46,22 +45,48 @@ def _representative_time(technique: MappedTechnique) -> Optional[str]:
     return min(times, key=_time_sort_key) if times else None
 
 
-def build_kill_chain(techniques: List[MappedTechnique]) -> List[Dict[str, Any]]:
+def _representative_sequence(
+    technique: MappedTechnique, evidence_sequences: Optional[Mapping[str, int]]
+) -> Optional[int]:
+    """Use the original Evidence sequence; never infer one from an ID or position."""
+    if evidence_sequences is None:
+        return None
+    sequences = [
+        sequence
+        for evidence_id in technique.get("evidence_ids", [])
+        if type(sequence := evidence_sequences.get(evidence_id)) is int and sequence > 0
+    ]
+    return min(sequences) if sequences else None
+
+
+def build_kill_chain(
+    techniques: List[MappedTechnique],
+    *,
+    evidence_sequences: Optional[Mapping[str, int]] = None,
+    tactic_ranks: Optional[Mapping[str, int]] = None,
+) -> List[Dict[str, Any]]:
     """Reorder deduped techniques into a step-numbered kill chain.
 
-    Sort key: (1) tactic position in TACTIC_ORDER, unknown tactic names last;
-    (2) earliest recorded instant in UTC, then unparseable times, then untimed
-    (verdict-only) techniques within the same tactic. Original time strings are
-    preserved in the output. Python's stable sort keeps
-    `techniques`' own order (technique_id order, from map_investigation) as the
-    tie-breaker, so output is deterministic across repeated runs on the same
-    mapping result. A technique_id never appears twice: map_investigation already
-    merges every hit for the same technique into one MappedTechnique.
+    Sort by the earliest observed UTC instant across tactics. Original Evidence
+    sequence breaks equal-time ties and orders untimed techniques when supplied.
+    Known times precede untimed evidence; unparseable times stay ahead of fully
+    untimed entries when neither has a sequence. Tactic order is only a display
+    tie-breaker when event time and sequence cannot distinguish techniques;
+    input order remains the final stable tie-breaker.
     """
     def sort_key(technique: MappedTechnique):
-        rank = _TACTIC_RANK.get(technique["tactic_name"], _UNKNOWN_TACTIC_RANK)
-        time = _representative_time(technique)
-        return (rank, *_time_sort_key(time))
+        time_status, instant = _time_sort_key(_representative_time(technique))
+        sequence = _representative_sequence(technique, evidence_sequences)
+        tactic_rank = (
+            tactic_ranks.get(technique["tactic_id"], len(tactic_ranks))
+            if tactic_ranks is not None
+            else _TACTIC_RANK.get(technique["tactic_name"], len(_TACTIC_RANK))
+        )
+        if time_status == 0:
+            return (0, instant, sequence if sequence is not None else float("inf"), tactic_rank)
+        if sequence is not None:
+            return (1, _UNKNOWN_TIME, sequence, tactic_rank)
+        return (2 if time_status == 1 else 3, _UNKNOWN_TIME, float("inf"), tactic_rank)
 
     ordered = sorted(techniques, key=sort_key)
 

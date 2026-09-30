@@ -9,15 +9,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Agentic-SOC: LLM 기반 SOC(보안관제) 파이프라인을 만드는 팀 프로젝트. **완전히 다른 에이전트가 서로 다른 브랜치에 있고, 조사 에이전트만도 여러 브랜치에서 병렬로 발전 중이다** — 작업 전 반드시 `git branch --show-current`로 확인할 것.
 
 - **1차 탐지 에이전트** (`main` / `feature/agent`, `feature/primary-detection`): Apache+auth 로그를 IP별로 집계해 `malicious_bot`/`benign_bot`/`human`/`undetermined`로 분류하고, 조사가 필요한 IP만 골라 조사 에이전트로 넘긴다. 공통 정규화(`primary_detection/normalizer`)의 원본이 여기 있다.
-- **조사 에이전트 + ATT&CK 매핑 통합** — 개인 저장소 `integrate-attack-mapping-rag` (**이 문서가 다루는 브랜치**, 2026-09-28~). 조사 에이전트 최신(`integrate-investigation` = 팀 `feature/Agentic-SOC-Investigation-Agent`, `051dda7`) 위에 `d802dbb`에서 지운 ATT&CK 매핑(`attack_mapping/`, `reporting/`, 매핑 테스트·문서)을 `a1e60ce`에서 되살리고, `main.py`에 매핑 연결을 다시 붙이고, RAG 전환 담당 A 작업을 올렸다. 조사 코드 수정은 조사 브랜치에서 하고 이 브랜치로 merge해 온다(`d802dbb`의 삭제는 이미 이 브랜치 이력에 있어서 그 뒤 조사 커밋을 merge해도 매핑 파일이 지워지지 않는다). 개인 저장소에만 올리고 팀 저장소에는 반영하지 않는다. 옛 팀 브랜치 `feature/investigation-attack-mapping`(`a1e60ce`)은 그대로 둔다.
+- **조사 에이전트 + ATT&CK 매핑 통합** — 팀 저장소 `attack-mapping-final` (**이 문서가 다루는 브랜치**). 담당 A·C의 공식 Catalog·Validator·LLM Mapper에 담당 B의 Hybrid Retrieval과 조사 브랜치의 최근 수정을 합쳤다. 저장된 조사 JSON으로 RAG 매핑과 최종 보고서를 만든다. Rule 매핑은 명시적 baseline으로 남긴다.
 - **조사 에이전트(Investigation Agent)** — 여러 브랜치에 존재:
   - `feature/Agentic-SOC-Investigation-Agent` (조사 에이전트 단독 기준). 개인 저장소의 `integrate-investigation`과 같은 내용으로 유지한다. `d802dbb`에서 ATT&CK 매핑을 지웠으므로 이 브랜치를 그대로 받아(fast-forward) 매핑 브랜치에 덮지 않는다.
   - `feature/agent-final` — 같은 `cb5005d`에서 갈라진 자매 브랜치. 0924 이후의 provenance·재현성 수정(아래 "상태와 신뢰도", "종료 관문")이 **없다**. raw_ref 미인용 시 신뢰도 기여를 0으로 만드는 이전 규칙을 쓴다. 이 브랜치의 변경을 그쪽으로 자동 전파하지 않는다.
 
 브랜치마다 폴더 구조와 세부 로직이 다르므로, 한쪽에서 읽은 코드/동작 지식을 다른 쪽에 그대로 적용하면 안 된다. 0918 이후 이 브랜치의 변경 이력과 검증 결과는 [docs/CHANGES_0918_TO_0925.md](docs/CHANGES_0918_TO_0925.md)에 있다.
 
-이 브랜치는 **개인 저장소(`zhrldnpftl/WHS4-Agentic-SOC-Investigation-Agent`) 기준으로만** 작업한다. 팀 저장소(`ogwanwan/Agentic-SOC`)는 다른 팀원이 쓰고 있어 건드리지 않는다. 개인 저장소의 `integrate-attack-mapping`(`a1e60ce`)은 0927 작업물로 따로 남겨 두고 이 브랜치와 합치지 않는다.
-Git 원격 이름은 작업 폴더마다 다르다(조사 폴더: `origin` = 개인 저장소, `upstream` = 팀 저장소 / 매핑 통합 폴더: `origin` = 개인 저장소, `team` = 팀 저장소). push 전에 `git remote -v`로 확인할 것. 어느 폴더든 팀 저장소 push 주소는 `DISABLED`로 막아 두고, 사용자가 팀 저장소 push를 요청할 때만 잠깐 복구했다가 다시 막는다.
+원격 이름은 작업 폴더마다 다를 수 있다. push 전에 `git remote -v`와 대상 브랜치의 최신 커밋을 확인한다. 이 통합 브랜치를 조사 단독 브랜치로 역병합하지 않는다.
 
 ## Commands
 
@@ -37,7 +36,7 @@ python -m scripts.fetch_attack_catalog                # 공식 ATT&CK STIX(git �
 
 # 실제 LLM 실행
 cp .env.example .env                                  # 키/경로 채워넣기 (Windows: Copy-Item .env.example .env)
-python main.py <사건 파일>                             # 기본 Gemini. LLM_PROVIDER=anthropic 로 Claude 전환. 사건 파일 = 1차 탐지 Incident JSONL 또는 사건 JSON
+python main.py <사건 파일>                             # 기본 Claude(ANTHROPIC_API_KEY). LLM_PROVIDER=gemini 로 Gemini 전환. 사건 파일 = 1차 탐지 Incident JSONL 또는 사건 JSON
 python -m tests.test_consistency --runs 8              # 실제 API로 판정 재현성 반복 측정 (수동, 과금 발생)
 python -m tests.test_consistency --runs 4 --seed-json seed.json   # 임의 seed 파일로 반복 측정
 python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조회·강화 관문 없음)으로 비교
@@ -46,7 +45,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 주의:
 - `pytest.ini`가 `tests/test_consistency.py`를 자동 실행에서 제외한다(실제 API 호출).
 - `No module named agent`/`scripts` 에러가 나면 저장소 루트에서 `python -m ...` 형태로 실행했는지 확인한다.
-- `main.py`는 보고서를 콘솔에 출력하지 않는다. investigation_result JSON을 `results/investigation_agent/<investigation_id>_<UTC시각>.json`에 저장하고, 저장 직후 그 파일로 ATT&CK 매핑을 돌려 `results/attack_mapping/<incident_id>_attack_mapping.json`·`_final_report.json`을 만든다(같은 사건 재조사는 `__2`, `__3` …). 콘솔에는 저장 경로와 사건별 매핑 상태 한 줄만 표시한다.
+- `main.py`는 사건 하나의 조사가 끝날 때마다(`run_investigation_pipeline(on_result=...)`) 결과 JSON을 저장하고 그 파일로 ATT&CK 매핑을 실행한다. 뒤 사건에서 실행이 멈춰도 앞 사건 결과는 남는다. 조사 미완료 사건은 마지막에 사건 id(`incident_key`, 없으면 `incident_id`)로 모아 보여 준다.
 - EC2 운영 환경은 Python 3.10이다. 시각 파싱처럼 버전에 따라 동작이 다른 부분은 3.10에서 확인한다.
 
 ## Architecture
@@ -61,7 +60,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
                                        갱신 + 다음 행동(call_tool | terminate) 동시 결정 (InvestigationAgent.run)
   → agent/report.py                   최종 investigation_result JSON (main.py가 results/investigation_agent/에 저장)
   → main.run_attack_mapping()          [46] 저장된 JSON 파일 → attack_mapping/cli.py process_file()
-                                       (엔진 + rules/ ALL_RULES + killchain → reporting/final_report.py)
+                                       (Catalog + Hybrid Retrieval + LLM + Validator → reporting/final_report.py)
 ```
 코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다(`[7]`~`[15]`는 삭제된 수집·seed 생성 단계라 비어 있음). `[46]` 매핑 연결과 매핑 내부 흐름은 [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md) 맨 아래 "0928 기록"에 있다(본문은 0927 기준). `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
@@ -76,7 +75,7 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 도구 반환값의 약속(LLM과 종료 관문이 의존함):
 - `summary`에 `[조회 구간 전체 집계]`: limit으로 자른 페이지와 무관하게 조건에 맞는 전체 이벤트 기준으로 코드가 센 값(건수, 실제 기록 시각, 상위 항목). LLM이 records를 직접 세지 않게 하기 위한 것이다.
 - `window_total`: 필터 전 조회 구간 전체 건수. 0이면 "활동 없음"이 아니라 로그 미확보다.
-- `rule_checks`: 판정 원칙 기준을 코드가 계산한 결과. web은 `principle_9`(인증·XML-RPC POST 10회 이상, 경로 20개 이상+4xx 과반), audit은 `audit_post_exploitation`(웹 서버 계정의 셸·의심 명령 실행, cron `sh -c`·EC2 Instance Connect 제외), auth는 `principle_7`(IP 하나로 거르고 로그인 성공이 없을 때: 실패 5회 이상 또는 계정 2개 이상 → 무차별 대입, 1~4회·1계정 → 단발성, 실패 0회·`ssh_probe` 1~4건 → 스캐너 탐침).
+- `rule_checks`: 판정 원칙 기준을 코드가 계산한 결과. web은 `principle_9`(인증·XML-RPC POST 10회 이상, 경로 20개 이상+4xx 과반), audit은 `audit_post_exploitation`(웹 서버 계정의 셸·의심 명령 실행, cron `sh -c`·EC2 Instance Connect 제외, 그 명령들의 실행 시각 `web_suspicious_times`), auth는 `principle_7`(IP 하나로 거르고 로그인 성공이 없을 때: 실패 5회 이상 또는 계정 2개 이상 → 무차별 대입, 1~4회·1계정 → 단발성, 실패 0회·`ssh_probe` 1~4건 → 스캐너 탐침).
 - `fetch_network_log`의 `ip` 필터는 방향 무관(src·dest 모두 매칭)이다. 역방향 셸(서버 → 공격자)을 잡기 위해서다. `ip`/`src_ip`/`dst_ip`에 IP가 아닌 값(도메인)이 오면 `ValueError`로 알린다(조용한 0건 방지, 실패 호출로 LLM에게 전달).
 - audit의 `user` 필터는 **실행 계정**이다(sudo 뒤에는 root). 로그인 세션을 따라가려면 `ppid`를 쓴다.
 
@@ -105,11 +104,12 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
   - (f) strict: audit 명령 인자에 나온 공인 IP를 network로 조회하지 않음
   - (g) strict: 증거가 인용한 1차 탐지 참조(`detection.rules[].evidence_refs`)를 도구 결과에서 관측하지 않았고 그 계층(system = audit)을 도구로 한 번도 조회하지 않음(`_unverified_detection_refs()`). 조회 시도만 해도 인정. 계층을 알 수 없는 참조(직접 작성한 사건)는 보지 않는다. 1차 탐지 Incident 첫 실제 실행에서 LLM이 detection의 명령 인자를 그대로 증거로 옮겨 audit 없이 확정한 사례 때문
   - (h) strict: 1차 탐지 룰(`detection.rules`) 중 탐지 근거 참조를 도구 결과에서 하나도 관측하지 못했고 `unknowns`에 룰 이름·참조도 없는 것이 있음(`_unverified_detection_rules()`). 사유에 룰 이름·계층·pid/ppid 안내. (g) 수정 뒤 재실행에서 sudo 자식인 useradd(계정 생성) 룰 2개를 확인하지 않고 끝낸 사례 때문
-  - 판정-원칙 충돌 (`_verdict_conflicts()`, strict): 조회한 모든 계층의 `window_total`이 0인데 INCONCLUSIVE가 아님 / 원칙 9 기준 충족인데 FALSE_POSITIVE / audit에 웹 서버 계정 의심 명령이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만 / 원칙 7 무차별 대입인데 FALSE_POSITIVE·INCONCLUSIVE / 원칙 7 단발성·탐침이고 다른 위협 기준이 없는데 THREAT_CONFIRMED·INCONCLUSIVE
+  - 판정-원칙 충돌 (`_verdict_conflicts()`, strict): 조회한 모든 계층의 `window_total`이 0인데 INCONCLUSIVE가 아님 / 원칙 9 기준 충족인데 FALSE_POSITIVE / audit에 웹 서버 계정 의심 명령이 있는데 FALSE_POSITIVE이거나 severity가 HIGH 미만 — 단 seed에 src_ip가 있으면 그 IP의 요청(seed window·trigger_time, 도구 결과의 그 IP 레코드 시각) 뒤 `WEB_EXEC_LINK`(120초) 안에 실행된 명령이 있을 때만 적용(`_link_web_exec()`, 조회 순서와 무관하게 매 호출 뒤 다시 연결). 연결되지 않은 명령은 notes에 "같은 호스트의 별도 사건일 수 있음"으로 남는다. 2026-09-29 EC2에서 `/.git/config` 404 한 건인 IP 사건이 19분 뒤 다른 IP가 일으킨 www-data `sudo su`로 THREAT_CONFIRMED CRITICAL이 된 사례 때문. pid 사건(src_ip 없음)과 시각을 모르는 집계는 전과 같다 / 원칙 7 무차별 대입인데 FALSE_POSITIVE·INCONCLUSIVE / 원칙 7 단발성·탐침이고 다른 위협 기준이 없는데 THREAT_CONFIRMED·INCONCLUSIVE
   - 거부 사유에는 아직 안 본 도구와 확인 목적이 적힌다(`UNTRIED_TOOL_PURPOSE`).
 - **강제 종료**: 같은 사유(숫자 제외 비교)로 연속 2회 거부될 때만 강제 종료 턴으로 전환한다. 거부 사이에 새 도구가 실행되면 횟수를 초기화한다. 강제 종료 턴에서 LLM이 원칙과 어긋나게 판정을 뒤집으면 앞서 LLM이 낸 원칙에 맞는 판정을 쓴다(`_settle_forced_verdict()`). 그래도 충돌이 남으면 판정은 바꾸지 않고 notes에 "⚠ 판정-원칙 불일치"를 남긴다.
 - `max_call_reached` 시 판정만 요청하는 마무리 턴을 1회 추가하고, 그래도 `final_verdict`가 없으면 `_derive_fallback_verdict()`가 confidence 수치로 폴백 판정을 만든다.
 - LLM 응답 해석 실패(`...DecisionError`)는 `_safe_reason()`이 1회 재시도하고, 또 실패하면 그 사건만 폴백 판정으로 마무리하고 다음 seed를 계속 조사한다. API 키·권한 오류는 그대로 올린다.
+- LLM API 일시 오류(`LLMUnavailableError`, 클라이언트 재시도 뒤)는 `run()`이 잡아 그 사건만 **조사 미완료**로 끝낸다: `investigation_status="INCOMPLETE"`, `incomplete_reason`, `termination_reason="llm_unavailable"`, 판정은 INCONCLUSIVE이고 reasoning이 `[조사 미완료`로 시작한다(폴백 판정 `[자동 폴백 판정`과 구분, 매핑은 deferred). 조사 본문은 `_investigate()`에 있다.
 
 ### 원본 추적/Provenance (D) — `agent/provenance.py`
 evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations()`로 `state.raw_refs`(seed+도구 결과에서 실제 관측된 참조 집합)와 대조된다. 최종 보고서의 `provenance.status`(`passed`/`incomplete`/`unavailable`)는 "참조가 유효했는가"의 검증이지 "판정이 맞는가"의 검증이 아니다. 증거마다 코드가 계산한 `supporting_tool_calls`(그 raw_refs를 관측한 도구 호출 sequence, 0건 증거는 `empty_result_call`)와 `seed_only_raw_refs`(1차 탐지 참조 중 어떤 도구 결과에서도 관측되지 않은 것)가 붙고, `provenance.seed_only_evidence`에 해당 증거 id가 모인다(`evidence_ref_sources()`). seed 참조도 실제 원본 줄이라 status에는 반영하지 않는다 — ATT&CK 매핑이 "도구로 재확인되지 않은 증거"를 표시하는 데 쓴다(매핑 담당용 안내: [docs/EVIDENCE_REF_SOURCES.md](docs/EVIDENCE_REF_SOURCES.md)). 사람이 읽는 텍스트 보고서는 만들지 않는다(0927 제거) — 최종 보고서는 이후 단계(ATT&CK 매핑·대응 권고) 결과까지 합쳐 따로 만든다.
@@ -133,19 +133,19 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 프롬프트의 판정 기준을 바꿀 때는 `fetch_*_log`의 `rule_checks` 계산과 `_verdict_conflicts()`를 함께 맞출 것 — 한쪽만 바꾸면 관문이 LLM의 판정을 계속 거부한다.
 
 ### LLM 클라이언트 — `agent/gemini_client.py`, `agent/claude_client.py`
-`GeminiClient`(기본값, 무료 티어)와 `ClaudeClient`는 같은 인터페이스(`.reason(state, tool_registry, confidence_threshold, force_terminate, gate_rejection_reason)`, `.complete_json()`)·같은 설정(출력 8192, temperature 0)이라 `LLM_PROVIDER` 환경변수로 교체한다. Claude는 `CLAUDE_MODEL`(기본 `claude-sonnet-5`), SDK `max_retries`로 429·529·연결 오류 재시도, 시스템 프롬프트 캐시 표시, `usage_totals`에 토큰 누적(오프라인 테스트 `tests/test_claude_client.py`, 실제 API 재현성은 미검증). Gemini는 `max_output_tokens=8192`이고, 503과 연결 오류(`OSError`, `httpx.TransportError`)를 5·10·15초 간격으로 재시도한다. 무료 티어의 일일 요청 제한(429)과 간헐적 503은 코드 문제가 아니다 — 반복 측정(`test_consistency`)은 한도를 고려해 나눠 돌린다.
+`ClaudeClient`(기본값, 2026-09-28 전환)와 `GeminiClient`(무료 티어)는 `agent/llm_provider.py`의 `build_llm_client()`가 `LLM_PROVIDER`(비면 anthropic)로 고른다(`main.py`·`test_consistency` 공용). 둘은 같은 인터페이스(`.reason(state, tool_registry, confidence_threshold, force_terminate, gate_rejection_reason)`, `.complete_json()`)라 `LLM_PROVIDER` 환경변수로 교체한다. Claude는 `CLAUDE_MODEL`(기본 `claude-sonnet-5`), 선택 `CLAUDE_EFFORT`(→ `output_config.effort`), 출력 한도 16000(sonnet-5는 thinking이 기본으로 켜져 thinking 토큰도 포함), SDK `max_retries`로 429·5xx·529·연결 오류 재시도, 시스템 프롬프트 캐시 표시, `usage_totals`에 토큰 누적(오프라인 테스트 `tests/test_claude_client.py`, 실제 API 재현성은 미검증). **Claude에는 `temperature`·`top_p`·`top_k`를 보내지 않는다** — anthropic SDK 1.x가 인자를 삭제해 TypeError가 나고(2026-09-28 EC2), sonnet-5도 400이다. `test_request_arguments_are_accepted_by_installed_sdk`가 보내는 인자를 설치된 SDK 시그니처와 대조한다. **안전 필터 거절(`stop_reason=refusal`)**: 공격 로그(웹셸 명령 등)를 사이버 공격 요청으로 오인해 거절할 수 있다(2026-09-29 재현성 측정에서 웹셸 시나리오 4회 중 1회 연속 거절 → 폴백 판정). sonnet-5는 서버 측 `fallbacks` 대상 모델이 없어(`allowed_fallback_models` 빈 목록) `ClaudeClient`가 같은 요청을 `CLAUDE_REFUSAL_FALLBACK_MODEL`(기본 `claude-sonnet-4-6`, effort 없이)로 한 번 직접 다시 보내고, 그 사실을 `stop_details.category`와 함께 결과 notes에 남긴다(`usage_totals`의 `refusals`·`fallback_calls`). 대체 모델도 거절하거나 `none`/`off`면 category를 담은 해석 실패로 처리한다. 시스템 프롬프트 role에 방어 목적 로그 분석이라는 맥락을 둔다. Gemini는 모델 `GEMINI_MODEL`(기본 `gemini-3.5-flash-lite`), `max_output_tokens=8192`, temperature 0이고, 429·5xx(15·30·60초, 429는 서버 안내 시간)와 연결 오류(`OSError`, `httpx.TransportError`, 5·10·15초)를 재시도한다. 두 클라이언트 모두 재시도를 다 써도 일시 오류면 `LLMUnavailableError`(`agent/llm_errors.py`)로 올린다. 응답 JSON 해석은 공용 `agent/llm_json.py`의 `parse_llm_json()`이 한다 — Gemini는 `response_mime_type`으로 JSON만 나오게 강제하지만 Claude는 강제 설정이 없어 JSON 앞뒤에 설명 문장이 붙을 수 있으므로(2026-09-28 첫 실제 실행에서 해석 실패 2회 → 폴백 판정), 응답 전체 → 중간 코드 블록 → 첫 `{`~마지막 `}` 순으로 꺼낸다. 실패하면 오류 첫 줄에 응답 앞부분을 넣어 notes에서 원인을 확인할 수 있게 한다. 400·401·403 같은 설정·요청 오류는 감싸지 않는다. 무료 티어의 일일 요청 제한(429)과 간헐적 503은 코드 문제가 아니다 — 반복 측정(`test_consistency`)은 한도를 고려해 나눠 돌린다.
 
 ### 로컬 개발용 우회
 로그는 `.env`의 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH` — 1차 탐지와 같은 이름, 0927에 `*_LOG_LOCAL_PATH`에서 변경, `log_source.LOCAL_PATH_ENV`) 파일에서만 읽는다(S3 읽기 코드는 삭제됨, 경로가 없으면 설정 오류). 로컬 개발은 이 경로를 `sample_logs/*.log`로 둔다. 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다. `sample_logs/`는 EC2 실제 트래픽이 들어 있어 **git으로 추적하지 않는다**(`.gitignore`) — 실험 전에 `sample_logs_orig/`로 백업해 두고 실험 후 그 백업으로 원복한다(`scenarios/README.md`). 새로 clone한 저장소에는 샘플이 없으니 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받는다.
 
 ### ATT&CK 매핑 — `attack_mapping/`, `reporting/` (어택 매핑 팀 코드)
 작업 전에 [docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)(RAG 전환과 담당 A·B·C 협업 규칙)를 먼저 읽는다.
-- 지금 `main.py`가 쓰는 것은 LLM을 부르지 않는 **Rule 매핑**이다: `final_verdict.attack_type`과 `evidence_chain`의 `description`/`event_type`을 `attack_mapping/rules/`의 키워드와 비교한다. 따라서 LLM이 쓴 문장 표현이 매핑 결과를 좌우한다.
-- 게이트: FALSE_POSITIVE → `not_applicable`, INCONCLUSIVE 또는 provenance `unavailable` → `deferred`, provenance `incomplete` → `evidence_without_raw_refs`·`ambiguous_raw_refs`·`issues`에 걸린 증거를 빼고 verdict 매칭도 끈 `partial`.
+- 기본 경로는 **RAG 매핑**이다: A의 사건·Evidence 관문을 통과한 증거를 B의 BM25·다국어 Embedding·RRF로 검색하고, C의 LLM 선택을 A Validator가 검증한다. `python -m attack_mapping.cli --rule-baseline <조사 JSON>`으로 기존 Rule 경로를 별도 실행한다.
+- 게이트: FALSE_POSITIVE → `not_applicable`, INCONCLUSIVE 또는 provenance `unavailable` → `deferred`; `incomplete`는 검증 가능한 Evidence만 사용하며 기법이 나오면 `partial`이다. 기술적 실패는 `error`이고 선택 거부는 `rejected_selections`다.
 - 연결은 `main.py`의 `run_attack_mapping()`만 한다. 메모리 dict가 아니라 **저장된 파일 경로**를 넘겨 CLI 재실행과 결과를 같게 하고, 매핑 예외(OSError/ValueError/RecursionError)는 출력만 하고 다음 사건으로 넘어간다. `agent/`는 `attack_mapping/`을 import하지 않는다.
 - `reporting/`은 최상위에 둔다: 이후 대응(Response) 단계 결과까지 합칠 최종 보고서 자리라서 `attack_mapping/` 아래에 두면 의존 방향이 꼬인다.
 - `report.py`의 결과 JSON 필드(evidence_chain의 `evidence_id`·`sequence`·`time`·`raw_refs`·`seed_only_raw_refs`, `provenance`, `raw_ref_locations`, `final_verdict.attack_type`, 최상위 `incident_key`)를 바꾸면 매핑 입력 검증에 걸린다. `tests/test_main_attack_mapping.py`, `tests/test_attack_mapping_engine.py::test_actual_investigation_report_contract`, `tests/test_attack_validate.py::test_real_investigation_result_seed_only_contract`로 확인할 것. 사건 연결 키는 최상위 `incident_key`, `null`이면 `incident_id`.
-- RAG 전환(진행 중): 담당 A의 `catalog.py`(공식 STIX 19.2, `data/attack/manifest.json`으로 버전·sha256 고정), `validate.py`(사건 관문·증거 target/context/excluded 분류·LLM 선택 검증), `schema.py`의 RAG 자료형이 있다. B(`retrieve.py`)·C(`mapper.py`)는 아직 없다. ATT&CK v19는 `Defense Evasion`이 `Stealth`로 바뀌고 `Defense Impairment`가 생겨 규칙용 `TACTIC_ORDER`와 공식 순서(`catalog.tactic_order`)가 다르다. 계약과 팀 합의 사항은 [docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md](docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md).
+- 공식 STIX 파일은 Git 미추적이며 `python -m scripts.fetch_attack_catalog`로 설치한다. 검색 모델은 manifest의 고정 revision을 로컬 캐시에 준비한다(`local_files_only=True`). `attack_mapping/runtime.py`가 A Catalog·Schema와 B의 dict 계약을 연결하고 사건당 검색 인덱스를 재사용한다. ATT&CK v19의 전술 순서는 `catalog.tactic_order`를 따른다. 운영 준비 및 검증 범위는 [B 인계 문서](docs/ATTACK_RETRIEVAL_HANDOFF.md)를 참고한다.
 
 ### 건드리지 않는 영역
 - `primary_detection/normalizer/` — 1차 탐지팀 산출물 (위 참조)

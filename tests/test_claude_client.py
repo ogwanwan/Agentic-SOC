@@ -2,8 +2,11 @@
 
 - 조사 루프가 넘기는 인자(confidence_threshold/force_terminate/gate_rejection_reason)를 받아
   InvestigationAgent가 끝까지 도는지 (예전엔 첫 턴에 TypeError)
-- 호출 설정: max_tokens 8192, temperature 0, 시스템 프롬프트 캐시 표시, SDK 재시도 설정
+- 호출 설정: max_tokens 16000, sampling 인자(temperature 등) 없음, 시스템 프롬프트 캐시 표시, SDK 재시도 설정
+- 보내는 인자가 설치된 실제 SDK의 messages.create()가 받는 인자인지 (가짜 클라이언트만으로는
+  2026-09-28 EC2의 `temperature` TypeError를 잡지 못했다)
 - 출력 한도에서 잘린 응답은 ClaudeDecisionError, 토큰 사용량 누적
+- SDK 재시도 뒤 일시 오류(429·529·연결)는 LLMUnavailableError, 권한 오류는 그대로
 """
 from __future__ import annotations
 
@@ -15,23 +18,45 @@ from typing import Any, Dict, List
 import pytest
 
 from agent.claude_client import ClaudeClient, ClaudeDecisionError
+from agent.llm_errors import LLMUnavailableError
 from agent.loop import InvestigationAgent
 from agent.tools import build_default_registry
 
 
+@pytest.fixture(autouse=True)
+def isolated_env(monkeypatch):
+    # 실행하는 셸에 CLAUDE_MODEL·CLAUDE_EFFORT가 있어도 기본값을 확인할 수 있게 비운다
+    for name in ("CLAUDE_MODEL", "CLAUDE_EFFORT", "CLAUDE_REFUSAL_FALLBACK_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+
+
+class FakeStatusError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"status {status_code}")
+        self.status_code = status_code
+
+
+class FakeConnectionError(Exception):
+    pass
+
+
 class _FakeMessages:
-    def __init__(self, replies: List[Dict[str, Any]]) -> None:
+    def __init__(self, replies: List[Any]) -> None:
         self.replies = replies
         self.calls: List[Dict[str, Any]] = []
 
     def create(self, **kwargs: Any):
         self.calls.append(kwargs)
         reply = self.replies[min(len(self.calls), len(self.replies)) - 1]
+        if isinstance(reply, Exception):
+            raise reply
         usage = types.SimpleNamespace(input_tokens=100, output_tokens=20,
                                       cache_creation_input_tokens=0, cache_read_input_tokens=80)
+        details = reply.get("stop_details")
         return types.SimpleNamespace(
             content=[types.SimpleNamespace(type="text", text=reply["text"])],
             stop_reason=reply.get("stop_reason", "end_turn"), usage=usage,
+            stop_details=types.SimpleNamespace(**details) if details else None,
         )
 
 
@@ -44,7 +69,8 @@ def _install_fake_anthropic(monkeypatch, replies):
             self.messages = _FakeMessages(replies)
             created["messages"] = self.messages
 
-    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=FakeAnthropic))
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(
+        Anthropic=FakeAnthropic, APIStatusError=FakeStatusError, APIConnectionError=FakeConnectionError))
     return created
 
 
@@ -77,10 +103,76 @@ def test_claude_client_runs_investigation_loop(monkeypatch):
     assert result["final_verdict"]["verdict"] == "FALSE_POSITIVE"
     assert [t["tool_name"] for t in result["tools_called"]] == ["fetch_auth_log"]
     call = created["messages"].calls[0]
-    assert call["max_tokens"] == 8192 and call["temperature"] == 0.0
+    assert call["max_tokens"] == 16000
+    # anthropic SDK 1.x는 sampling 인자를 없앴고(TypeError), claude-sonnet-5도 받지 않는다(400)
+    assert not {"temperature", "top_p", "top_k"} & set(call)
+    assert "output_config" not in call  # CLAUDE_EFFORT가 없으면 API 기본값
     assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert created["max_retries"] == ClaudeClient.MAX_RETRIES
     assert client.usage_totals["calls"] == 2 and client.usage_totals["cache_read_input_tokens"] == 160
+
+
+def test_prose_around_json_is_parsed_in_investigation_loop(monkeypatch):
+    # 2026-09-28 첫 실제 실행: Claude 응답을 두 번 연속 "line 1 column 1"로 해석하지 못해 폴백 판정이 났다
+    verdict = {"verdict": "INCONCLUSIVE", "confidence": 0.5, "severity": "LOW", "attack_type": "x",
+               "affected_systems": [], "summary": "s", "reasoning": "r"}
+    terminate = _decision(next_action="terminate", tool_call=None,
+                          termination_reason="no_more_evidence", final_verdict=verdict)
+    replies = [{"text": "조회 결과를 보고 다음 도구를 고릅니다.\n" + _decision()["text"]},
+               {"text": "최종 판단입니다.\n```json\n" + terminate["text"] + "\n```\n이상입니다."}]
+    _install_fake_anthropic(monkeypatch, replies)
+    result = InvestigationAgent(ClaudeClient(api_key="k"), build_default_registry()).run(SEED)
+    assert result["final_verdict"]["reasoning"] == "r"  # 폴백 판정이 아니라 LLM 판정
+    assert not any("해석 실패" in n for n in result["investigation_notes"])
+
+
+def test_unparsable_response_leaves_response_head_in_notes(monkeypatch):
+    _install_fake_anthropic(monkeypatch, [{"text": "판단할 근거가 부족합니다. 추가 조회가 필요합니다."}])
+    result = InvestigationAgent(ClaudeClient(api_key="k"), build_default_registry()).run(SEED)
+    failures = [n for n in result["investigation_notes"] if "해석 실패" in n]
+    assert len(failures) == 2 and all("판단할 근거가 부족합니다" in n for n in failures)
+    assert result["final_verdict"]["reasoning"].startswith("[자동 폴백 판정")
+
+
+REFUSAL = {"text": "", "stop_reason": "refusal", "stop_details": {"type": "refusal", "category": "cyber"}}
+
+
+def test_refusal_is_retried_on_fallback_model_and_noted(monkeypatch):
+    # 2026-09-29 재현성 측정: 웹셸 시나리오에서 sonnet-5가 연속 2번 거절(refusal) → 폴백 판정.
+    # sonnet-5는 서버 측 fallbacks 대상이 없어 대체 모델로 같은 요청을 직접 다시 보낸다.
+    created = _install_fake_anthropic(monkeypatch, [REFUSAL, _decision()])
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    client = ClaudeClient(api_key="k")
+    decision = client.complete_json("sys", "user")
+    first, second = created["messages"].calls
+    assert (first["model"], second["model"]) == ("claude-sonnet-5", "claude-sonnet-4-6")
+    assert second["system"] == first["system"] and second["messages"] == first["messages"]
+    assert first["output_config"] == {"effort": "high"} and "output_config" not in second
+    assert decision["next_action"] == "call_tool"
+    assert any("category=cyber" in n and "claude-sonnet-4-6" in n for n in decision["investigation_notes"])
+    assert (client.usage_totals["refusals"], client.usage_totals["fallback_calls"]) == (1, 1)
+
+
+def test_refusal_note_reaches_investigation_result(monkeypatch):
+    verdict = {"verdict": "INCONCLUSIVE", "confidence": 0.5, "severity": "LOW", "attack_type": "x",
+               "affected_systems": [], "summary": "s", "reasoning": "r"}
+    terminate = _decision(next_action="terminate", tool_call=None,
+                          termination_reason="no_more_evidence", final_verdict=verdict)
+    _install_fake_anthropic(monkeypatch, [REFUSAL, _decision(), terminate])
+    result = InvestigationAgent(ClaudeClient(api_key="k"), build_default_registry()).run(SEED)
+    assert result["final_verdict"]["reasoning"] == "r"  # 폴백 판정이 아니라 대체 모델의 LLM 판정
+    assert any("안전 필터로 응답을 거절" in n for n in result["investigation_notes"])
+
+
+@pytest.mark.parametrize("setting,calls", [("off", 1), (None, 2)])
+def test_refusal_without_usable_fallback_is_decision_error_with_category(monkeypatch, setting, calls):
+    # off: 대체 호출 없이 실패 / 기본: 대체 모델도 거절하면 실패 — 둘 다 category를 첫 줄에 남긴다
+    if setting:
+        monkeypatch.setenv("CLAUDE_REFUSAL_FALLBACK_MODEL", setting)
+    created = _install_fake_anthropic(monkeypatch, [REFUSAL])
+    with pytest.raises(ClaudeDecisionError, match=r"거절했습니다\(refusal, category=cyber"):
+        ClaudeClient(api_key="k").complete_json("sys", "user")
+    assert len(created["messages"].calls) == calls
 
 
 def test_truncated_response_raises_decision_error(monkeypatch):
@@ -100,3 +192,45 @@ def test_model_from_env(monkeypatch):
     _install_fake_anthropic(monkeypatch, [])
     monkeypatch.setenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
     assert ClaudeClient(api_key="k").model == "claude-haiku-4-5-20251001"
+
+
+def test_effort_from_env_goes_to_output_config(monkeypatch):
+    created = _install_fake_anthropic(monkeypatch, [{"text": "{}"}])
+    monkeypatch.setenv("CLAUDE_EFFORT", "Medium")
+    ClaudeClient(api_key="k").complete_json("sys", "user")
+    assert created["messages"].calls[0]["output_config"] == {"effort": "medium"}
+    monkeypatch.setenv("CLAUDE_EFFORT", "fast")
+    with pytest.raises(ValueError, match="CLAUDE_EFFORT"):
+        ClaudeClient(api_key="k")
+
+
+def test_request_arguments_are_accepted_by_installed_sdk(monkeypatch):
+    # 가짜 클라이언트는 어떤 인자든 받아서, SDK가 삭제한 인자(temperature)를 보내도 통과했다.
+    # 설치된 실제 anthropic의 messages.create() 시그니처와 대조한다.
+    sdk = pytest.importorskip("anthropic")
+    import inspect
+
+    from anthropic.resources.messages import Messages
+
+    accepted = set(inspect.signature(Messages.create).parameters)
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    created = _install_fake_anthropic(monkeypatch, [{"text": "{}"}])
+    ClaudeClient(api_key="k").complete_json("sys", "user")
+    sent = set(created["messages"].calls[0])
+    assert sent <= accepted, f"anthropic {sdk.__version__}가 받지 않는 인자: {sent - accepted}"
+
+
+@pytest.mark.parametrize("error", [FakeStatusError(529), FakeStatusError(429), FakeStatusError(503),
+                                   FakeConnectionError("timeout")])
+def test_transient_api_error_becomes_llm_unavailable(monkeypatch, error):
+    _install_fake_anthropic(monkeypatch, [error])
+    with pytest.raises(LLMUnavailableError, match="Claude API 일시 오류"):
+        ClaudeClient(api_key="k").complete_json("sys", "user")
+
+
+@pytest.mark.parametrize("status", [400, 401, 403])
+def test_config_errors_are_raised_as_is(monkeypatch, status):
+    # 키·권한·요청 형식 오류는 사건마다 반복돼도 해결되지 않으므로 감싸지 않고 전체 실행을 멈춘다
+    _install_fake_anthropic(monkeypatch, [FakeStatusError(status)])
+    with pytest.raises(FakeStatusError):
+        ClaudeClient(api_key="k").complete_json("sys", "user")

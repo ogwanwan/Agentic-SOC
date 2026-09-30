@@ -7,6 +7,7 @@
 
 본문(1~7장)은 팀이 확정한 RAG 개선 설계의 구현 규칙 원문이다(2026-09-28 AGENTS.md 초안에서 분리, 장 제목에 번호만 붙임).
 구현하면서 달라졌거나 구체화된 점은 맨 아래 [구현 기록](#0928-희진-기록--담당-a-구현과-달라진-점)에 따로 적었다.
+현재 `attack-mapping-final`의 A+B+C 연결 상태는 문서 끝의 2026-09-30 기록을 참고한다.
 
 ---
 
@@ -168,3 +169,15 @@
 | 5장 ID 보정 | 공백·대소문자(` t1059.004 `)만 맞추고 `TECHNIQUE_ID_NORMALIZED` 표시. 다른 ID로 바꾸는 보정은 하지 않음 | A 구현 |
 | 6장 Kill Chain | ATT&CK v19에서 `Defense Evasion` → `Stealth`, `Defense Impairment`(TA0112) 신설. 규칙용 `schema.TACTIC_ORDER`(14개)로 정렬하면 이 전술 기법이 맨 뒤로 밀림 → RAG 경로는 `catalog.tactic_order` 사용 제안 | C 결정 필요 |
 | 6장 사건 식별 | 결과와 사건을 잇는 키는 최상위 `incident_key`, `null`이면 `incident_id`(조사 쪽 `051dda7`, 1차 탐지 DB 연결 2026-09-30 뒤 채워짐). 파일명 규칙에 기대지 않음 | C 반영 필요 |
+
+## [0930 통합 기록] — A+B+C 연결
+
+- A의 Catalog·Schema·Validator, B의 Hybrid Retrieval, C의 LLM Mapper·Kill Chain·Final Report를
+  `attack_mapping/runtime.py`와 기본 `attack_mapping.cli.process_file()` 경로로 연결했다.
+- `main.py`는 사건별 `on_result` 콜백에서 조사 JSON을 먼저 저장하고 해당 파일을 RAG로 매핑한다.
+  조사 결과는 뒤 사건이나 Mapping의 오류와 관계없이 보존한다.
+- `ALL_RULES` 경로는 `--rule-baseline`에서만 기본 선택된다. 저장된 조사 JSON은 CLI로 재매핑할 수 있다.
+- A가 관리하는 manifest의 Catalog 버전·해시는 유지하고 B의 검색 버전·모델·고정 revision을 채웠다.
+- 합성 대역 기반 오프라인 A+B+C 연결과 공식 STIX·실제 E5 모델·Claude API를 사용하는
+  합성 사건 1건의 전체 연결을 검증했다. 실제 사건 전반의 정확도 평가는 별도로 수행한다.
+  실행 결과는 [B 인계 문서](ATTACK_RETRIEVAL_HANDOFF.md)의 실제 모델·API 확인 기록을 참고한다.

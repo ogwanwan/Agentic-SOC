@@ -6,8 +6,12 @@
 매핑 연결을 다시 붙였다. 콘솔에는 사건별 매핑 상태 한 줄(mapping_summary)만 나온다.
 """
 import json
+from datetime import datetime, timezone
+from pathlib import Path
 
 import main
+from attack_mapping.cli import process_file as process_saved_file
+from attack_mapping.rules import ALL_RULES
 from agent.models import AgentState, Evidence
 from agent.report import build_investigation_result
 
@@ -36,10 +40,10 @@ def test_saved_investigation_is_mapped_into_kill_chain_and_final_report(tmp_path
     saved = main.save_investigation_result(source, str(tmp_path))
     out_dir = tmp_path / "attack_mapping"
 
-    mapping = main.run_attack_mapping(saved, str(out_dir))
+    mapping = main.run_attack_mapping(saved, str(out_dir), rule_baseline=True)
 
     assert mapping["mapping_status"] == "mapped"
-    assert [step["technique_id"] for step in mapping["kill_chain"]] == ["T1059.004", "T1505.003"]
+    assert [step["technique_id"] for step in mapping["kill_chain"]] == ["T1505.003", "T1059.004"]
     assert sorted(p.name for p in out_dir.iterdir()) == [
         "INC-MAIN-01_attack_mapping.json", "INC-MAIN-01_final_report.json"]
     assert sorted(mapping["output_paths"]) == sorted(str(p) for p in out_dir.iterdir())
@@ -47,7 +51,7 @@ def test_saved_investigation_is_mapped_into_kill_chain_and_final_report(tmp_path
     assert {k: v for k, v in report.items() if k != "attack_mapping"} == source
     assert report["attack_mapping"]["kill_chain"] == mapping["kill_chain"]
 
-    assert main.mapping_summary(mapping) == "ATT&CK 매핑: mapped (기법 2개: T1059.004, T1505.003)"
+    assert main.mapping_summary(mapping) == "ATT&CK 매핑: mapped (기법 2개: T1505.003, T1059.004)"
 
 
 def test_false_positive_is_saved_as_not_applicable(tmp_path):
@@ -61,8 +65,8 @@ def test_false_positive_is_saved_as_not_applicable(tmp_path):
 
 def test_reinvestigated_incident_keeps_earlier_mapping_files(tmp_path):
     out_dir = tmp_path / "attack_mapping"
-    first = main.run_attack_mapping(main.save_investigation_result(investigation(), str(tmp_path)), str(out_dir))
-    second = main.run_attack_mapping(main.save_investigation_result(investigation(), str(tmp_path)), str(out_dir))
+    first = main.run_attack_mapping(main.save_investigation_result(investigation(), str(tmp_path)), str(out_dir), rule_baseline=True)
+    second = main.run_attack_mapping(main.save_investigation_result(investigation(), str(tmp_path)), str(out_dir), rule_baseline=True)
     assert len(list(out_dir.iterdir())) == 4
     assert all("__2" not in path for path in first["output_paths"])
     assert all("__2" in path for path in second["output_paths"])
@@ -83,7 +87,7 @@ def test_verified_empty_result_evidence_keeps_verdict_mapping(tmp_path):
         source = build_investigation_result(
             state, "no_more_evidence", {"verdict": "THREAT_CONFIRMED", "attack_type": "웹 인증 무차별 대입"}, "INV-X")
         saved = main.save_investigation_result(source, str(tmp_path))
-        return main.run_attack_mapping(saved, str(tmp_path / "attack_mapping"))
+        return main.run_attack_mapping(saved, str(tmp_path / "attack_mapping"), rule_baseline=True)
 
     verified = run(2)
     assert verified["provenance_status"] == "passed" and verified["mapping_status"] == "mapped"
@@ -103,22 +107,81 @@ def test_mapping_failure_does_not_stop_main(tmp_path, capsys):
     assert main.mapping_summary(None) == "ATT&CK 매핑: 실패(위 안내 참고)"
 
 
+def test_unexpected_mapping_failure_keeps_saved_investigation(tmp_path, monkeypatch):
+    saved = main.save_investigation_result(investigation(), str(tmp_path))
+
+    def broken_mapping(*args, **kwargs):
+        raise TypeError("mapping output cannot be serialized")
+
+    monkeypatch.setattr(main, "process_file", broken_mapping)
+    assert main.run_attack_mapping(saved, str(tmp_path / "attack_mapping")) is None
+    assert Path(saved).exists()
+
+
 def test_main_saves_investigation_then_maps_each_incident(tmp_path, monkeypatch, capsys):
     # 사건 파일 → 조사(LLM 대신 준비된 결과) → 결과 JSON 저장 → 매핑·최종 보고서 저장까지 main() 전체
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(main, "load_incidents", lambda path: [{"incident_id": "A"}, {"incident_id": "B"}])
-    monkeypatch.setattr(main, "build_llm_client", lambda: object())
-    monkeypatch.setattr(main, "run_investigation_pipeline", lambda incidents, **kwargs: [
-        investigation(incident_id="INC-MAIN-A"), investigation("FALSE_POSITIVE", incident_id="INC-MAIN-B")])
+    client = object()
+    monkeypatch.setattr(main, "build_llm_client", lambda: client)
+
+    def baseline_spy(path, *, out_dir, llm_client):
+        assert Path(path).exists() and llm_client is client
+        return process_saved_file(path, ALL_RULES, out_dir)
+
+    def pipeline(incidents, **kwargs):
+        for result in (investigation(incident_id="INC-MAIN-A"),
+                       investigation("FALSE_POSITIVE", incident_id="INC-MAIN-B")):
+            kwargs["on_result"](result)
+        return []
+
+    monkeypatch.setattr(main, "process_file", baseline_spy)
+    monkeypatch.setattr(main, "run_investigation_pipeline", pipeline)
 
     main.main(["incidents.jsonl"])
 
     out = capsys.readouterr().out
     assert "--- 저장된 조사 결과 JSON 2건 ---" in out
-    assert "ATT&CK 매핑: mapped (기법 2개: T1059.004, T1505.003)" in out
+    assert "ATT&CK 매핑: mapped (기법 2개: T1505.003, T1059.004)" in out
     assert "ATT&CK 매핑: not_applicable (기법 0개)" in out
     assert "--- 저장된 ATT&CK 매핑·최종 보고서 JSON 4건 ---" in out
     assert len(list((tmp_path / "results" / "investigation_agent").iterdir())) == 2
     assert sorted(p.name for p in (tmp_path / "results" / "attack_mapping").iterdir()) == [
         "INC-MAIN-A_attack_mapping.json", "INC-MAIN-A_final_report.json",
         "INC-MAIN-B_attack_mapping.json", "INC-MAIN-B_final_report.json"]
+
+
+def test_main_preserves_same_investigation_id_saved_in_one_second(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "load_incidents", lambda path: [{"incident_id": "A"}, {"incident_id": "B"}])
+    monkeypatch.setattr(main, "build_llm_client", lambda: object())
+
+    class FrozenDateTime:
+        @staticmethod
+        def now(tz):
+            assert tz is timezone.utc
+            return datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(main, "datetime", FrozenDateTime)
+    seen_paths = []
+
+    def mapping_spy(path, *, out_dir, llm_client):
+        seen_paths.append(Path(path))
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        return {"mapping_status": "not_applicable", "techniques": [], "kill_chain": []}
+
+    def pipeline(incidents, **kwargs):
+        first, second = investigation(), investigation()
+        first["save_marker"], second["save_marker"] = "first", "second"
+        kwargs["on_result"](first)
+        kwargs["on_result"](second)
+        return []
+
+    monkeypatch.setattr(main, "process_file", mapping_spy)
+    monkeypatch.setattr(main, "run_investigation_pipeline", pipeline)
+    main.main(["incidents.jsonl"])
+
+    assert len(seen_paths) == 2 and seen_paths[0] != seen_paths[1]
+    assert seen_paths[1].stem == seen_paths[0].stem + "__2"
+    assert [json.loads(path.read_text(encoding="utf-8"))["save_marker"] for path in seen_paths] == [
+        "first", "second"]

@@ -10,12 +10,14 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 1차 탐�
 - A·B·C·D 연결과 테스트 안내: [docs/ABCD_TEST_GUIDE.md](docs/ABCD_TEST_GUIDE.md), [docs/C_D_IMPLEMENTATION.md](docs/C_D_IMPLEMENTATION.md)
 - 작업 규칙: [AGENTS.md](AGENTS.md)
 
-**ATT&CK 매핑 (이 브랜치 `integrate-attack-mapping-rag`)** — `python main.py <사건 파일>`이 조사 결과 JSON을 저장한 직후
-ATT&CK 매핑(지금은 Rule 매핑)을 돌려 `results/attack_mapping/`에 매핑 결과와 최종 보고서 JSON을 만든다.
+**ATT&CK 매핑 (`attack-mapping-final`)** — `python main.py <사건 파일>`은 사건별 조사 결과 JSON을
+저장한 직후 공식 Catalog·Hybrid Retrieval·LLM·Validator를 이용해 매핑하고,
+`results/attack_mapping/`에 매핑 결과와 최종 보고서 JSON을 만든다. 기존 Rule 경로는 baseline으로 유지한다.
 
 - 전체 흐름(조사 → ATT&CK 매핑 → 최종 보고서): [docs/AGENT_ATTACK_MAPPING_FLOW.md](docs/AGENT_ATTACK_MAPPING_FLOW.md) — 본문은 0927 기록, 현재 흐름은 맨 아래 "0928 기록"
 - RAG 전환과 담당 A·B·C 협업 규칙: [docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md](docs/ATTACK_MAPPING_RAG_ABC_COLLABORATION.md)
 - 담당 A(공식 Catalog·Schema·Validation) 인계, ATT&CK 파일 받기(`python -m scripts.fetch_attack_catalog`): [docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md](docs/ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md)
+- 담당 B 검색 계약·설정·검증 범위: [docs/ATTACK_RETRIEVAL_HANDOFF.md](docs/ATTACK_RETRIEVAL_HANDOFF.md)
 - 조사 결과 증거 출처 필드·사건 연결 키: [docs/EVIDENCE_REF_SOURCES.md](docs/EVIDENCE_REF_SOURCES.md)
 - 0926~0927 Rule 매핑 기록: [통합 결과·규칙 보완 요청](docs/ATTACK_MAPPING_INTEGRATION_FEEDBACK_20260927.md), [버그 수정](docs/ATTACK_MAPPING_BUGFIX_REPORT_20260926.md), [추가 점검](docs/ATTACK_MAPPING_REVIEW_20260927.md), [추가 수정](docs/ATTACK_MAPPING_FIX_REPORT_20260927.md)
 
@@ -67,13 +69,15 @@ main.py                  실행 진입점
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python -m scripts.fetch_attack_catalog       # 공식 STIX 파일 설치·sha256 검증
+python -m scripts.fetch_attack_embedding     # manifest의 고정 revision 모델을 로컬 캐시에 설치
 cp .env.example .env               # 키와 로그 경로를 채운다
 ```
 
 `.env` 최소 설정 (자세한 설명은 `.env.example`):
 
 ```
-GEMINI_API_KEY=발급받은_키
+ANTHROPIC_API_KEY=발급받은_키
 HOST=<수집 서버 이름, EC2는 hostname 결과>
 APACHE_LOG_PATH=/var/log/apache2/access.log
 AUTH_LOG_PATH=/var/log/auth.log
@@ -82,7 +86,9 @@ SURICATA_LOG_PATH=/var/log/suricata/eve.json
 ```
 
 ```bash
-python main.py <사건 파일>                      # 사건별 조사 → results/investigation_agent/에 JSON 저장 (콘솔에는 경로만)
+python main.py <사건 파일>                      # 사건마다 조사 JSON 저장 → RAG 매핑·최종 보고서
+python -m attack_mapping.cli results/investigation_agent/<파일>.json  # 저장된 조사만 재매핑
+python -m attack_mapping.cli --rule-baseline results/investigation_agent/<파일>.json  # Rule 비교
 python main.py tests/fixtures/primary_detection_incidents.jsonl   # 예: 1차 탐지 샘플 출력 (로그 경로는 primary_detection/normalizer/samples/)
 python -m pytest -q                             # 오프라인 테스트 (API 키 불필요)
 python -m tests.test_normalizer_parity          # 1차 탐지 정규화 결과와 동일성 검증
@@ -95,10 +101,16 @@ python -m tests.test_consistency --runs 3 --seed-json seed.json   # 같은 seed 
 
 ## LLM
 
-기본은 Gemini(`gemini-3.5-flash-lite`, 무료 티어)다. 무료 티어의 429(요청 한도)·503(일시 과부하)은 코드가
-기다렸다 재시도하며, 하루 한도를 넘으면 다음 날(한국 시간 오후 4시경) 초기화된다.
-`LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`로 Claude로 바꿀 수 있다(모델은 `CLAUDE_MODEL`, 기본 `claude-sonnet-5`).
-Gemini와 같은 설정(출력 한도 8192, temperature 0)이고, 429·529·연결 오류는 SDK가 재시도한다. 시스템 프롬프트는
+기본은 Claude다(`ANTHROPIC_API_KEY`, 모델은 `CLAUDE_MODEL`, 기본 `claude-sonnet-5`).
+`LLM_PROVIDER=gemini` + `GEMINI_API_KEY`로 Gemini(무료 티어)로 바꿀 수 있다(모델은 `GEMINI_MODEL`, 기본
+`gemini-3.5-flash-lite`). Gemini 무료 티어의 429(요청 한도)·503(일시 과부하)은 코드가 기다렸다 재시도하며,
+하루 한도를 넘으면 다음 날(한국 시간 오후 4시경) 초기화된다. 특정 모델이 과부하면 `GEMINI_MODEL`을 바꾼다.
+Claude 출력 한도는 16000(claude-sonnet-5는 thinking 토큰 포함)이고, 추론 강도는 선택 `CLAUDE_EFFORT`로 정한다.
+Claude가 공격 로그를 사이버 공격 요청으로 오인해 거절(refusal)하면 같은 요청을 `CLAUDE_REFUSAL_FALLBACK_MODEL`
+(기본 `claude-sonnet-4-6`)로 한 번 다시 보내고 결과 notes에 남긴다.
+`temperature`는 보내지 않는다(anthropic SDK 1.x에서 삭제, sonnet-5도 받지 않음). 429·5xx·529·연결 오류는 SDK가 재시도한다.
+두 LLM 모두 재시도 뒤에도 일시 오류면 그 사건만 조사 미완료(`investigation_status: INCOMPLETE`)로 저장하고
+다음 사건을 계속 조사한다. 시스템 프롬프트는
 캐시로 표시해 반복 비용을 줄이고, 호출별 토큰 사용량은 `ClaudeClient.usage_totals`에 누적된다.
 실제 Claude로 판정 재현성은 아직 검증하지 않았다 — 전환 시 같은 seed로 재검증할 것.
 

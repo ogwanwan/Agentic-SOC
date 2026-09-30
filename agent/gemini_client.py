@@ -1,4 +1,4 @@
-"""Gemini API LLM 클라이언트 (기본값).
+"""Gemini API LLM 클라이언트 (LLM_PROVIDER=gemini일 때, 기본은 Claude).
 
 역할
   조사 루프와 seed 생성에서 LLM을 부르는 창구. 프롬프트를 받아 Gemini를 호출하고,
@@ -7,7 +7,7 @@
 
 누가 부르나
   [20] agent/loop.py _safe_reason()         → reason()          조사 루프 매 턴
-  main.py build_llm_client()                 → GeminiClient()    생성 (LLM_PROVIDER=gemini, 기본)
+  agent/llm_provider.py build_llm_client()   → GeminiClient()    생성 (LLM_PROVIDER=gemini)
 
 무엇을 부르나
   [21] agent/prompts/__init__.py  build_system_prompt(), build_user_prompt()   조사 프롬프트 조립
@@ -15,16 +15,21 @@
 
 claude_client.py의 ClaudeClient와 인터페이스(.reason / .complete_json)가 같아서
 LLM_PROVIDER 환경변수로 서로 바꿔 쓸 수 있다. 필요 환경변수: GEMINI_API_KEY.
+모델은 GEMINI_MODEL(없으면 gemini-3.5-flash-lite).
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from typing import Any, Dict, Optional
 
+from .llm_errors import LLMUnavailableError
+from .llm_json import parse_llm_json
 from .prompts import build_system_prompt, build_user_prompt
+
+
+DEFAULT_MODEL = "gemini-3.5-flash-lite"  # 무료 티어 실습에서 지정한 모델
 
 
 class GeminiDecisionError(Exception):
@@ -35,7 +40,9 @@ class GeminiClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-3.5-flash-lite",  # 무료 티어 실습에서 지정한 모델
+        # 없으면 GEMINI_MODEL 환경변수, 그것도 없으면 DEFAULT_MODEL. 특정 모델이 과부하(503)일 때
+        # .env만 바꿔 다른 모델로 돌릴 수 있게 한다(2026-09-28 EC2).
+        model: Optional[str] = None,
         # 2000이던 값을 8192로 올렸다. EC2에서 LLM이 raw_ref 109개를 evidence에 옮겨 적다
         # 2000 토큰에서 응답이 잘려 JSON 파싱이 실패했고, 그 예외로 main.py 전체가 멈췄다.
         max_output_tokens: int = 8192,
@@ -53,7 +60,7 @@ class GeminiClient:
             )
 
         self._client = genai.Client(api_key=resolved_key)
-        self.model = model
+        self.model = model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
 
@@ -100,12 +107,15 @@ class GeminiClient:
             raise GeminiDecisionError(
                 f"Gemini가 빈 응답을 반환했습니다. (finish_reason 등을 확인하십시오)\n원본 응답: {response}"
             )
-        return self._parse_json(text)
+        # 응답 형식 보정(trailing comma, markdown 리스트로 깨진 키 등)은 공용 파서가 한다
+        return parse_llm_json(text, GeminiDecisionError, label="Gemini")
 
     # 503(서버 과부하)/429(분당 한도)는 일시적인 오류인데, 예전엔 한 번만 나도
-    # main.py 전체가 예외로 끝났다(seed 생성 단계에서 연속 발생 확인). 이 두 코드만
-    # 기다렸다가 다시 시도하고, 그 외 오류는 바로 올려 보낸다.
-    _RETRYABLE_STATUS = {429, 503}
+    # main.py 전체가 예외로 끝났다(seed 생성 단계에서 연속 발생 확인). 이 코드(와 다른 5xx)만
+    # 기다렸다가 다시 시도하고, 그 외 오류(400·401·403 등 설정·요청 오류)는 바로 올려 보낸다.
+    # 재시도를 다 써도 일시 오류면 LLMUnavailableError로 감싸 올린다 — 조사 루프가 그 사건만
+    # 조사 미완료로 저장하고 다음 사건을 계속한다(2026-09-28 EC2: 503 3회 연속으로 전체 실행·결과 유실).
+    _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
     _RETRY_DELAY_RE = re.compile(r"retryDelay['\"]?:\s*['\"]?(\d+(?:\.\d+)?)s")
     MAX_ATTEMPTS = 4
     BASE_DELAY_SECONDS = 15.0
@@ -131,51 +141,22 @@ class GeminiClient:
                 )
             except transport_errors as exc:
                 if attempt == self.MAX_ATTEMPTS:
-                    raise
+                    raise LLMUnavailableError(
+                        f"Gemini 연결 오류({type(exc).__name__}, {self.MAX_ATTEMPTS}회 시도 후): {str(exc)[:200]}"
+                    ) from exc
                 delay = 5.0 * attempt
                 print(f"[Gemini 연결 오류: {type(exc).__name__}] {delay:.0f}초 후 재시도 ({attempt}/{self.MAX_ATTEMPTS - 1})")
                 time.sleep(delay)
             except errors.APIError as exc:
-                if exc.code not in self._RETRYABLE_STATUS or attempt == self.MAX_ATTEMPTS:
+                if exc.code not in self._RETRYABLE_STATUS:
                     raise
+                if attempt == self.MAX_ATTEMPTS:
+                    raise LLMUnavailableError(
+                        f"Gemini API 일시 오류({exc.code}, {self.MAX_ATTEMPTS}회 시도 후): {str(exc)[:200]}"
+                    ) from exc
                 # 429는 서버가 알려준 retryDelay를 따르고, 없으면 지수 백오프(15s, 30s, 60s)
                 match = self._RETRY_DELAY_RE.search(str(exc))
                 delay = float(match.group(1)) + 2.0 if match else self.BASE_DELAY_SECONDS * 2 ** (attempt - 1)
                 print(f"[Gemini {exc.code}] {delay:.0f}초 후 재시도 ({attempt}/{self.MAX_ATTEMPTS - 1})")
                 time.sleep(delay)
         raise AssertionError("unreachable")
-
-    # LLM이 가끔 JSON 응답 중간에 markdown 리스트 문법
-    # (`- key: value`처럼 키 앞에 하이픈이 붙고 따옴표가 빠진 형태)을 섞어 넣어
-    # json.loads()가 실패하는 사례가 발견됐다. 기존 trailing comma 보정으로는
-    # 못 잡는 새로운 유형이라, 이 패턴을 정규식으로 감지해 정상 JSON 키 형태로
-    # 복구하는 보정 단계를 추가했다.
-    _MARKDOWN_BULLET_KEY_RE = re.compile(r'(?m)^(\s*)-\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s*:')
-
-    @staticmethod
-    def _parse_json(text: str) -> Dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-            cleaned = cleaned.strip()
-
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            # 1차 보정: trailing comma 제거
-            fixed = re.sub(r",\s*([\]}])", r"\1", cleaned)
-            # 2차 보정: markdown 리스트 문법으로 깨진 키(`- key:` → `"key":`) 복구.
-            # 두 보정을 순서대로 누적 적용해서, 두 문제가 같이 섞여 나온 경우도 처리한다.
-            fixed = GeminiClient._MARKDOWN_BULLET_KEY_RE.sub(r'\1"\2":', fixed)
-
-            if fixed != cleaned:
-                try:
-                    return json.loads(fixed)
-                except json.JSONDecodeError:
-                    pass
-
-            raise GeminiDecisionError(
-                f"Gemini 응답을 JSON으로 파싱하지 못했습니다: {exc}\n원본 응답:\n{text}"
-            ) from exc

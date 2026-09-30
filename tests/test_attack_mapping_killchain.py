@@ -36,13 +36,13 @@ def test_empty_input_returns_empty_kill_chain():
     assert build_kill_chain([]) == []
 
 
-def test_orders_by_tactic_stage_before_time():
+def test_orders_by_observed_time_across_tactics():
     exfil = technique("T1041", "Exfiltration", times=["2026-09-25T09:00:00Z"])
     initial_access = technique("T1190", "Initial Access", times=["2026-09-25T10:00:00Z"])
 
     kill_chain = build_kill_chain([exfil, initial_access])
 
-    assert [step["technique_id"] for step in kill_chain] == ["T1190", "T1041"]
+    assert [step["technique_id"] for step in kill_chain] == ["T1041", "T1190"]
     assert [step["step"] for step in kill_chain] == [1, 2]
 
 
@@ -66,13 +66,27 @@ def test_untimed_verdict_only_technique_sorts_after_timed_ones_in_same_tactic():
     assert kill_chain[1]["time"] is None
 
 
-def test_unknown_tactic_name_sorts_after_all_known_tactics():
+def test_unknown_tactic_name_does_not_override_observed_time():
     known = technique("T1560", "Collection", times=["2026-09-25T09:00:00Z"])
     unknown = technique("T9999", "Not A Real Tactic", times=["2026-09-25T00:00:00Z"])
 
     kill_chain = build_kill_chain([known, unknown])
 
-    assert [step["technique_id"] for step in kill_chain] == ["T1560", "T9999"]
+    assert [step["technique_id"] for step in kill_chain] == ["T9999", "T1560"]
+
+
+def test_equal_time_and_untimed_entries_use_original_evidence_sequence():
+    later_timed = technique("T1041", "Exfiltration", times=["2026-09-25T09:00:00Z"], evidence_ids=["LATE"])
+    earlier_timed = technique("T1190", "Initial Access", times=["2026-09-25T18:00:00+09:00"], evidence_ids=["EARLY"])
+    later_untimed = technique("T1110", "Credential Access", times=[], evidence_ids=["UNTIMED-LATE"])
+    earlier_untimed = technique("T1059", "Execution", times=[], evidence_ids=["UNTIMED-EARLY"])
+
+    chain = build_kill_chain(
+        [later_timed, later_untimed, earlier_timed, earlier_untimed],
+        evidence_sequences={"LATE": 9, "EARLY": 3, "UNTIMED-LATE": 8, "UNTIMED-EARLY": 2},
+    )
+
+    assert [step["technique_id"] for step in chain] == ["T1190", "T1041", "T1059", "T1110"]
 
 
 def test_representative_time_is_earliest_of_multiple_times():

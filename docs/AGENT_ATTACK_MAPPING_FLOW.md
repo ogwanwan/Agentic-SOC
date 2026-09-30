@@ -5,6 +5,7 @@
 **조사 결과가 매핑으로 넘어가는 연결부**를 다룬다.
 
 - 기준: `feature/investigation-attack-mapping` (개인 저장소 `integrate-attack-mapping`), 2026-09-27
+- 현재 `attack-mapping-final` 흐름은 문서 끝의 2026-09-30 기록을 참고한다. 위 기준의 본문은 이전 Rule 경로 기록이다.
 - 코드 주석의 `[1]`~`[46]` 번호는 AGENT_FLOW.md와 같다. 매핑 내부(`attack_mapping/`)는 어택 매핑 팀 코드라 번호 주석이 없고, 이 문서에서는 함수 이름으로 따라간다.
 
 ---
@@ -310,3 +311,21 @@ python main.py <사건 파일>              사건 파일 = 1차 탐지 Incident
 ```
 
 관련 문서: [RAG A·B·C 협업 규칙](ATTACK_MAPPING_RAG_ABC_COLLABORATION.md), [담당 A 인계](ATTACK_MAPPING_A_CATALOG_VALIDATION_20260928.md), [증거 출처 필드](EVIDENCE_REF_SOURCES.md)
+
+## [0930 통합 기록] 현재 `attack-mapping-final` 흐름
+
+1. `main.py`가 Investigation의 `on_result` 콜백마다 조사 JSON을 먼저 저장한다.
+2. 저장한 파일을 `attack_mapping.cli.process_file()`에 전달한다. 기본 경로는 RAG다.
+3. A의 사건 관문·Evidence 분류를 통과한 증거만 B의 `HybridRetriever`가 BM25·Embedding·RRF로 검색한다.
+   `attack_mapping/runtime.py`가 A의 공식 Catalog·Schema와 B 검색 결과를 연결한다.
+4. C의 Mapper가 후보 안에서 LLM SELECT/ABSTAIN을 받고 A Validator로 개별 Selection을 검증한다.
+   검증된 Technique만 병합하고 Evidence의 시각·sequence 순으로 Kill Chain을 만든다.
+   공식 전술 순서는 사건 순서가 완전히 같을 때만 표시 순서를 정한다.
+5. `results/attack_mapping/`에 매핑 JSON과 원본 조사 결과를 보존한 Final Report JSON을 분리해 저장한다.
+   기술적 매핑 오류도 `mapping_status=error`로 기록하며 다음 사건 조사는 계속된다.
+
+저장된 조사 JSON은 `python -m attack_mapping.cli <파일>`로 재매핑한다. 이전 규칙 비교는
+`python -m attack_mapping.cli --rule-baseline <파일>`로 실행한다. 공식 STIX와 고정 모델 revision은
+각각 `scripts.fetch_attack_catalog`, `scripts.fetch_attack_embedding`으로 명시적으로 준비한다.
+CLI도 `.env`를 로드하며, 실제 모델·Claude API를 사용한 합성 사건 연결 결과는
+[B 인계 문서](ATTACK_RETRIEVAL_HANDOFF.md)의 실제 모델·API 확인 기록에 있다.

@@ -77,7 +77,7 @@ def _technique(
     }
 
 
-def test_rag_kill_chain_uses_official_v19_tactic_order():
+def test_rag_kill_chain_orders_cross_tactic_events_by_observed_time():
     techniques = [
         _technique(
             technique_id="T1003",
@@ -115,8 +115,8 @@ def test_rag_kill_chain_uses_official_v19_tactic_order():
         for step in result
     ] == [
         "Execution",
-        "Stealth",
         "Credential Access",
+        "Stealth",
     ]
 
     assert [
@@ -124,8 +124,8 @@ def test_rag_kill_chain_uses_official_v19_tactic_order():
         for step in result
     ] == [
         "T1059.004",
-        "T1070.004",
         "T1003",
+        "T1070.004",
     ]
 
     assert [
@@ -170,6 +170,65 @@ def test_rag_kill_chain_keeps_time_order_inside_same_tactic():
         "T1555",
         "T1003",
     ]
+
+
+def test_rag_kill_chain_uses_original_sequence_for_equal_or_missing_times():
+    techniques = [
+        _technique(
+            technique_id="T1070.004", technique_name="File Deletion",
+            tactic_id="TA0005", tactic_name="Stealth",
+            time="2026-09-27T10:00:00Z", evidence_id="EVID-LATE",
+        ),
+        _technique(
+            technique_id="T1003", technique_name="Credential Dumping",
+            tactic_id="TA0006", tactic_name="Credential Access",
+            time="2026-09-27T10:00:00+00:00", evidence_id="EVID-EARLY",
+        ),
+        _technique(
+            technique_id="T1059.004", technique_name="Unix Shell",
+            tactic_id="TA0002", tactic_name="Execution",
+            time=None, evidence_id="EVID-UNTIMED-LATE",
+        ),
+        _technique(
+            technique_id="T1555", technique_name="Credentials from Password Stores",
+            tactic_id="TA0006", tactic_name="Credential Access",
+            time=None, evidence_id="EVID-UNTIMED-EARLY",
+        ),
+    ]
+    sequences = {
+        "EVID-LATE": 8, "EVID-EARLY": 2,
+        "EVID-UNTIMED-LATE": 11, "EVID-UNTIMED-EARLY": 4,
+    }
+
+    result = build_rag_kill_chain(
+        techniques, catalog=FakeCatalog(), evidence_sequences=sequences,
+    )
+
+    assert [step["technique_id"] for step in result] == [
+        "T1003", "T1070.004", "T1555", "T1059.004",
+    ]
+    assert [step["step"] for step in result] == [1, 2, 3, 4]
+
+
+def test_rag_kill_chain_uses_tactic_only_for_same_event_ties():
+    techniques = [
+        _technique(
+            technique_id="T1003", technique_name="Credential Dumping",
+            tactic_id="TA0006", tactic_name="Credential Access",
+            time="2026-09-27T10:00:00Z", evidence_id="EVID-ONE",
+        ),
+        _technique(
+            technique_id="T1059.004", technique_name="Unix Shell",
+            tactic_id="TA0002", tactic_name="Execution",
+            time="2026-09-27T10:00:00Z", evidence_id="EVID-ONE",
+        ),
+    ]
+
+    result = build_rag_kill_chain(
+        techniques, catalog=FakeCatalog(), evidence_sequences={"EVID-ONE": 3},
+    )
+
+    assert [step["technique_id"] for step in result] == ["T1059.004", "T1003"]
 
 
 def test_rag_kill_chain_does_not_mutate_techniques():

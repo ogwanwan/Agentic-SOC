@@ -9,6 +9,7 @@
   "catalog_parser_version": "1",
   "active_technique_count": 697,
   "tactic_count": 15,
-  "retrieval_version": null,
-  "embedding_model": null
+  "retrieval_version": "hybrid-bm25-e5-rrf-v1",
+  "embedding_model": "intfloat/multilingual-e5-small",
+  "embedding_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
 }

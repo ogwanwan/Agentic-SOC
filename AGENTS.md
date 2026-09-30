@@ -4,9 +4,9 @@
 대화 기억에만 의존하지 말고 실제 코드, Git 변경 사항, 해당 작업의 요청을 기준으로 작업한다.
 이 문서는 저장소 공통 규칙이며, 사용자가 명시한 작업 범위와 Git 반영 방식을 우선한다.
 
-이 파일은 개인 저장소 `integrate-attack-mapping-rag`의 현재 코드를 기준으로 한다.
-조사 에이전트(`feature/Agentic-SOC-Investigation-Agent` = 개인 `integrate-investigation`) 위에
-ATT&CK 매핑(`attack_mapping/`, `reporting/`)을 합친 통합 브랜치다. `feature/agent-final`과 일부
+이 파일은 팀 저장소 `attack-mapping-final`의 통합 코드를 기준으로 한다.
+담당 A·C의 매핑 코드에 `feature/Agentic-SOC-Investigation-Agent`의 조사 개선과 담당 B 검색을
+합친 브랜치다. `feature/agent-final`과 일부
 동작이 다르다. 다른 브랜치의 설명이나 이전 대화만으로 현재 동작을 단정하지 말고, 체크아웃한
 브랜치와 실제 구현을 확인한다.
 
@@ -37,7 +37,8 @@ ATT&CK 매핑 작업(`attack_mapping/`, `reporting/`, `data/attack/`)은 이 문
 - D 원본 추적: `agent/provenance.py`, `models.py`, `loop.py`, `report.py`.
   입력 → seed → 도구 결과 → 조사 증거 → 최종 보고서까지 원본 참조를 전달·검증한다.
 - 전체 흐름은 `agent/pipeline.py`, 운영 진입점은 `main.py`다.
-- ATT&CK 매핑: `attack_mapping/`(엔진·규칙·Kill Chain·CLI, RAG 전환 중인 catalog·validate·schema)과
+- ATT&CK 매핑: `attack_mapping/`(공식 Catalog·검증·Hybrid Retrieval·LLM Mapper·Kill Chain·CLI,
+  기존 Rule Baseline 포함)과
   `reporting/`(최종 보고서)은 어택 매핑 팀 코드다. 조사 쪽에서는 `main.py`의 `run_attack_mapping()`으로
   연결만 한다. `agent/`는 `attack_mapping/`을 import하지 않는다. 위 A·B·C·D(조사 영역)와
   매핑 담당 A·B·C는 서로 다른 구분이다.
@@ -86,12 +87,9 @@ Windows에서 가상환경을 활성화하지 않았다면 `python` 대신
 
 ## Git 반영과 인계
 
-- 이 파일의 대상 브랜치는 개인 저장소 `integrate-attack-mapping-rag`다. 조사 코드 변경은
-  조사 브랜치에서 하고 이 브랜치로 merge해 온다. 조사 브랜치에는 매핑 삭제(`d802dbb`)가 있으므로
-  이 브랜치를 조사 브랜치 쪽으로 merge하거나 조사 브랜치로 fast-forward하지 않는다. 이 브랜치는
-  개인 저장소에만 push한다. 팀 저장소는 다른 팀원이 쓰고 있어 건드리지 않는다. 개인 저장소의
-  `integrate-attack-mapping`(0927 작업물)은 따로 남겨 두고 합치지 않는다. 자매 브랜치인
-  `feature/agent-final`로 변경을 자동 전파하지 않는다. 사용자가 지정한 저장소·브랜치·커밋
+- 이 파일의 대상 브랜치는 팀 저장소 `attack-mapping-final`이다. 조사 코드 변경은 조사 브랜치에서
+  검토한 뒤 이 브랜치로 merge한다. 이 통합 브랜치를 조사 단독 브랜치로 되돌려 병합하거나
+  자매 브랜치 `feature/agent-final`로 자동 전파하지 않는다. 사용자가 지정한 저장소·브랜치·커밋
   메시지와 직접 push/PR 방식을 따른다. `pull` 또는 PR 금지 요청을 임의로 바꾸지 않는다.
 - 원격에 반영하기 전에 최신 대상 커밋을 확인한다. 다른 사람의 커밋이 추가되었다면 보존하여
   통합하고, 충돌 해결로 코드가 바뀐 경우 필요한 검증을 다시 수행한다.

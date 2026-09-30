@@ -1,6 +1,8 @@
 """동일 seed에 대한 InvestigationAgent 판정 재현성 검증.
 
-실제 Gemini API를 N번 호출해서(비용/시간 발생 주의) 재현성을 측정한다.
+실제 LLM API를 N번 호출해서(비용/시간 발생 주의) 재현성을 측정한다. LLM은 main.py와 같은 규칙으로
+고른다(agent/llm_provider.py — 기본 Claude, LLM_PROVIDER=gemini면 Gemini).
+LLM API 일시 오류로 조사 미완료(INCOMPLETE)가 된 실행은 판정 분포에 넣지 않고 실패로 센다.
 
 *** 2026-09-17 업데이트: 무료 티어 rate limit(15 RPM) 대응 ***
 gemini-3.5-flash-lite 무료 티어는 분당 15회 제한이라, 조사 1건당 reason()을
@@ -20,7 +22,7 @@ from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
-from agent.gemini_client import GeminiClient
+from agent.llm_provider import build_llm_client
 from agent.loop import InvestigationAgent
 from agent.tools import build_default_registry
 
@@ -56,7 +58,7 @@ def run_once_with_retry(run_index: int, seed: Dict[str, Any], strict: bool = Tru
                         max_retries: int = 3) -> Dict[str, Any] | None:
     for attempt in range(1, max_retries + 1):
         try:
-            llm = GeminiClient()
+            llm = build_llm_client()
             # main.py와 같은 조건: resolve_ip_geo는 목업이라 LLM에게 가짜 IP 정보를 줄 수 있어 제외
             registry = build_default_registry(exclude=["resolve_ip_geo"])
             # strict=True: main.py와 같은 조건. False(--legacy): 0918처럼 network 사전 조회와
@@ -66,8 +68,14 @@ def run_once_with_retry(run_index: int, seed: Dict[str, Any], strict: bool = Tru
 
             result = agent.run(seed)
             verdict = result["final_verdict"]
+            if result.get("investigation_status") == "INCOMPLETE":
+                # 판정이 아니라 API 장애 — INCONCLUSIVE로 세면 재현성 수치가 왜곡된다
+                print(f"--- Run {run_index} 조사 미완료(LLM API 일시 오류): {result.get('incomplete_reason')} ---")
+                return None
 
             print(f"--- Run {run_index} ---")
+            if getattr(llm, "usage_totals", None):
+                print(f"  usage={llm.usage_totals}")  # Claude: 호출 수·토큰(캐시 포함) — 비용 추정용
             print(f"  verdict={verdict['verdict']}  confidence={verdict['confidence']}  "
                   f"tool_calls={result['statistics']['tool_calls_count']}  "
                   f"termination={result['statistics']['termination_reason']}")

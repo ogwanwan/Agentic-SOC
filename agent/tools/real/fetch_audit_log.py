@@ -106,6 +106,9 @@ def audit_rule_check(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "suspicious": len(suspicious),
         "examples": [f"{r.get('user')}: {_command(r)[:80]} ({r.get('raw_ref')})"
                      for r in (web_suspicious or suspicious)[:3]],
+        # 웹 서버 계정 셸·의심 명령의 실행 시각. loop.py가 seed src_ip의 웹 요청 직후에 실행된 것인지
+        # (= 이 사건의 침해 신호인지) 판단하는 데 쓴다. 같은 호스트의 다른 사건을 가져오지 않게 하기 위함.
+        "web_suspicious_times": sorted({r["timestamp"] for r in web_suspicious if r.get("timestamp")}),
         "external_ips": command_external_ips(records),
     }
 

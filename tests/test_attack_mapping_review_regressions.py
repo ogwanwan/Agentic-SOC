@@ -13,11 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from attack_mapping.cli import run
+from attack_mapping.cli import run as run_cli
 from attack_mapping import cli
 from attack_mapping.engine import map_investigation, match_evidence, match_verdict
 from attack_mapping.rules import ALL_RULES
 from tests.test_attack_mapping_cli import evidence, investigation
+
+
+def run(argv):
+    """These historical regressions exercise the explicit Rule baseline."""
+    return run_cli(argv, rules=ALL_RULES)
 
 
 def mapped(description, **changes):
@@ -140,7 +145,7 @@ def test_cp949_summary_output_does_not_abort_following_files(tmp_path):
     write_input(inputs / "a.json", investigation(incident_id="INC-\U0001f600"))
     write_input(inputs / "b.json", investigation(incident_id="INC-NEXT"))
     out = tmp_path / "out"
-    completed = subprocess.run([sys.executable, "-m", "attack_mapping.cli", "--all-in-dir", str(inputs),
+    completed = subprocess.run([sys.executable, "-m", "attack_mapping.cli", "--rule-baseline", "--all-in-dir", str(inputs),
                                "--out-dir", str(out)], cwd=Path(__file__).resolve().parents[1],
                               env={**os.environ, "PYTHONIOENCODING": "cp949"}, capture_output=True, timeout=20)
     assert completed.returncode == 0, completed.stderr
