@@ -115,7 +115,7 @@ LLM은 **"무엇을 조회할지"와 "어떻게 판정할지"를 제안**하고,
 |---|---|
 | [32] | `registry.call()`에서 도구 함수 실행 |
 | [33] | `log_source.load_window_events(계층, host, start, end)`: 파일 읽기 → 정규화 → **조회 구간 안** 이벤트만, 시각순 |
-| [34] | `normalizer_adapter.normalize_log_documents()` → 1차 탐지팀 정규화 |
+| [34] | `normalizer_adapter.normalize_log_documents()` → 1차 탐지팀 정규화(저장소 루트 `detection_pipeline/tools/fetch_*_log.py` 원본을 직접 import. 이 표의 조사 도구 `real/fetch_*_log.py`와 이름만 같고 다른 코드) |
 | [35] | 도구 인자로 필터 → 페이지(기본 `limit` 200) → `summary` 작성. summary에는 페이지와 무관한 **`[조회 구간 전체 집계]`**와 원칙 기준 계산 결과가 붙음 |
 
 도구가 돌려주는 주요 값:
@@ -243,7 +243,7 @@ LLM이 "끝내자"고 해도 아래에 걸리면 거부하고 사유를 다음 �
 ## 9. 알려진 한계
 
 - `LLM_PROVIDER=anthropic`(Claude)은 오프라인 테스트로만 확인했다. 실제 Claude의 판정 재현성·비용은 API 키로 측정해야 한다(`ClaudeClient.usage_totals`에 토큰 합계).
-- 조사 도구는 `.env`의 로그 파일 하나만 읽는다. 1차 탐지가 로테이트된 파일(`access.log.1`, `.N.gz`)에서 찾은 사건은 그 참조를 도구로 다시 조회하지 못해 원본 추적이 `incomplete`가 될 수 있다(1차 탐지 정규화 코드 갱신과 함께 해결할 과제).
+- 조사 도구는 `.env`의 로그 파일 하나만 읽는다. 1차 탐지가 로테이트된 파일(`access.log.1`, `.N.gz`)에서 찾은 사건은 그 참조를 도구로 다시 조회하지 못해 원본 추적이 `incomplete`가 될 수 있다. 이제 1차 탐지 원본 정규화 함수(`detection_pipeline/tools/`)를 직접 쓰지만, 로테이트 파일을 찾아 함께 읽는 부분(`detection_pipeline/tools/log_sources.py`)은 조사 도구의 `log_source.py`에 연결하지 않았다(남은 과제).
 - 어떤 사건을 어떤 순서로 조사할지(우선순위, 조사 상태 관리)는 1차 탐지·사건 저장소 방식이 정해지면 붙인다. 지금은 사건 파일에 적힌 순서대로 전부 조사한다.
 - `get_process_tree`는 관측된 audit 기반 추정이라 확정된 프로세스 트리가 아니다.
 - 원칙 9 기준값(POST 10회, 경로 20개)과 `.git/config` 같은 민감 파일 탐색의 판정은 팀 정책으로 정할 사항이다.

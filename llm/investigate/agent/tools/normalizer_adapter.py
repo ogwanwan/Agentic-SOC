@@ -1,4 +1,4 @@
-"""1차 탐지팀 공통 정규화 어댑터 — 에이전트 코드와 primary_detection/normalizer/ 사이의 유일한 연결 지점.
+"""1차 탐지팀 공통 정규화 어댑터 — 조사 에이전트 코드와 1차 탐지 정규화 코드 사이의 유일한 연결 지점.
 
 역할
   원본 로그 텍스트를 임시 파일로 써서 1차 탐지팀 정규화 함수(fetch_apache_log/fetch_auth_log/
@@ -11,40 +11,92 @@
 
 누가 부르나
   [34] agent/tools/log_source.py normalize_documents()   → normalize_log_documents()
+  agent/tools/real/fetch_web_log.py (exclude_self)       → server_public_ip()
   tests/test_normalizer_parity.py, scripts/verify_all_tools.py → normalize_auth/audit/web/network()
 
 무엇을 부르나
-  primary_detection/normalizer/tools/fetch_apache_log.py, fetch_auth_log.py, fetch_audit_log.py,
-  fetch_network_log.py (1차 탐지팀 코드 — vendor_sync_check.py로 원본과 동일성 확인)
+  같은 저장소의 1차 탐지 원본 detection_pipeline/tools/fetch_apache_log.py, fetch_auth_log.py,
+  fetch_audit_log.py, fetch_network_log.py (복사본 없이 직접 import, 1차 탐지팀 코드라 수정하지 않는다)
+
+주의 — 이름만 같고 다른 코드
+  agent/tools/real/fetch_web_log.py·fetch_auth_log.py·fetch_audit_log.py·fetch_network_log.py는
+  LLM이 부르는 "조사 도구"(필터·페이지네이션·summary·rule_checks)이고, detection_pipeline/tools/의
+  fetch_*_log()는 원본 로그를 공통 Event로 바꾸는 "1차 탐지 정규화 함수"다. 이름이 같을 뿐 서로 다른
+  코드다. 조사 도구는 이 어댑터를 거쳐 정규화 함수를 부를 뿐, 정규화 함수로 대체되지 않는다.
+  조사 도구 레지스트리(agent/tools/registry.py)는 agent.tools.real.<도구이름>을 상대 import로 찾으므로
+  여기서 올리는 최상위 이름 tools.*와 섞이지 않는다.
+
+import 방식
+  1차 탐지 코드는 내부에서 `from tools.base ...`, `from common.schema ...`처럼 최상위 이름으로 import한다.
+  그래서 detection_pipeline/ 폴더를 sys.path에 올린 뒤 `tools.fetch_*_log`로 가져온다. 경로는 실행
+  폴더(cwd)가 아니라 이 파일 위치 기준이다(run_investigation_queue.py가 main.py를 별도 프로세스로
+  실행해도 같다). 폴더가 없거나 최상위 이름 tools가 다른 모듈을 가리키면 목업으로 넘어가지 않고
+  ImportError를 낸다.
 
 참고
   - web은 nginx가 아니라 apache access.log를 쓴다. EC2에서 nginx(리버스 프록시)와 apache(백엔드,
     127.0.0.1:8080)가 같이 떠 있고, apache 로그가 1차 탐지팀 형식과 컬럼 단위로 일치했다.
   - network(suricata) 정규화 함수는 src_ip/event_type/flow_id/signature만 필터로 지원해서, dst_ip·포트·
     프로토콜 필터는 agent/tools/real/fetch_network_log.py가 결과를 받은 뒤 거른다.
-  - primary_detection/은 agent/ 밖(저장소 루트)에 두어 "우리 코드가 아님"을 분명히 했다.
   - 로그는 .env의 계층별 로그 경로(APACHE/AUTH/AUDIT/SURICATA_LOG_PATH) 파일에서만 읽는다(S3 읽기는 삭제).
 """
 from __future__ import annotations
 
+import importlib
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# 1차 탐지팀 정규화 함수 (agent/__init__.py가 import 경로를 준비한다)
-from primary_detection.normalizer.tools.fetch_auth_log import fetch_auth_log as _normalize_auth_events
-from primary_detection.normalizer.tools.fetch_audit_log import fetch_audit_log as _normalize_audit_events
-from primary_detection.normalizer.tools.fetch_apache_log import fetch_apache_log as _normalize_web_events
-from primary_detection.normalizer.tools.fetch_network_log import fetch_network_log as _normalize_network_events
+# llm/investigate/agent/tools/normalizer_adapter.py → 저장소 루트/detection_pipeline
+DETECTION_PIPELINE_DIR = Path(__file__).resolve().parents[4] / "detection_pipeline"
+DETECTION_TOOLS_DIR = DETECTION_PIPELINE_DIR / "tools"
+
+
+def _load_detection_module(name: str):
+    """detection_pipeline/tools/<name>.py를 최상위 이름 tools.<name>으로 가져온다."""
+    if not (DETECTION_TOOLS_DIR / f"{name}.py").is_file():
+        raise ImportError(
+            f"1차 탐지 정규화 코드를 찾을 수 없습니다: {DETECTION_TOOLS_DIR / (name + '.py')} "
+            "(조사 에이전트는 같은 저장소의 detection_pipeline/tools/를 직접 import한다 — "
+            "llm/investigate/만 따로 복사해 실행하지 않았는지 확인하십시오)"
+        )
+    if str(DETECTION_PIPELINE_DIR) not in sys.path:
+        sys.path.insert(0, str(DETECTION_PIPELINE_DIR))
+    try:
+        module = importlib.import_module(f"tools.{name}")
+    except ModuleNotFoundError as exc:
+        # registry.py는 ModuleNotFoundError를 "실제 구현 없음"으로 보고 목업으로 폴백하므로
+        # 일반 ImportError로 바꿔 조사 도구 로드가 실패했음을 드러낸다.
+        raise ImportError(f"1차 탐지 정규화 코드 tools.{name} import 실패: {exc}") from exc
+    loaded_from = Path(module.__file__).resolve().parent
+    if loaded_from != DETECTION_TOOLS_DIR:
+        raise ImportError(
+            f"최상위 이름 tools.{name}이 1차 탐지 원본이 아닌 {loaded_from}에서 로드되었습니다 "
+            f"(기대: {DETECTION_TOOLS_DIR}). 다른 tools 패키지가 먼저 import되었거나 sys.path 앞에 있습니다."
+        )
+    return module
+
+
+_apache_module = _load_detection_module("fetch_apache_log")
+_normalize_web_events = _apache_module.fetch_apache_log
+_normalize_auth_events = _load_detection_module("fetch_auth_log").fetch_auth_log
+_normalize_audit_events = _load_detection_module("fetch_audit_log").fetch_audit_log
+_normalize_network_events = _load_detection_module("fetch_network_log").fetch_network_log
+
+
+def server_public_ip() -> str:
+    """1차 탐지 fetch_apache_log의 SERVER_PUBLIC_IP(서버 자신의 공인 IP) — exclude_self 필터용."""
+    return _apache_module.SERVER_PUBLIC_IP
 
 
 # [34] ← log_source.normalize_documents()에서 호출: 원본 텍스트 → 1차 탐지팀 정규화 → 원본 추적 정보 부착
 def normalize_log_documents(layer, documents, start, end):
-    """C/D source adapter: call the vendored normalizers without changing them.
+    """C/D source adapter: call the primary-detection normalizers without changing them.
 
-    Preserve local vendor raw_ref values (basename:line). raw_ref_locations adds the
+    Preserve local raw_ref values (basename:line). raw_ref_locations adds the
     absolute file location without replacing the basename references used by primary
     detection. Several documents are concatenated into one staging file and each
     line is mapped back to its own document.
@@ -68,7 +120,7 @@ def normalize_log_documents(layer, documents, start, end):
     with tempfile.TemporaryDirectory(prefix="soc-normalize-") as staging:
         directory = Path(staging)
         if layer == "auth":
-            # Let the vendor interpret yearless syslog using its existing dt/year
+            # Let the primary-detection normalizer interpret yearless syslog using its existing dt/year
             # contract. Narrow incident windows must not depend on today's year.
             partition = re.search(r"(?:^|/)dt=(\d{4}-\d{2}-\d{2})(?:/|$)", documents[0][0])
             if partition:

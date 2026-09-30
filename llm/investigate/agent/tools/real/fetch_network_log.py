@@ -7,14 +7,14 @@
 
 무엇을 부르나
   [33] agent/tools/log_source.py load_window_events("network", ...)  Suricata eve.json 읽기 + 정규화 + 시간창 필터
-       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_network_log.py
+       → agent/tools/normalizer_adapter.py → detection_pipeline/tools/fetch_network_log.py
 
 파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
       → normalizer_adapter.normalize_log_documents()
-      → primary_detection/normalizer/tools/fetch_network_log.py (1차 탐지팀 공통 정규화 함수)
+      → detection_pipeline/tools/fetch_network_log.py (1차 탐지팀 공통 정규화 함수)
     에이전트 자체 파서(구 parsers/network_parser.py)는 쓰지 않는다.
   - 이 파일(에이전트 도구): 도구 인자 해석, 필터, limit/offset 페이지네이션,
     LLM에게 돌려줄 summary/반환 형식.

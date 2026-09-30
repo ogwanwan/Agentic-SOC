@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Agentic-SOC: LLM 기반 SOC(보안관제) 파이프라인을 만드는 팀 프로젝트. **완전히 다른 에이전트가 서로 다른 브랜치에 있고, 조사 에이전트만도 여러 브랜치에서 병렬로 발전 중이다** — 작업 전 반드시 `git branch --show-current`로 확인할 것.
 
-- **1차 탐지 에이전트** (`main` / `feature/agent`, `feature/primary-detection`): Apache+auth 로그를 IP별로 집계해 `malicious_bot`/`benign_bot`/`human`/`undetermined`로 분류하고, 조사가 필요한 IP만 골라 조사 에이전트로 넘긴다. 공통 정규화(`primary_detection/normalizer`)의 원본이 여기 있다.
+- **1차 탐지 에이전트** (`main` / `feature/agent`, `feature/primary-detection`): Apache+auth 로그를 IP별로 집계해 `malicious_bot`/`benign_bot`/`human`/`undetermined`로 분류하고, 조사가 필요한 IP만 골라 조사 에이전트로 넘긴다. 통합 저장소에서는 공통 정규화의 원본이 루트 `detection_pipeline/tools/`에 있고 조사 에이전트가 이를 직접 import한다.
 - **조사 에이전트(Investigation Agent)** — 여러 브랜치에 존재:
   - `feature/Agentic-SOC-Investigation-Agent` (**이 문서가 다루는 브랜치**). 개인 저장소의 `integrate-investigation`과 같은 내용으로 유지한다.
   - `feature/agent-final` — 같은 `cb5005d`에서 갈라진 자매 브랜치. 0924 이후의 provenance·재현성 수정(아래 "상태와 신뢰도", "종료 관문")이 **없다**. raw_ref 미인용 시 신뢰도 기여를 0으로 만드는 이전 규칙을 쓴다. 이 브랜치의 변경을 그쪽으로 자동 전파하지 않는다.
@@ -58,8 +58,11 @@ python -m tests.test_consistency --runs 4 --legacy     # 0918 조건(사전 조�
 ```
 코드 주석의 `[1]`~`[45]` 흐름 번호와 단계별 설명은 [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)에 있다(`[7]`~`[15]`는 삭제된 수집·seed 생성 단계라 비어 있음). `main.py`가 이 전체를 한 번에 실행한다(`max_calls=8`, `confidence_threshold=0.85`, `network_precheck=True`, `strict_termination=True`). `pipeline`/`InvestigationAgent`의 두 플래그 기본값은 False라서, 데모(`demo_abcd`)와 기존 단위 테스트는 0918과 같은 느슨한 조건으로 돈다. 운영 동작을 확인할 때는 플래그를 켠 조건인지 확인할 것.
 
-### 정규화(A) — `primary_detection/normalizer/`는 우리 코드가 아니다
-1차 탐지팀이 만든 공통 정규화 코드가 이 저장소에 vendor(복사)되어 있다. **내용 수정 금지** — 갱신은 1차 탐지팀 원본을 그대로 다시 복사하는 방식으로만 한다. 조사 에이전트는 이걸 직접 import하지 않고 `agent/tools/normalizer_adapter.py`를 거친다. `primary_detection/normalizer/vendor_sync_check.py`로 원본과의 동일성을 확인한다.
+### 정규화(A) — 저장소 루트 `detection_pipeline/tools/`는 우리 코드가 아니다
+1차 탐지팀의 공통 정규화 함수(`fetch_apache_log`/`fetch_auth_log`/`fetch_audit_log`/`fetch_network_log`)는 복사본(vendor) 없이 같은 저장소의 원본 `detection_pipeline/tools/`를 그대로 쓴다. 이 폴더는 1차 탐지팀 코드라 조사 쪽 작업에서 수정하지 않는다. 조사 에이전트 코드는 `agent/tools/normalizer_adapter.py` **한 곳에서만** 이를 import한다(다른 파일은 어댑터를 거친다. 예: `fetch_web_log`의 `exclude_self`는 `normalizer_adapter.server_public_ip()`).
+- import 방식: 원본은 내부에서 `from tools.base ...`, `from common.schema ...`처럼 최상위 이름을 쓰므로, 어댑터가 `detection_pipeline/`을 `sys.path`에 올리고 `tools.fetch_*_log`로 가져온다. 경로는 cwd가 아니라 어댑터 파일 위치 기준이다(`run_investigation_queue.py`가 `main.py`를 별도 프로세스로 실행해도 같다). 폴더가 없거나 최상위 `tools`가 다른 모듈이면 목업으로 넘어가지 않고 `ImportError`가 난다. 그래서 `llm/investigate/`만 따로 떼어 실행할 수 없다.
+- **이름만 같고 다른 코드**: `agent/tools/real/fetch_web_log.py`·`fetch_auth_log.py`·`fetch_audit_log.py`·`fetch_network_log.py`는 LLM이 부르는 조사 도구(필터·페이지네이션·summary·rule_checks)이고, `detection_pipeline/tools/fetch_*_log.py`는 원본 로그 → 공통 Event 정규화 함수다. 조사 도구를 정규화 함수로 바꾸거나 위임 구조로 줄이지 않는다. 조사 도구 레지스트리는 `agent.tools.real.<도구이름>`을 상대 import로 찾으므로 최상위 `tools.*`와 섞이지 않는다(`tests/test_cd_normalizer_integration.py`가 `handler.__module__`로 확인).
+- 1차 탐지 쪽에서 파서·정규화 결과가 바뀌면 조사 도구 결과도 바로 바뀐다. `tests/test_normalizer_parity.py`·`tests/test_cd_normalizer_integration.py`(샘플은 `detection_pipeline/samples/`)로 어댑터의 raw_ref 변환과 결과 동일성을 확인한다.
 
 ### Tool 계층 (B) — `agent/tools/`
 - `log_source.py`: 원본 읽기·정규화·시간창 필터(`load_window_events()`), 페이지네이션, 0건 안내(`filtered_out_hint()`) 같은 공용 부분.
@@ -113,7 +116,7 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 - `to_investigation_seed()`는 1차 탐지 필드 중 바뀔 가능성이 적은 것(`incident_id`, `entity`, `window`, `layers`, `seeds[]`의 `reason`·`evidence_refs`·`rule_severity`·`detail`)만 쓴다. `triage_score`·`priority`·`route`·`llm_investigate`는 사건을 고르는 값이라 보지 않고, `llm_reason`은 있으면 넘긴다. `incident_key`(사건이 커져도 안 바뀌는 안정 키)·`updated_at`도 있으면 넘기고, 결과 JSON 최상위 `incident_key`(없으면 null)와 `incident_snapshot {incident_id, member_count, updated_at}`으로 옮겨진다 — ATT&CK 매핑·최종 보고서는 `incident_key`(null이면 `incident_id`)로 사건을 잇는다. `entity`·`seeds`가 없는 dict(직접 작성한 사건, `test_consistency --seed-json`)는 그대로 쓴다.
 - `members`(최대 500개)·`join_path` 원본은 프롬프트에 사건 dict가 통째로 들어가므로 싣지 않고 `detection` 요약만 싣는다.
 - 1차 탐지 Incident에는 host가 없어 `.env`의 `HOST`로 채운다. 조사 루프 안에서는 이 dict를 계속 `seed`라고 부른다(1차 탐지의 `seeds[]` = 탐지 룰 결과와 다른 뜻).
-- 테스트 고정 데이터 `tests/fixtures/primary_detection_incidents.jsonl`은 1차 탐지 `develop`(`e9b733c`)을 그쪽 샘플 로그(= `primary_detection/normalizer/samples/`)로 실행한 실제 출력이다. 1차 탐지 출력 형식이 바뀌면 다시 만들 것.
+- 테스트 고정 데이터 `tests/fixtures/primary_detection_incidents.jsonl`은 1차 탐지 `develop`(`e9b733c`)을 그쪽 샘플 로그(= 저장소 루트 `detection_pipeline/samples/`)로 실행한 실제 출력이다. 1차 탐지 출력 형식이 바뀌면 다시 만들 것.
 - 조사 대상 선택·순서·조사 상태 관리(DB 또는 파일)는 1차 탐지와 통합할 때 정한다. 지금은 파일의 모든 사건을 적힌 순서대로 조사한다.
 
 ### 프롬프트 — `agent/prompts/` (패키지)
@@ -133,4 +136,4 @@ evidence의 `raw_refs`(예: `auth.log:15`)는 `references()`/`validate_citations
 로그는 `.env`의 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH` — 1차 탐지와 같은 이름, 0927에 `*_LOG_LOCAL_PATH`에서 변경, `log_source.LOCAL_PATH_ENV`) 파일에서만 읽는다(S3 읽기 코드는 삭제됨, 경로가 없으면 설정 오류). 로컬 개발은 이 경로를 `sample_logs/*.log`로 둔다. 로컬 파일은 `LOG_LOCAL_HOST` 환경변수로만 host를 검증한다(`HOST`는 `main.py`의 수집 대상 이름일 뿐이다 — 합성 시나리오 seed의 host와 충돌하지 않게 하기 위한 설계). 연도 없는 auth syslog 샘플에는 `AUTH_LOG_YEAR`가 필요하다. `scenarios/`의 스크립트들은 `sample_logs/`에 공격 시나리오를 append한다. `sample_logs/`는 EC2 실제 트래픽이 들어 있어 **git으로 추적하지 않는다**(`.gitignore`) — 실험 전에 `sample_logs_orig/`로 백업해 두고 실험 후 그 백업으로 원복한다(`scenarios/README.md`). 새로 clone한 저장소에는 샘플이 없으니 `scripts/fetch_sample_from_ec2.py`로 받거나 팀원에게 받는다.
 
 ### 건드리지 않는 영역
-- `primary_detection/normalizer/` — 1차 탐지팀 산출물 (위 참조)
+- 저장소 루트 `detection_pipeline/` — 1차 탐지팀 코드 (정규화 함수는 위 "정규화(A)" 참조)

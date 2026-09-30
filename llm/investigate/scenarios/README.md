@@ -76,7 +76,7 @@
    초기 버전에서 7시간 어긋난 사고가 있었습니다).
 2. `auth.log`는 syslog 형식(`Sep 14 20:30:00 ...`) 그대로 작성합니다.
 3. `audit.log`는 ENRICHED 포맷(`type=SYSCALL ... key="exec"` + `\x1d` + `ARCH=... AUID="..."` 등)을
-   그대로 재현해야 1차 탐지팀 공통 정규화(`primary_detection/normalizer/tools/fetch_audit_log.py`)가
+   그대로 재현해야 1차 탐지팀 공통 정규화(저장소 루트 `detection_pipeline/tools/fetch_audit_log.py`)가
    정상 파싱합니다.
 4. web 로그는 **apache access 포맷**으로 씁니다(nginx JSON은 공통 정규화가 읽지 못해 0건이 됨):
    `<ISO8601 UTC> <req_id> <client_ip> 127.0.0.1 https <Host> "<METHOD> <path> HTTP/1.1" <status> <bytes> <dur_us> <pid> "<referer>" "<ua>" xff="-"`

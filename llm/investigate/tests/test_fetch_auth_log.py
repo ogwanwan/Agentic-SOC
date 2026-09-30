@@ -26,8 +26,8 @@ from typing import Any, Dict, List
 
 from tests._log_files import install_log_files, uninstall_log_files
 
-# normalizer 벤더 코드(primary_detection/normalizer/tools/fetch_auth_log.py, 1차 탐지팀
-# 원본 그대로)가 파일 맨 아래에서 무조건 load_dotenv()를 호출한다. 그래서 아래 import가
+# 1차 탐지 정규화 원본(저장소 루트 detection_pipeline/tools/fetch_auth_log.py)이
+# 파일 맨 아래에서 무조건 load_dotenv()를 호출한다. 그래서 아래 import가
 # 처음 실행되는 순간, 로컬 .env에 적어둔 AUTH_LOG_PATH 같은 값이 os.environ에
 # 들어와 버릴 수 있다 — 그 값이 남아있으면 이 파일의 테스트들이 만든 임시 로그 파일 대신
 # 실제 로컬 파일을 읽어버려서 count가 안 맞는 식으로 깨진다(재현·확인함).

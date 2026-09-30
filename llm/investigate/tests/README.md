@@ -28,8 +28,8 @@ python -m pytest -v tests/test_abcd_pipeline.py tests/test_cd_normalizer_integra
 | 파일 | 확인 내용 |
 | --- | --- |
 | `test_abcd_pipeline.py` | 1차 탐지 형식 Incident 입력 → B 도구·프로세스 조회 → C 페이지 조회 → D 최종 보고서. 단일 계층 4개/4계층 통합, 가짜 증거 참조 incomplete, 환경변수 복원 |
-| `test_cd_normalizer_integration.py` | A의 벤더 직접 호출과 B 개별 도구/C 사건 조회 결과 비교. audit 분할 객체, gzip, 원본 위치·모호성 |
-| `test_normalizer_parity.py` | 기존 A 어댑터 API와 벤더 결과 비교. `_run()`을 위 통합 테스트에서 호출하므로 전체 pytest에도 포함 |
+| `test_cd_normalizer_integration.py` | A의 1차 탐지 원본(`detection_pipeline/tools/`) 직접 호출과 B 개별 도구/C 사건 조회 결과 비교(샘플은 `detection_pipeline/samples/`). 원본 함수 파일 위치, 도구 handler가 `agent.tools.real.*`인지, audit 분할 객체, gzip, 원본 위치·모호성 |
+| `test_normalizer_parity.py` | 기존 A 어댑터 API와 1차 탐지 원본 결과 비교(raw_ref 포함). `_run()`을 위 통합 테스트에서 호출하므로 전체 pytest에도 포함 |
 | `test_event_window.py` | C의 시간 양끝·시간대·연도 경계·필터·전역 페이지·입력 오류·파일 누락/권한 |
 | `test_provenance.py` | D의 seed/지지·반박 증거/JSON·텍스트 참조 유지, audit 여러 줄, 미등록 참조, 도구 실패 이후 참조 유지, "조회 0건" 증거의 `empty_result_call` 확인(성공한 0건 호출만 인정) |
 | `test_fetch_*_log.py`, `test_get_process_tree.py` | B의 계층별 필터와 프로세스 연결 |

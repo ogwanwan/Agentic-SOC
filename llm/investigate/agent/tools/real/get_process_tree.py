@@ -5,7 +5,7 @@
 
 무엇을 부르나
   [33] agent/tools/log_source.py load_window_events("audit", ...)  fetch_audit_log와 같은 audit 소스
-       → normalizer_adapter → primary_detection/normalizer/tools/fetch_audit_log.py
+       → normalizer_adapter → detection_pipeline/tools/fetch_audit_log.py
   build_ancestry_chain() (이 파일)  pid → ppid를 시간 역순으로 따라가 조상 체인 구성
 
 파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.

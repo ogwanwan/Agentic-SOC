@@ -21,8 +21,8 @@
 
 ## 프로젝트 구조와 A·B·C·D
 
-- A 공통 정규화: `primary_detection/normalizer/`와 `agent/tools/normalizer_adapter.py`.
-  1차 탐지팀의 정규화 함수를 재사용한다.
+- A 공통 정규화: 저장소 루트 `detection_pipeline/tools/`(1차 탐지 원본)와 `agent/tools/normalizer_adapter.py`.
+  1차 탐지팀의 정규화 함수를 복사본 없이 직접 import해 재사용한다. import는 어댑터 한 곳에서만 한다.
 - B 조사 도구: `agent/tools/real/fetch_*_log.py`, `get_process_tree.py`.
   공용 `agent/tools/log_source.py`를 통해 원본 읽기·정규화를 연결한다. 현재 개별 조회 도구는
   `load_window_events()`의 결과에 도구별 필터·페이지네이션·요약을 적용한다.
@@ -36,8 +36,11 @@
 ## 데이터와 호환성
 
 - 정규화 로직을 조사 도구마다 중복 작성하거나 삭제된 `agent/tools/parsers/`를 복구하지 않는다.
-- `primary_detection/normalizer/`는 공유하는 벤더 코드다. 변경이 작업 범위에 포함된 경우에만
-  수정하고, 1차 탐지와 조사에서 같은 정규화 계약을 유지하도록 관련 테스트·문서도 갱신한다.
+- 저장소 루트 `detection_pipeline/`은 1차 탐지팀 코드다. 조사 쪽 작업에서 수정하지 않는다.
+  정규화 결과가 바뀌면 조사 도구 결과도 함께 바뀌므로 `tests/test_normalizer_parity.py`·
+  `tests/test_cd_normalizer_integration.py`로 확인한다.
+- `agent/tools/real/fetch_*_log.py`(조사 도구)와 `detection_pipeline/tools/fetch_*_log.py`(정규화 함수)는
+  이름만 같고 다른 코드다. 조사 도구를 정규화 함수로 바꾸거나 위임 구조로 줄이지 않는다.
 - 웹 입력은 현재 공통 함수가 지원하는 Apache 형식이다. 네트워크 정규화 대상은 http/alert다.
 - 조회의 `host`는 수집 서버 이름이며 HTTP Host 헤더의 도메인과 구분한다.
 - 사건 `window`는 시작·끝 ISO8601 시각이다. 현재 양 끝을 포함하고 조회 시 UTC로 비교한다.

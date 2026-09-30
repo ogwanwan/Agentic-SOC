@@ -22,8 +22,9 @@
 ## 로그 정규화는 여기서 직접 안 합니다
 
 `tools/real/*.py`(조사 도구)는 로그를 자기가 직접 파싱하지 않고, 1차 탐지팀이 만든 공통 정규화 함수를 가져다 씁니다.
-그 함수들은 `agent/` 밖의 레포 루트 `primary_detection/normalizer/`에 있고,
+그 함수들은 같은 저장소 루트의 1차 탐지 코드 `detection_pipeline/tools/`에 있고(복사본 없이 원본을 직접 import),
 `agent/tools/normalizer_adapter.py`가 그걸 가져다 쓰는 유일한 연결 지점입니다.
+`tools/real/fetch_*_log.py`(조사 도구)와 `detection_pipeline/tools/fetch_*_log.py`(정규화 함수)는 이름만 같고 다른 코드입니다.
 왜 이렇게 나눴는지는 [docs/normalizer-migration.md](../docs/normalizer-migration.md)에
 정리돼 있습니다. (자체 파서 폴더 `tools/parsers/`는 완전히 없어졌습니다 —
 마지막 남은 헬퍼 `process_tree.py`도 `tools/real/get_process_tree.py` 안으로 합쳤습니다.)

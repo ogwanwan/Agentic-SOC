@@ -23,7 +23,7 @@ import os
 import sys
 import types
 
-# normalizer 벤더 코드가 import 시점에 load_dotenv()를 호출하는 문제 회피
+# 1차 탐지 정규화 코드(detection_pipeline/tools)가 import 시점에 load_dotenv()를 호출하는 문제 회피
 # (tests/test_fetch_auth_log.py 상단 주석 참고).
 #
 # 2026-09-22 수정: 예전엔 그냥 `import agent`만 했는데, 그러면 raw_log_ingestion.py가
@@ -34,7 +34,7 @@ import types
 # 그제서야 fetch_apache_log.py/fetch_network_log.py를 처음 import) load_dotenv()가
 # "새로 실행"되면서 방금 지운 APACHE_LOG_PATH(+다른 변수들까지)가 .env 값으로
 # 다시 채워져버렸다 — 이게 로컬 PC에서 count가 안 맞던 진짜 원인이었다.
-# adapter.py를 미리 import해서 4개 벤더 파일의 load_dotenv()를 전부 한 번에
+# adapter.py를 미리 import해서 4개 정규화 파일의 load_dotenv()를 전부 한 번에
 # 끝내놓은 다음에 지우면, 그 뒤에 무엇을 import하든 다시 채워지지 않는다.
 import agent.tools.normalizer_adapter as _load_dotenv_trigger  # noqa: F401
 for _env_name in ("AUTH_LOG_PATH", "AUDIT_LOG_PATH", "APACHE_LOG_PATH", "SURICATA_LOG_PATH"):

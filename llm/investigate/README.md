@@ -22,7 +22,7 @@ LLM 기반 보안관제(SOC) 파이프라인의 **조사 단계**다. 1차 탐�
 
 | 역할 | 쉽게 말하면 | 위치 |
 | --- | --- | --- |
-| A: 공통 정규화 | 서로 다른 로그를 같은 형식으로 번역 (1차 탐지팀 코드) | `primary_detection/normalizer/`, `agent/tools/normalizer_adapter.py` |
+| A: 공통 정규화 | 서로 다른 로그를 같은 형식으로 번역 (1차 탐지팀 코드) | 저장소 루트 `detection_pipeline/tools/`, `agent/tools/normalizer_adapter.py` |
 | B: 조사 도구 | 계층별 로그 검색 + 코드가 센 집계·판정 기준 | `agent/tools/real/fetch_*_log.py`, `get_process_tree.py` |
 | C: 사건 구간 조회 | 사건 시간대의 여러 계층 로그를 시간순으로 | `agent/tools/real/fetch_event_logs.py` |
 | D: 원본 추적 | 원본 파일·줄 번호를 증거와 보고서까지 유지·검증 | `agent/provenance.py` |
@@ -42,9 +42,8 @@ agent/
   tools/
     registry.py          도구 등록·실행 (real/<도구이름>.py 자동 연결)
     log_source.py        로그 파일 읽기·정규화·시간창 필터 (수집과 도구 공용)
-    normalizer_adapter.py 1차 탐지팀 정규화 코드와의 연결 지점
-    real/                실제 조사 도구
-primary_detection/normalizer/   1차 탐지팀 공통 정규화 코드 (수정 금지, 원본 그대로 복사)
+    normalizer_adapter.py 1차 탐지팀 정규화 코드(저장소 루트 detection_pipeline/tools/)와의 유일한 연결 지점
+    real/                실제 조사 도구 (1차 탐지 정규화 함수와 이름만 같고 다른 코드)
 scenarios/               로컬 재현 시험용 합성 공격 로그 생성
 scripts/                 점검·데모 스크립트 (verify_all_tools, demo_abcd 등)
 tests/                   오프라인 테스트 (test_consistency.py = 실제 LLM 재현성 측정)
@@ -74,7 +73,7 @@ SURICATA_LOG_PATH=/var/log/suricata/eve.json
 
 ```bash
 python main.py <사건 파일>                      # 사건별 조사 → results/investigation_agent/에 JSON 저장 (콘솔에는 경로만)
-python main.py tests/fixtures/primary_detection_incidents.jsonl   # 예: 1차 탐지 샘플 출력 (로그 경로는 primary_detection/normalizer/samples/)
+python main.py tests/fixtures/primary_detection_incidents.jsonl   # 예: 1차 탐지 샘플 출력 (로그 경로는 저장소 루트 detection_pipeline/samples/)
 python -m pytest -q                             # 오프라인 테스트 (API 키 불필요)
 python -m tests.test_normalizer_parity          # 1차 탐지 정규화 결과와 동일성 검증
 python -m scripts.verify_all_tools              # .env 로그 경로로 도구 일괄 점검

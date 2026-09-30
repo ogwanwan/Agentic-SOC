@@ -28,7 +28,7 @@ from typing import Any, Dict, List
 
 from tests._log_files import install_log_files, uninstall_log_files
 
-# normalizer 벤더 코드가 import 시점에 load_dotenv()를 호출하는 문제 회피
+# 1차 탐지 정규화 코드(detection_pipeline/tools)가 import 시점에 load_dotenv()를 호출하는 문제 회피
 # (test_fetch_auth_log.py 상단 주석 참고 — 이 파일도 agent/tools/real/fetch_audit_log.py
 # 를 통해 normalizer.adapter → normalizer.tools.fetch_auth_log를 같이 import하므로
 # 똑같이 영향을 받는다).

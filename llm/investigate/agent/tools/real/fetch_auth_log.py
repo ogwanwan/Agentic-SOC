@@ -7,14 +7,14 @@
 
 무엇을 부르나
   [33] agent/tools/log_source.py load_window_events("auth", ...)  auth.log 읽기 + 정규화 + 시간창 필터
-       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_auth_log.py
+       → agent/tools/normalizer_adapter.py → detection_pipeline/tools/fetch_auth_log.py
 
 파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
       → normalizer_adapter.normalize_log_documents()
-      → primary_detection/normalizer/tools/fetch_auth_log.py (1차 탐지팀 공통 정규화 함수)
+      → detection_pipeline/tools/fetch_auth_log.py (1차 탐지팀 공통 정규화 함수)
     같은 raw 로그에 대해 1차 탐지와 에이전트 도구가 동일한 정규화 결과를 내도록,
     파싱은 에이전트 자체 파서(구 parsers/auth_parser.py)가 아니라 공통 정규화 함수에 맡긴다.
     raw_ref/raw_refs/raw_ref_locations(원본 파일의 실제 줄 위치)도 그 경로에서 붙는다.

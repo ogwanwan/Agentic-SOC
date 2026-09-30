@@ -87,7 +87,7 @@ for t in test_triage test_dedup test_grouping test_llm_review test_audit_lineage
 
 **다른 브랜치가 의존하는 것**
 - 조사 에이전트는 **1차 탐지 Incident JSONL**(`seeds[].evidence_refs`·`detail.timestamp`·`rule_name`·`score_parts`, `entity`, `window`, `layers`, `members`, `join_path` 등)을 입력으로 읽는다.
-- 조사 브랜치는 `common/{schema,timeparse,network}.py`와 `tools/{base,registry,normalize,fetch_*_log}.py`를 **바이트 단위로 복사(vendor)**해 쓴다(`primary_detection/normalizer/vendor_sync_check.py`). 파서·정규화 결과를 바꾸면 조사 쪽과 결과가 달라지므로 변경 사실을 알린다.
+- 조사 에이전트(`llm/investigate/`)는 복사본 없이 `detection_pipeline/tools/fetch_{apache,auth,audit,network}_log.py`(이들이 쓰는 `tools/{base,registry,log_sources}.py`, `common/{schema,timeparse,network}.py` 포함)를 `llm/investigate/agent/tools/normalizer_adapter.py` 한 곳에서 직접 import해 쓴다. 파서·정규화 결과를 바꾸면 조사 도구 결과도 바로 바뀌므로 변경 사실을 알리고, `llm/investigate/`에서 `python -m pytest -q`(특히 `tests/test_normalizer_parity.py`·`tests/test_cd_normalizer_integration.py`)로 확인한다.
 
 ## 확장 방법
 

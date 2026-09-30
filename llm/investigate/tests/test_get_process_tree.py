@@ -25,8 +25,8 @@ from typing import Any, Dict
 
 from tests._log_files import install_log_files, uninstall_log_files
 
-# normalizer 벤더 코드가 import 시점에 load_dotenv()를 호출하는 문제 회피
-# (tests/test_fetch_auth_log.py 상단 주석 참고). 조사 도구가 벤더 정규화 코드를 쓰므로
+# 1차 탐지 정규화 코드(detection_pipeline/tools)가 import 시점에 load_dotenv()를 호출하는 문제 회피
+# (tests/test_fetch_auth_log.py 상단 주석 참고). 조사 도구가 1차 탐지 정규화 코드를 쓰므로
 # "agent."로 시작하는 모듈을 import하면(이 파일처럼 get_process_tree만 써도) 이 영향을 받는다.
 #
 # 2026-09-22 추가 수정: 그런데 `import agent`만으로는 auth/audit 쪽 load_dotenv()만
@@ -34,10 +34,10 @@ from tests._log_files import install_log_files, uninstall_log_files
 # normalizer/adapter.py를 거쳐야 처음 import돼서 이 시점엔 아직 실행 전이었다.
 # get_process_tree.py도 normalizer/adapter.py를 import하므로(normalize_audit()를
 # 쓰려고), 뒤에서 이 테스트가 get_process_tree를 import하는 순간 adapter.py가
-# apache/network 벤더 파일들을 처음 import하면서 load_dotenv()가 "새로" 실행되고,
+# apache/network 정규화 파일들을 처음 import하면서 load_dotenv()가 "새로" 실행되고,
 # 방금 지운 AUDIT_LOG_PATH까지 포함해 4개 변수가 .env 값으로 재오염됐다 —
 # 로컬 PC 테스트에서 count가 안 맞던 진짜 원인. adapter.py를 미리 import해서 4개
-# 벤더 파일의 load_dotenv()를 전부 한 번에 끝내놓은 뒤 지우면 이 문제가 없다.
+# 정규화 파일의 load_dotenv()를 전부 한 번에 끝내놓은 뒤 지우면 이 문제가 없다.
 import agent.tools.normalizer_adapter as _load_dotenv_trigger  # noqa: F401
 for _env_name in ("AUTH_LOG_PATH", "AUDIT_LOG_PATH", "APACHE_LOG_PATH", "SURICATA_LOG_PATH"):
     os.environ.pop(_env_name, None)

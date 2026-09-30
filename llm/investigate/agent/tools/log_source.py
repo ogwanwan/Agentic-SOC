@@ -130,7 +130,7 @@ def filtered_out_hint(window_total: int, args: Dict[str, Any], filter_keys: Iter
 
 # [33] ← agent/tools/real/fetch_*_log.py에서 호출: 읽기 → 정규화 → 조회 구간 안 이벤트만, 시각순
 def load_window_events(layer: str, host: str, start_time: str, end_time: str) -> Dict[str, Any]:
-    """Read one layer and normalize it with primary_detection, keeping only in-window events.
+    """Read one layer and normalize it with detection_pipeline/tools, keeping only in-window events.
 
     Tool-specific filters, pagination and summaries belong to agent/tools/real/*.py.
     A missing/unreadable source is reported in "error" instead of looking like 0 events.

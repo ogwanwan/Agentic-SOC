@@ -11,18 +11,9 @@
   provenance.py                   원본 참조(raw_ref) 전달·검증
   report.py             [41]      결과 JSON 조립
 
-아래 sys.path 추가는 1차 탐지 코드가 "primary-detection"(하이픈) 폴더에 있던 시절의 것이다. 지금은
-폴더가 primary_detection(밑줄)이라 저장소 루트에서 실행하면 그대로 패키지로 import되고, 이 경로는
-존재하지 않아 효과가 없다(남아 있어도 무해).
+1차 탐지 정규화 코드(저장소 루트의 detection_pipeline/tools/)의 import 경로는
+tools/normalizer_adapter.py가 준비한다.
 """
-
-import os as _os
-import sys as _sys
-
-_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-_PRIMARY_DETECTION_DIR = _os.path.join(_REPO_ROOT, "primary-detection")
-if _PRIMARY_DETECTION_DIR not in _sys.path:
-    _sys.path.insert(0, _PRIMARY_DETECTION_DIR)
 
 from .models import (
     AgentState,

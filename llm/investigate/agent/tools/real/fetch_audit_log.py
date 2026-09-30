@@ -7,14 +7,14 @@
 
 무엇을 부르나
   [33] agent/tools/log_source.py load_window_events("audit", ...)  auditd audit.log 읽기 + 정규화 + 시간창 필터
-       → agent/tools/normalizer_adapter.py → primary_detection/normalizer/tools/fetch_audit_log.py
+       → agent/tools/normalizer_adapter.py → detection_pipeline/tools/fetch_audit_log.py
 
 파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()
       → normalizer_adapter.normalize_log_documents()
-      → primary_detection/normalizer/tools/fetch_audit_log.py (1차 탐지팀 공통 정규화 함수)
+      → detection_pipeline/tools/fetch_audit_log.py (1차 탐지팀 공통 정규화 함수)
     멀티라인 이벤트 조립(SYSCALL/EXECVE/PATH…)과 session_type 판정은 공통 정규화 함수가
     한다. 에이전트 자체 파서(구 parsers/audit_parser.py)는 쓰지 않는다.
   - 이 파일(에이전트 도구): 도구 인자 해석, 필터, limit/offset 페이지네이션,

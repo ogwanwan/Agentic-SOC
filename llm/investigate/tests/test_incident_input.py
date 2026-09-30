@@ -1,7 +1,7 @@
 """agent/incident_input.py — 1차 탐지 사건 파일 읽기와 조사 루프 입력 변환.
 
 tests/fixtures/primary_detection_incidents.jsonl은 1차 탐지 develop(e9b733c)의 run_pipeline.py를
-그쪽 합성 샘플 로그(= primary_detection/normalizer/samples/)로 실행해 나온 실제 출력이다.
+그쪽 합성 샘플 로그(= 저장소 루트 detection_pipeline/samples/)로 실행해 나온 실제 출력이다.
 """
 import json
 

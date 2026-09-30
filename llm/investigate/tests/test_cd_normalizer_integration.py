@@ -14,7 +14,9 @@ from agent.tools.log_source import LOCAL_PATH_ENV
 from agent.tools.real.fetch_event_logs import fetch_event_logs
 from tests.test_event_window import WINDOW, local_log, query
 
-SAMPLES = Path(__file__).resolve().parents[1] / "primary_detection" / "normalizer" / "samples"
+from agent.tools.normalizer_adapter import DETECTION_PIPELINE_DIR
+
+SAMPLES = DETECTION_PIPELINE_DIR / "samples"
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +35,8 @@ def test_all_vendor_fields_and_refs_match_query_and_tools(monkeypatch, layer, mo
     source = SAMPLES / sample
     monkeypatch.setenv(LOCAL_PATH_ENV[layer], str(source))
     monkeypatch.setenv("AUTH_LOG_YEAR", "2026")
-    vendor = getattr(import_module(f"primary_detection.normalizer.tools.{module}"), module)
+    vendor = getattr(import_module(f"tools.{module}"), module)
+    assert Path(vendor.__code__.co_filename).resolve().parent == DETECTION_PIPELINE_DIR / "tools"
     window = ["2026-01-01T00:00:00Z", "2026-12-31T23:59:59Z"]
     expected = vendor(str(source), time_window=window)
     assert expected
