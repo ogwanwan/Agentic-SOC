@@ -4,7 +4,7 @@ import random
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "detection_pipeline"))
 
 from common.lineage import (  # noqa: E402
     WARN_REPARENTED,
@@ -15,7 +15,7 @@ from common.schema import build_event  # noqa: E402
 from tools.fetch_audit_log import fetch_audit_log  # noqa: E402
 
 SAMPLE_AUDIT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "tools", "sample_audit.log")
+                            "detection_pipeline", "samples", "sample_audit.log")
 
 
 def sys_event(raw_ref, ts, pid, ppid, serial, uid=33, comm="sh", exe="/usr/bin/dash"):

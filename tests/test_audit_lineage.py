@@ -8,14 +8,14 @@ import os
 import random
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "detection_pipeline"))
 
 from correlate.links.audit_lineage import JOIN, audit_lineage_edges
 from correlate.registry import LINKERS
 from tools.fetch_audit_log import fetch_audit_log
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SAMPLE_AUDIT = os.path.join(REPO, "tools", "sample_audit.log")
+SAMPLE_AUDIT = os.path.join(REPO, "detection_pipeline", "samples", "sample_audit.log")
 
 
 def _sys(raw_ref, ts, pid, ppid, serial, uid=33, comm="sh"):

@@ -12,7 +12,7 @@ __pycache__/
 venv/
 env/
 
-# 대용량 / 실제 로그 (합성 샘플 tools/sample_* 는 커밋함)
+# 대용량 / 실제 로그 (합성 샘플 detection_pipeline/samples/ 는 커밋함)
 *.log.gz
 eve.json
 access.log

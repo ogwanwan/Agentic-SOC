@@ -2,9 +2,11 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_ROOT, "detection_pipeline"))
+sys.path.insert(0, os.path.join(_ROOT, "llm"))
 
-from triage.llm_review import llm_review, _parse
+from triage_review.llm_review import llm_review, _parse
 
 
 def _inc(iid, priority):

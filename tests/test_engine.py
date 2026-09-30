@@ -1,5 +1,9 @@
+import os
+import sys
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "detection_pipeline"))
 
 from detect.engine import Cond, detect, evaluate
 from detect.loader import Rule
