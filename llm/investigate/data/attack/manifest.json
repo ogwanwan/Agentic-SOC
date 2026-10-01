@@ -1,0 +1,15 @@
+{
+  "attack_version": "19.2",
+  "domain": "enterprise-attack",
+  "stix_file": "enterprise-attack.json",
+  "source_url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-19.2.json",
+  "downloaded_at": "2026-09-28",
+  "sha256": "dc1639caa5501d720e280cf1cbd8fbe009884a0c9b3e6e9ed9d0c25166c3d8f4",
+  "size_bytes": 53835637,
+  "catalog_parser_version": "1",
+  "active_technique_count": 697,
+  "tactic_count": 15,
+  "retrieval_version": "hybrid-bm25-e5-rrf-v1",
+  "embedding_model": "intfloat/multilingual-e5-small",
+  "embedding_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+}

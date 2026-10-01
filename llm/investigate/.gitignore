@@ -12,3 +12,7 @@ sample_logs/
 sample_logs_orig/
 # tests.test_consistency 기본 출력
 consistency_results.json
+
+# ATT&CK 공식 STIX(약 54MB) — Git에 올리지 않음
+data/attack/enterprise-attack.json
+data/attack/*.tmp
