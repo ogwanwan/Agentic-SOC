@@ -61,11 +61,13 @@ pip install -r requirements.txt
 ```
 
 조사 에이전트는 **저장소 루트 `.env` 하나만** 읽는다(1차 탐지와 같은 파일, `llm/investigate/.env`는 읽지 않음).
-LLM 설정은 `INVESTIGATION_` 접두어 이름만 읽는다. 최소 설정(자세한 설명은 저장소 루트 `.env.example`):
+LLM 설정은 역할 접두어 이름만 읽는다 — 조사 에이전트 `INVESTIGATION_`, ATT&CK 매핑 `MAPPING_`.
+최소 설정(자세한 설명은 저장소 루트 `.env.example`, `docs/LLM-역할별-설정-가이드.md`):
 
 ```
-ANTHROPIC_API_KEY=발급받은_키                   # 공용 키 (조사 전용 INVESTIGATION_ANTHROPIC_API_KEY가 있으면 그쪽 우선)
-INVESTIGATION_CLAUDE_MODEL=claude-haiku-4-5-20251001
+ANTHROPIC_API_KEY=발급받은_키                   # 공용 키 (역할 전용 <접두어>ANTHROPIC_API_KEY가 있으면 그쪽 우선)
+INVESTIGATION_CLAUDE_MODEL=claude-haiku-4-5     # 조사 모델 (비우면 claude-sonnet-5)
+MAPPING_CLAUDE_MODEL=claude-haiku-4-5           # 매핑 모델 (비우면 claude-haiku-4-5, 조사 모델을 따라가지 않음)
 HOST=<수집 서버 이름, EC2는 hostname 결과>
 APACHE_LOG_PATH=/var/log/apache2/access.log
 AUTH_LOG_PATH=/var/log/auth.log
@@ -88,9 +90,11 @@ python -m tests.test_consistency --runs 3 --seed-json seed.json   # 같은 seed 
 
 ## LLM
 
-LLM 설정은 루트 `.env`를 다른 LLM 단계와 같이 쓰므로 **`INVESTIGATION_` 접두어 이름만** 읽는다. 접두어 없는 옛 이름
+LLM 설정은 루트 `.env`를 다른 LLM 단계와 같이 쓰므로 **역할 접두어 이름만** 읽는다 — 조사 에이전트는
+`INVESTIGATION_`, ATT&CK 매핑은 `MAPPING_`(아래 이름에서 접두어만 바뀜, 모델 기본값 `claude-haiku-4-5`).
+조사와 매핑은 LLM 객체를 따로 만들므로 조사 모델을 바꿔도 매핑 모델은 그대로다. 접두어 없는 옛 이름
 (`LLM_PROVIDER`, `CLAUDE_MODEL`, `CLAUDE_EFFORT`, `CLAUDE_REFUSAL_FALLBACK_MODEL`, `GEMINI_MODEL`)은 무시하고 실행 시
-이름만 안내한다(값은 출력하지 않음). 규칙은 `agent/settings.py`.
+이름만 안내한다(값은 출력하지 않음). 규칙은 `agent/settings.py`, 팀원용 설명은 저장소 루트 `docs/LLM-역할별-설정-가이드.md`.
 
 기본은 Claude다(`INVESTIGATION_LLM_PROVIDER`, 비우면 anthropic). 키는 조사 전용 `INVESTIGATION_ANTHROPIC_API_KEY`를
 먼저 읽고 비어 있으면 1차 탐지와 공용인 `ANTHROPIC_API_KEY`를 쓴다. 어느 이름의 키를 썼는지는 실행 시

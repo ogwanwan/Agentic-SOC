@@ -252,7 +252,7 @@ def test_legacy_setting_names_are_ignored_with_name_only_notice(monkeypatch, cap
     assert len(created["messages"].calls) == 2
     out = capsys.readouterr().out
     for name in ("CLAUDE_MODEL", "CLAUDE_EFFORT", "CLAUDE_REFUSAL_FALLBACK_MODEL"):
-        assert f"{name}는 조사 에이전트에서 읽지 않습니다" in out and f"INVESTIGATION_{name}" in out
+        assert f"{name}는 읽지 않습니다" in out and f"INVESTIGATION_{name}" in out and f"MAPPING_{name}" in out
     assert "legacy-secret" not in out and "none" not in out  # 안내에 값은 나오지 않는다
 
 

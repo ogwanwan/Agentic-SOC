@@ -1,8 +1,8 @@
-"""Claude(Anthropic API) LLM 클라이언트 — 기본 LLM(INVESTIGATION_LLM_PROVIDER가 비었거나 anthropic일 때).
+"""Claude(Anthropic API) LLM 클라이언트 — 기본 LLM(<역할>_LLM_PROVIDER가 비었거나 anthropic일 때).
 
 역할
   프롬프트를 받아 Claude를 호출하고 응답을 JSON(dict)으로 파싱해 돌려준다. GeminiClient와 같은
-  인터페이스라 INVESTIGATION_LLM_PROVIDER만 바꾸면 그대로 교체된다.
+  인터페이스라 <역할>_LLM_PROVIDER만 바꾸면 그대로 교체된다.
   temperature는 보내지 않는다: anthropic SDK 1.x에서 인자가 삭제됐고(보내면 TypeError), 기본 모델
   claude-sonnet-5도 sampling 인자를 받지 않는다(400). 판정 재현성은 프롬프트 원칙과 코드 관문이 맡는다.
   claude-sonnet-5는 thinking이 기본으로 켜져 있어 thinking 토큰도 max_tokens에 포함된다 → 출력 한도 16000.
@@ -12,22 +12,25 @@
   usage_totals에 누적한다(조사 1건 비용 측정용).
 
 누가 부르나
-  agent/llm_provider.py build_llm_client()   → ClaudeClient()    생성 (기본, INVESTIGATION_LLM_PROVIDER=anthropic)
+  agent/llm_provider.py build_llm_client()   → ClaudeClient(role)  생성 (기본, <역할>_LLM_PROVIDER=anthropic)
   [20] agent/loop.py _safe_reason()          → reason()          조사 루프 매 턴
+  attack_mapping/mapper.py                   → complete_json()   ATT&CK 매핑 (role=MAPPING 객체)
 
 무엇을 부르나
   [21] agent/prompts/__init__.py  build_system_prompt(), build_user_prompt()
   [22] anthropic  messages.create()
 
-필요 환경변수: INVESTIGATION_ANTHROPIC_API_KEY(조사 에이전트 전용 키, 먼저 읽음) 또는 ANTHROPIC_API_KEY.
-  1차 탐지(llm/triage_review)도 ANTHROPIC_API_KEY를 쓰므로 키를 나누려면 전용 키를 둔다. 빈 값은 없는 것으로
-  보고 ANTHROPIC_API_KEY로 넘어간다. 어느 이름을 썼는지는 키 값 없이 콘솔("[Claude] API 키: <이름> 사용")과
+역할(role): 조사 에이전트(INVESTIGATION, 기본)와 ATT&CK 매핑(MAPPING)이 같은 클래스를 쓰고, 설정은 역할 접두어
+  이름만 읽는다(루트 .env를 다른 역할과 같이 쓰므로, agent/settings.py). 아래 <역할>은 INVESTIGATION 또는 MAPPING.
+필요 환경변수: <역할>_ANTHROPIC_API_KEY(역할 전용 키, 먼저 읽음) 또는 ANTHROPIC_API_KEY(공용).
+  1차 탐지(llm/triage_review)도 공용 키를 쓰므로 단계별 사용량을 나눠 보려면 전용 키를 둔다. 빈 값은 없는 것으로
+  보고 공용 키로 넘어간다. 어느 이름을 썼는지는 키 값 없이 콘솔("[Claude] API 키: <이름> 사용 (<역할>, 모델 …)")과
   api_key_source 속성에 남긴다.
-모델 설정은 INVESTIGATION_ 접두어 이름만 읽는다(루트 .env를 다른 역할과 같이 쓰므로, agent/settings.py).
-  접두어 없는 옛 이름(CLAUDE_MODEL 등)은 무시하고 이름만 안내한다.
-  INVESTIGATION_CLAUDE_MODEL — 없으면 claude-sonnet-5. EC2는 비용 때문에 claude-haiku-4-5-20251001을 쓴다.
-  INVESTIGATION_CLAUDE_EFFORT(low|medium|high|xhigh|max) — 없으면 보내지 않음(API 기본값).
-  INVESTIGATION_CLAUDE_REFUSAL_FALLBACK_MODEL — 안전 필터 거절(stop_reason=refusal) 시 같은 요청을 다시 보낼
+모델 설정 — 접두어 없는 옛 이름(CLAUDE_MODEL 등)은 무시하고 이름만 안내한다.
+  <역할>_CLAUDE_MODEL — 없으면 역할별 기본값: 조사 claude-sonnet-5(고성능), 매핑 claude-haiku-4-5(경량).
+    매핑 줄을 빼먹어도 비싼 모델로 돌지 않게 기본값을 역할마다 둔다.
+  <역할>_CLAUDE_EFFORT(low|medium|high|xhigh|max) — 없으면 보내지 않음(API 기본값).
+  <역할>_CLAUDE_REFUSAL_FALLBACK_MODEL — 안전 필터 거절(stop_reason=refusal) 시 같은 요청을 다시 보낼
   모델. 없거나 비우면 claude-sonnet-4-6. 재요청을 끄는 none/off는 실험용이며 운영에서는 쓰지 않는다(켜면
   경고 출력). 대체 호출은 결과 notes에 남는다.
 테스트에서는 같은 인터페이스의 가짜 클라이언트로 바꿔 쓴다(tests/test_loop.py, tests/test_claude_client.py).
@@ -41,14 +44,22 @@ from typing import Any, Dict, Optional
 from .llm_errors import LLMUnavailableError
 from .llm_json import parse_llm_json
 from .prompts import build_system_prompt, build_user_prompt
-from .settings import investigation_setting
+from .settings import INVESTIGATION, MAPPING, role_setting
 
-DEFAULT_MODEL = "claude-sonnet-5"
+# 역할별 기본 모델: 조사는 고성능, 매핑은 경량(1차 탐지 트리아지와 같은 등급)
+DEFAULT_MODELS = {INVESTIGATION: "claude-sonnet-5", MAPPING: "claude-haiku-4-5"}
+DEFAULT_MODEL = DEFAULT_MODELS[INVESTIGATION]
 # 거절 시 대체 모델: sonnet-5는 sonnet-4.6보다 사이버 보안 주제를 더 엄격하게 거른다(Anthropic 문서).
 DEFAULT_REFUSAL_FALLBACK_MODEL = "claude-sonnet-4-6"
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-# 앞에서부터 값이 있는 첫 이름의 키를 쓴다 (조사 전용 키 → 1차 탐지와 공용 키)
-API_KEY_ENV_NAMES = ("INVESTIGATION_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
+
+
+def api_key_env_names(role: str = INVESTIGATION) -> tuple:
+    """앞에서부터 값이 있는 첫 이름의 키를 쓴다 (역할 전용 키 → 1차 탐지와 공용 키)."""
+    return (f"{role}_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
+
+
+API_KEY_ENV_NAMES = api_key_env_names(INVESTIGATION)
 # SDK 재시도 뒤에도 이 상태 코드면 일시 오류로 본다(429 한도, 5xx·529 과부하, 408 시간 초과)
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
 
@@ -86,36 +97,39 @@ class ClaudeClient:
         # 범위(SDK의 10분 제한 안)로 둔다.
         max_tokens: int = 16000,
         effort: Optional[str] = None,
+        role: str = INVESTIGATION,
     ) -> None:
         # anthropic 패키지는 실제 API 호출 시에만 필요하므로 지연 import한다.
         from anthropic import Anthropic
 
+        self.role = role
+        key_names = api_key_env_names(role)
         # 어느 이름의 키를 썼는지(키 값 아님) — 1차 탐지(llm/triage_review)와 키를 나눴는지 확인용
         self.api_key_source = "api_key 인자" if api_key else next(
-            (name for name in API_KEY_ENV_NAMES if os.environ.get(name)), None)
+            (name for name in key_names if os.environ.get(name)), None)
         resolved_key = api_key or (os.environ.get(self.api_key_source) if self.api_key_source else None)
         if not resolved_key:
             raise ValueError(
-                f"{' 또는 '.join(API_KEY_ENV_NAMES)}가 설정되지 않았습니다. .env 파일에 "
-                "INVESTIGATION_ANTHROPIC_API_KEY=발급받은_키(조사 에이전트 전용, 권장) 또는 "
-                "ANTHROPIC_API_KEY=발급받은_키 를 추가하거나 ClaudeClient(api_key=...)로 "
+                f"{' 또는 '.join(key_names)}가 설정되지 않았습니다. 저장소 루트 .env에 "
+                f"{key_names[0]}=발급받은_키(역할 전용) 또는 "
+                "ANTHROPIC_API_KEY=발급받은_키(공용) 를 추가하거나 ClaudeClient(api_key=...)로 "
                 "직접 전달하십시오."
             )
-        print(f"[Claude] API 키: {self.api_key_source} 사용")
         self._client = Anthropic(api_key=resolved_key, max_retries=self.MAX_RETRIES)
-        # 모델 설정은 INVESTIGATION_ 이름만 읽는다(옛 CLAUDE_* 이름은 무시하고 안내, agent/settings.py)
-        self.model = model or investigation_setting("CLAUDE_MODEL") or DEFAULT_MODEL
+        # 모델 설정은 <역할>_ 이름만 읽는다(옛 CLAUDE_* 이름은 무시하고 안내, agent/settings.py)
+        self.model = model or role_setting(role, "CLAUDE_MODEL") or DEFAULT_MODELS[role]
+        print(f"[Claude] API 키: {self.api_key_source} 사용 ({role}, 모델 {self.model})")
         self.max_tokens = max_tokens
-        self.effort = (effort or investigation_setting("CLAUDE_EFFORT") or "").strip().lower() or None
+        self.effort = (effort or role_setting(role, "CLAUDE_EFFORT") or "").strip().lower() or None
         if self.effort is not None and self.effort not in EFFORT_LEVELS:
             raise ValueError(
-                f"INVESTIGATION_CLAUDE_EFFORT는 {', '.join(EFFORT_LEVELS)} 중 하나여야 합니다: {self.effort}")
+                f"{role}_CLAUDE_EFFORT는 {', '.join(EFFORT_LEVELS)} 중 하나여야 합니다: {self.effort}")
         # 안전 필터 거절(refusal) 시 같은 요청을 다시 보낼 모델. 비우면 기본 대체 모델(재요청을 끄지 않는다).
         # none/off는 실험용으로만 남긴 끄기 — 운영에서는 쓰지 않는다(켜져 있지 않음을 알린다).
-        fallback = investigation_setting("CLAUDE_REFUSAL_FALLBACK_MODEL") or DEFAULT_REFUSAL_FALLBACK_MODEL
+        fallback = role_setting(role, "CLAUDE_REFUSAL_FALLBACK_MODEL") or DEFAULT_REFUSAL_FALLBACK_MODEL
         self.refusal_fallback_model = None if fallback.lower() in ("none", "off") else fallback
         if self.refusal_fallback_model is None:
-            print("[Claude] 경고: 거절 시 대체 모델 재요청이 꺼져 있습니다(INVESTIGATION_CLAUDE_REFUSAL_FALLBACK_MODEL)")
+            print(f"[Claude] 경고: 거절 시 대체 모델 재요청이 꺼져 있습니다({role}_CLAUDE_REFUSAL_FALLBACK_MODEL)")
         # 이 클라이언트로 한 모든 호출의 토큰 합계 (비용 추정용)와 거절·대체 호출 횟수
         self.usage_totals: Dict[str, int] = {
             "calls": 0, "input_tokens": 0, "output_tokens": 0,

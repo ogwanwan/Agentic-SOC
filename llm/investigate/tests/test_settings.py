@@ -18,7 +18,8 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "ROOT_ENV_FILE", root_env)
     monkeypatch.setattr(settings, "IGNORED_ENV_FILE", ignored_env)
     monkeypatch.setattr(settings, "_notified", set())
-    for name in ("SETTINGS_TEST_ROOT", "SETTINGS_TEST_INV", "CLAUDE_MODEL", "INVESTIGATION_CLAUDE_MODEL"):
+    for name in ("SETTINGS_TEST_ROOT", "SETTINGS_TEST_INV", "CLAUDE_MODEL", "INVESTIGATION_CLAUDE_MODEL",
+                 "MAPPING_CLAUDE_MODEL"):
         monkeypatch.delenv(name, raising=False)
     return root_env, ignored_env
 
@@ -53,8 +54,20 @@ def test_investigation_setting_ignores_legacy_name_and_notifies_once(monkeypatch
     assert settings.investigation_setting("CLAUDE_MODEL") is None
     assert settings.investigation_setting("CLAUDE_MODEL") is None
     out = capsys.readouterr().out
-    assert out.count("CLAUDE_MODEL는 조사 에이전트에서 읽지 않습니다") == 1 and "legacy-secret" not in out
+    assert out.count("CLAUDE_MODEL는 읽지 않습니다") == 1 and "legacy-secret" not in out
+    assert "INVESTIGATION_CLAUDE_MODEL" in out and "MAPPING_CLAUDE_MODEL" in out  # 어디로 옮길지 안내
     monkeypatch.setenv("INVESTIGATION_CLAUDE_MODEL", "  claude-haiku-4-5-20251001 ")
     assert settings.investigation_setting("CLAUDE_MODEL") == "claude-haiku-4-5-20251001"
     monkeypatch.setenv("INVESTIGATION_CLAUDE_MODEL", "")
     assert settings.investigation_setting("CLAUDE_MODEL") is None  # 빈 값은 없는 것
+
+
+def test_role_settings_are_independent(monkeypatch):
+    # 조사(INVESTIGATION_)와 매핑(MAPPING_)은 루트 .env를 같이 써도 서로의 값을 읽지 않는다
+    monkeypatch.setenv("INVESTIGATION_CLAUDE_MODEL", "claude-sonnet-5")
+    assert settings.role_setting(settings.MAPPING, "CLAUDE_MODEL") is None
+    monkeypatch.setenv("MAPPING_CLAUDE_MODEL", "claude-haiku-4-5")
+    assert settings.role_setting(settings.MAPPING, "CLAUDE_MODEL") == "claude-haiku-4-5"
+    assert settings.role_setting(settings.INVESTIGATION, "CLAUDE_MODEL") == "claude-sonnet-5"
+    with pytest.raises(ValueError, match="LLM 역할"):
+        settings.role_setting("TRIAGE", "CLAUDE_MODEL")  # 트리아지는 llm/triage_review가 직접 읽는다

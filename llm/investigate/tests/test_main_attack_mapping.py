@@ -122,14 +122,16 @@ def test_main_saves_investigation_then_maps_each_incident(tmp_path, monkeypatch,
     # 사건 파일 → 조사(LLM 대신 준비된 결과) → 결과 JSON 저장 → 매핑·최종 보고서 저장까지 main() 전체
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(main, "load_incidents", lambda path: [{"incident_id": "A"}, {"incident_id": "B"}])
-    client = object()
-    monkeypatch.setattr(main, "build_llm_client", lambda: client)
+    # 조사와 매핑은 역할별로 다른 LLM 객체를 쓴다(INVESTIGATION_* / MAPPING_* 설정, 2026-10-02 분리)
+    clients = {"INVESTIGATION": object(), "MAPPING": object()}
+    monkeypatch.setattr(main, "build_llm_client", lambda role="INVESTIGATION": clients[role])
 
     def baseline_spy(path, *, out_dir, llm_client):
-        assert Path(path).exists() and llm_client is client
+        assert Path(path).exists() and llm_client is clients["MAPPING"]
         return process_saved_file(path, ALL_RULES, out_dir)
 
     def pipeline(incidents, **kwargs):
+        assert kwargs["llm_client"] is clients["INVESTIGATION"]
         for result in (investigation(incident_id="INC-MAIN-A"),
                        investigation("FALSE_POSITIVE", incident_id="INC-MAIN-B")):
             kwargs["on_result"](result)
@@ -151,10 +153,37 @@ def test_main_saves_investigation_then_maps_each_incident(tmp_path, monkeypatch,
         "INC-MAIN-B_attack_mapping.json", "INC-MAIN-B_final_report.json"]
 
 
+def test_mapping_client_failure_does_not_stop_investigation(tmp_path, monkeypatch, capsys):
+    # 매핑 LLM 설정이 잘못돼도(예: MAPPING_LLM_PROVIDER 오타) 조사는 계속하고, 매핑 단계가 다시 시도한다
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "load_incidents", lambda path: [{"incident_id": "A"}])
+
+    def build(role="INVESTIGATION"):
+        if role == "MAPPING":
+            raise ValueError("알 수 없는 MAPPING_LLM_PROVIDER입니다: typo")
+        return object()
+
+    seen = []
+
+    def mapping_spy(path, *, out_dir, llm_client):
+        seen.append(llm_client)
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        return {"mapping_status": "not_applicable", "techniques": [], "kill_chain": []}
+
+    monkeypatch.setattr(main, "build_llm_client", build)
+    monkeypatch.setattr(main, "process_file", mapping_spy)
+    monkeypatch.setattr(main, "run_investigation_pipeline",
+                        lambda incidents, **kwargs: kwargs["on_result"](investigation()) or [])
+    main.main(["incidents.jsonl"])
+    assert seen == [None]  # 매핑 단계에 None → attack_mapping/cli.py가 MAPPING 설정으로 다시 만든다
+    out = capsys.readouterr().out
+    assert "매핑 LLM 준비 실패" in out and "--- 저장된 조사 결과 JSON 1건 ---" in out
+
+
 def test_main_preserves_same_investigation_id_saved_in_one_second(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(main, "load_incidents", lambda path: [{"incident_id": "A"}, {"incident_id": "B"}])
-    monkeypatch.setattr(main, "build_llm_client", lambda: object())
+    monkeypatch.setattr(main, "build_llm_client", lambda role="INVESTIGATION": object())
 
     class FrozenDateTime:
         @staticmethod

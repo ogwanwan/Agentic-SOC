@@ -391,8 +391,10 @@ def process_file(
             catalog = get_default_catalog()
         runtime = MappingRuntime(catalog, embedder=embedder, cache_dir=cache_dir)
         if llm_client is None:
+            # 매핑은 조사 에이전트와 다른 LLM 설정(MAPPING_*)을 쓴다 — agent/settings.py
             from agent.llm_provider import build_llm_client
-            llm_client = build_llm_client()
+            from agent.settings import MAPPING
+            llm_client = build_llm_client(MAPPING)
     except Exception as exc:
         return _write_setup_error(investigation_result, investigation_result_path,
                                   out_dir, gate, exc, catalog)
@@ -446,8 +448,8 @@ def run(argv: Optional[Sequence[str]] = None, rules: Optional[Sequence[Technique
         _print(f"no *.json files found in {args.all_in_dir}", file=sys.stderr)
         return 1
 
-    from dotenv import load_dotenv
-    load_dotenv()  # Same .env lookup and environment precedence as main.py.
+    from agent.settings import load_root_env
+    load_root_env()  # main.py와 같은 저장소 루트 .env 하나 (이미 설정된 환경변수가 우선)
 
     active_rules = rules if rules is not None else (_load_rules() if args.rule_baseline else None)
     exit_code = 0
