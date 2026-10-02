@@ -159,39 +159,14 @@ Anthropic 콘솔에서 키별 사용량으로 나눠 볼 수 있습니다.
 
 ## 추후 과제
 
-### 1. ATT&CK 매핑을 `llm/mapping/`으로 옮기기 (LLM 테스트 이후, 매핑 팀과 함께)
+### 트리아지 다른 회사 모델 지원
 
-지금 매핑 코드는 조사 에이전트 폴더 안(`llm/investigate/attack_mapping/` 등 47개 파일)에 있습니다.
-9/30 폴더 재배치 때 매핑 자리로 잡아 둔 `llm/mapping/`(현재 `.gitkeep`만 있음)으로 옮기는 게 맞다고 봅니다.
-담당 팀이 폴더로 나뉘고, `MAPPING_` 설정 규칙과도 맞습니다.
+트리아지(`llm/triage_review/llm_review.py`)는 Anthropic SDK를 직접 씁니다. GPT 등 다른 회사 모델을 쓰려면 provider를 고를 수
+있게 바꿔야 합니다. 조사·매핑이 쓰는 LLM 클라이언트(`llm/investigate/agent/llm_provider.py`)를 함께 쓰는 방법이 있습니다.
+1차 탐지 팀 코드라 같이 상의합니다.
 
-**지금 옮기지 않는 이유**
-- 매핑 팀이 develop을 받아 작업 중이라, 파일 위치가 바뀌면 그쪽 작업과 충돌이 큽니다.
-- LLM 모델 비교 테스트 직전이라 구조를 크게 바꾸면 위험합니다.
+### 참고: ATT&CK 매핑 코드 위치 — 현 위치 유지 (2026-10-03 결정)
 
-**옮길 때 같이 정리할 것**
-
-| 얽힌 부분 | 내용 |
-| --- | --- |
-| 매핑 → 조사 코드 import | `agent.llm_provider`, `agent.settings`(LLM 생성·설정), `agent.tools.time_utils` |
-| 조사 → 매핑 import | `llm/investigate/main.py`가 `attack_mapping.cli.process_file`을 직접 import |
-| `reporting/` | 최종 보고서 생성(매핑만 씀) — 같이 옮김 |
-| 데이터 | `data/attack/`(카탈로그 약 54MB·벡터 캐시, git 미추적) — **EC2 서버 파일도 옮겨야 함** |
-| 테스트 | 매핑 테스트 22개가 `llm/investigate`의 pytest 설정·import 방식에 의존 |
-| 실행·문서 | `python -m attack_mapping.cli` 실행 위치, `docs/AGENT_ATTACK_MAPPING_FLOW.md` 등, `scripts/fetch_attack_*.py` |
-
-**먼저 정할 것: LLM 공용 코드를 어디에 둘지**
-매핑이 LLM 클라이언트를 조사 에이전트 폴더(`llm/investigate/agent/`)에서 빌려 쓰고 있습니다.
-- **추천:** `settings.py`, `llm_provider.py`, `claude_client.py`, `gemini_client.py`, `llm_errors.py`, `llm_json.py`를
-  공용 폴더(예: `llm/common/`)로 분리합니다. 조사·매핑이 같이 쓰고, 나중에 트리아지가 다른 회사 모델을 쓸 때도 재사용할 수 있습니다.
-  GPT 클라이언트를 이 공용 폴더에 한 번만 만들면 세 단계가 모두 쓸 수 있습니다.
-- **대안:** 공용 코드는 조사 폴더에 두고 매핑이 경로를 추가해 빌려 씁니다(조사 에이전트가 1차 탐지 코드를 쓰는
-  `normalizer_adapter` 방식). 빠르지만 의존 관계가 남습니다.
-
-**진행 방식:** 매핑 팀이 작업을 정리한 시점에 별도 PR로 진행합니다. "폴더 이동만" 커밋과 "import·경로 수정" 커밋을
-나누면 리뷰하기 쉽습니다. 작업량은 코드 이동과 테스트에 반나절 정도로 보고, 여기에 팀 간 일정 조율과 EC2 데이터 이동이 더해집니다.
-
-### 2. 트리아지 다른 회사 모델 지원
-
-트리아지(`llm/triage_review/llm_review.py`)는 Anthropic SDK를 직접 씁니다. GPT mini 등과 비교하려면 provider를 고를 수
-있게 바꿔야 합니다. 1번의 LLM 공용 코드가 생기면 그걸 쓰는 게 가장 간단합니다. 1차 탐지 팀 코드라 같이 상의합니다.
+매핑 코드는 `llm/investigate/attack_mapping/`(조사 에이전트 폴더 안)에 그대로 둡니다. `llm/mapping/`으로 옮기지 않습니다.
+매핑은 조사 에이전트의 LLM 클라이언트(`agent/llm_provider.py`, `agent/settings.py`)를 같이 쓰며, 설정 이름만 `MAPPING_`으로
+나뉘어 있습니다.
