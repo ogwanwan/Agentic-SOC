@@ -1,0 +1,2 @@
+# B runtime dependency; offline tests do not load or download models.
+sentence-transformers>=3.0,<6
