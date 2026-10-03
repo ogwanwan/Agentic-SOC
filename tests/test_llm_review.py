@@ -6,44 +6,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "detection_pipeline"))
 sys.path.insert(0, os.path.join(_ROOT, "llm"))
 
-from triage_review import llm_review as review_module
 from triage_review.llm_review import llm_review, _parse
-
-_ENV_NAMES = ("TRIAGE_CLAUDE_MODEL", "TRIAGE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "INVESTIGATION_CLAUDE_MODEL")
-
-
-def _with_env(values, fn):
-    """환경변수를 잠깐 values로 바꿔 fn()을 실행하고 원래대로 돌린다(실행하는 셸의 키와 무관하게)."""
-    saved = {name: os.environ.get(name) for name in _ENV_NAMES}
-    try:
-        for name in _ENV_NAMES:
-            os.environ.pop(name, None)
-        os.environ.update(values)
-        return fn()
-    finally:
-        for name, value in saved.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-
-
-def _check_role_settings():
-    """TRIAGE_ 설정: 아무것도 없으면 예전 그대로(haiku·공용 키), 있으면 트리아지 것만 읽는다."""
-    assert _with_env({}, review_module._model) == "claude-haiku-4-5", "기본 모델은 예전 고정값 그대로"
-    assert _with_env({}, review_module._api_key_name) is None
-    # 조사 에이전트 모델을 바꿔도 트리아지는 따라가지 않는다
-    assert _with_env({"INVESTIGATION_CLAUDE_MODEL": "claude-sonnet-5"}, review_module._model) == "claude-haiku-4-5"
-    assert _with_env({"TRIAGE_CLAUDE_MODEL": " gpt-like-model "}, review_module._model) == "gpt-like-model"
-    assert _with_env({"TRIAGE_CLAUDE_MODEL": "  "}, review_module._model) == "claude-haiku-4-5", "빈 값은 없는 것"
-    assert _with_env({"ANTHROPIC_API_KEY": "k"}, review_module._api_key_name) == "ANTHROPIC_API_KEY"
-    assert _with_env({"ANTHROPIC_API_KEY": "k", "TRIAGE_ANTHROPIC_API_KEY": "t"},
-                     review_module._api_key_name) == "TRIAGE_ANTHROPIC_API_KEY", "트리아지 전용 키가 먼저"
-    assert _with_env({"ANTHROPIC_API_KEY": "k", "TRIAGE_ANTHROPIC_API_KEY": ""},
-                     review_module._api_key_name) == "ANTHROPIC_API_KEY", "빈 전용 키는 공용 키로"
-    # 키가 하나도 없으면 실제 호출 없이 결정론-only로 통과
-    out = _with_env({}, lambda: llm_review([_inc("a", "P1")]))
-    assert "llm_reason" not in out[0]
 
 
 def _inc(iid, priority):
@@ -120,8 +83,41 @@ def _run():
                    call=lambda d: [{"incident_id": "b", "investigate": "true", "reason": "의심"}])
     assert s[0]["llm_investigate"] is True
 
-    # 7) 역할별 LLM 설정(TRIAGE_)
-    _check_role_settings()
+    # 6-b) 증거 줄: 파일 이벤트엔 경로, auth 엔 src_user·command (정상 기록과 웹셸 삭제 / sudo 시도를 구분하게)
+    from triage_review.llm_review import _digest, _evidence_line
+    f = lambda **ld: _evidence_line({"layer": "system", "layer_data": ld})  # noqa: E731
+    assert f(comm="php-fpm8.1", syscall="unlink", path="/var/www/html/x/soc_lab_1.php") == \
+        "[system] php-fpm8.1 unlink /var/www/html/x/soc_lab_1.php"
+    assert f(comm="sh", exec_args="-c id", syscall="execve", path="/bin/sh") == "[system] sh -c id", "execve 경로는 뺌"
+    assert _evidence_line({"layer": "auth", "layer_data": {"event": "sudo_denied", "user": "root",
+                                                           "src_user": "www-data", "command": "/usr/bin/su"}}) == \
+        "[auth] sudo_denied user=root src_user=www-data command=/usr/bin/su"
+    assert _evidence_line({"layer": "auth", "layer_data": {"method": "publickey", "user": "ubuntu"}}) == \
+        "[auth] publickey user=ubuntu"
+
+    # 6-c) 파일 이벤트 줄은 3줄까지만 — 경로가 다 달라도 명령 줄(sh -c id)이 밀려나지 않게
+    evs = [{"raw_ref": "a:%d" % i, "layer": "system",
+            "layer_data": {"comm": "php-fpm", "syscall": "unlink", "path": "/var/www/f%d.log" % i}} for i in range(5)]
+    evs.append({"raw_ref": "a:9", "layer": "system", "layer_data": {"comm": "sh", "exec_args": "-c id", "syscall": "execve"}})
+    inc = {"incident_id": "x", "members": [e["raw_ref"] for e in evs], "seeds": []}
+    ev_lines = _digest(inc, {e["raw_ref"]: e for e in evs})["evidence"]
+    assert sum("unlink" in x for x in ev_lines) == 3 and "[system] sh -c id" in ev_lines, ev_lines
+
+    # 7) TRIAGE_* 설정: 기본 sonnet-5/low/16000, env 로 덮어쓰기, 키 없으면 호출 없이 결정론-only
+    from triage_review.llm_review import _settings
+    saved = {k: os.environ.pop(k, None)
+             for k in ("TRIAGE_CLAUDE_MODEL", "TRIAGE_EFFORT", "TRIAGE_MAX_TOKENS",
+                       "TRIAGE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")}
+    try:
+        assert _settings() == {"model": "claude-sonnet-5", "effort": "low", "max_tokens": 16000}, _settings()
+        os.environ.update(TRIAGE_CLAUDE_MODEL="claude-haiku-4-5", TRIAGE_EFFORT="HIGH", TRIAGE_MAX_TOKENS="4000")
+        assert _settings() == {"model": "claude-haiku-4-5", "effort": "high", "max_tokens": 4000}
+        assert "llm_reason" not in llm_review([_inc("k", "P1")])[0], "키 없으면 결정론-only"
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
 
     print("test_llm_review OK →", [(i["incident_id"], i.get("llm_investigate")) for i in out])
 
