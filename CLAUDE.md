@@ -68,7 +68,7 @@ for t in test_triage test_dedup test_grouping test_llm_review test_audit_lineage
 | `common/` | 공통 계약: `schema.py`(Event), `seed.py`(Seed), `timeparse.py`(ISO 파싱), `join_keys.py`, `lineage.py`(audit 프로세스 계보), `network.py`(IP·Apache/Suricata 매칭) |
 | `detect/` | `loader.py`/`engine.py`(최소 Sigma 엔진), `rules/sigma/{apache,audit,auth}/*.yml`(28개), `aggregate.py`(빈도 임계값), `suricata_seed.py`, `web_network_correlation.py`, `run.py` |
 | `correlate/` | `grouping.py`(`correlate()`: 연결 → guard → union-find → Incident → dedup), `links/*.py`(계층 간 연결 5종), `guards.py`, `incident.py`, `dedup.py` |
-| `triage/` | `triage.py`(결정론 점수·라우팅), `llm_review.py`(Claude Haiku, P1·P2 상위 20건) |
+| `triage/` | `triage.py`(결정론 점수·라우팅), `llm_review.py`(P1·P2 상위 20건, 모델 `TRIAGE_CLAUDE_MODEL` 기본 `claude-haiku-4-5`, 키 `TRIAGE_ANTHROPIC_API_KEY`→`ANTHROPIC_API_KEY` — LLM 설정은 단계별 접두어 `TRIAGE_`/`MAPPING_`/`INVESTIGATION_`, `docs/LLM-역할별-설정-가이드.md`) |
 | `pipeline/state.py` | `incident_key`, `diff_incidents`(new/update 판단), `run_lock` |
 | `store/` | incident DB(SQLite). `db.py`(접속·스키마·state.json 이전), `incidents.py`(저장·상태 규칙·대기열 조회). **SQL은 이 폴더에만** |
 | `socdb.py` | DB 확인 CLI(읽기 전용) |

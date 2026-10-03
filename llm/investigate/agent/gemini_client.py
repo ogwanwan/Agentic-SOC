@@ -1,4 +1,4 @@
-"""Gemini API LLM 클라이언트 (LLM_PROVIDER=gemini일 때, 기본은 Claude).
+"""Gemini API LLM 클라이언트 (<역할>_LLM_PROVIDER=gemini일 때, 기본은 Claude. 역할 = INVESTIGATION 또는 MAPPING).
 
 역할
   조사 루프와 seed 생성에서 LLM을 부르는 창구. 프롬프트를 받아 Gemini를 호출하고,
@@ -7,15 +7,17 @@
 
 누가 부르나
   [20] agent/loop.py _safe_reason()         → reason()          조사 루프 매 턴
-  agent/llm_provider.py build_llm_client()   → GeminiClient()    생성 (LLM_PROVIDER=gemini)
+  agent/llm_provider.py build_llm_client()   → GeminiClient(role) 생성 (<역할>_LLM_PROVIDER=gemini)
+  attack_mapping/mapper.py                   → complete_json()   ATT&CK 매핑 (role=MAPPING 객체)
 
 무엇을 부르나
   [21] agent/prompts/__init__.py  build_system_prompt(), build_user_prompt()   조사 프롬프트 조립
   [22] google-genai  models.generate_content()                                 실제 API 호출
 
 claude_client.py의 ClaudeClient와 인터페이스(.reason / .complete_json)가 같아서
-LLM_PROVIDER 환경변수로 서로 바꿔 쓸 수 있다. 필요 환경변수: GEMINI_API_KEY.
-모델은 GEMINI_MODEL(없으면 gemini-3.5-flash-lite).
+<역할>_LLM_PROVIDER 환경변수로 서로 바꿔 쓸 수 있다. 필요 환경변수: <역할>_GEMINI_API_KEY
+(역할 전용, 먼저 읽음) 또는 GEMINI_API_KEY — 쓴 이름만 "[Gemini] API 키: <이름> 사용 (…)"으로 출력한다.
+모델은 <역할>_GEMINI_MODEL(없으면 gemini-3.5-flash-lite). 옛 이름 GEMINI_MODEL은 읽지 않는다(agent/settings.py).
 """
 
 from __future__ import annotations
@@ -27,9 +29,18 @@ from typing import Any, Dict, Optional
 from .llm_errors import LLMUnavailableError
 from .llm_json import parse_llm_json
 from .prompts import build_system_prompt, build_user_prompt
+from .settings import INVESTIGATION, role_setting
 
 
-DEFAULT_MODEL = "gemini-3.5-flash-lite"  # 무료 티어 실습에서 지정한 모델
+DEFAULT_MODEL = "gemini-3.5-flash-lite"  # 무료 티어 실습에서 지정한 모델 (조사·매핑 공통 기본값)
+
+
+def api_key_env_names(role: str = INVESTIGATION) -> tuple:
+    """앞에서부터 값이 있는 첫 이름의 키를 쓴다 (역할 전용 키 → 공용 키)."""
+    return (f"{role}_GEMINI_API_KEY", "GEMINI_API_KEY")
+
+
+API_KEY_ENV_NAMES = api_key_env_names(INVESTIGATION)
 
 
 class GeminiDecisionError(Exception):
@@ -40,27 +51,34 @@ class GeminiClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        # 없으면 GEMINI_MODEL 환경변수, 그것도 없으면 DEFAULT_MODEL. 특정 모델이 과부하(503)일 때
+        # 없으면 INVESTIGATION_GEMINI_MODEL 환경변수, 그것도 없으면 DEFAULT_MODEL. 특정 모델이 과부하(503)일 때
         # .env만 바꿔 다른 모델로 돌릴 수 있게 한다(2026-09-28 EC2).
         model: Optional[str] = None,
         # 2000이던 값을 8192로 올렸다. EC2에서 LLM이 raw_ref 109개를 evidence에 옮겨 적다
         # 2000 토큰에서 응답이 잘려 JSON 파싱이 실패했고, 그 예외로 main.py 전체가 멈췄다.
         max_output_tokens: int = 8192,
         temperature: float = 0.0,
+        role: str = INVESTIGATION,
     ) -> None:
         # google-genai 패키지는 실제 호출 시에만 필요하므로 지연 import한다.
         from google import genai
 
-        resolved_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.role = role
+        key_names = api_key_env_names(role)
+        # 어느 이름의 키를 썼는지(키 값 아님). 역할 전용 키 → 공용 키 순서(ClaudeClient와 같은 규칙)
+        self.api_key_source = "api_key 인자" if api_key else next(
+            (name for name in key_names if os.environ.get(name)), None)
+        resolved_key = api_key or (os.environ.get(self.api_key_source) if self.api_key_source else None)
         if not resolved_key:
             raise ValueError(
-                "GEMINI_API_KEY가 설정되지 않았습니다. .env 파일에 "
-                "GEMINI_API_KEY=발급받은_키 를 추가하거나 GeminiClient(api_key=...)로 "
+                f"{' 또는 '.join(key_names)}가 설정되지 않았습니다. 저장소 루트 .env에 "
+                f"{key_names[0]}=발급받은_키 를 추가하거나 GeminiClient(api_key=...)로 "
                 "직접 전달하십시오."
             )
 
         self._client = genai.Client(api_key=resolved_key)
-        self.model = model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
+        self.model = model or role_setting(role, "GEMINI_MODEL") or DEFAULT_MODEL
+        print(f"[Gemini] API 키: {self.api_key_source} 사용 ({role}, 모델 {self.model})")
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
 

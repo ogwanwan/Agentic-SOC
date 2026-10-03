@@ -7,10 +7,13 @@ triage/llm_review.py — 트리아지 뒷단(LLM): 상위 Incident 를 경량 LL
 점수·정렬·priority 는 건드리지 않는다 — 결정론 라우팅이 진실원이고, LLM 은 "왜 봐야 하나" 한 줄과
 의견만 얹는다(재현성 유지, 하류 조사 에이전트가 근거를 읽게).
 
-안전장치(옵션 아님, 에러 처리): ANTHROPIC_API_KEY 없거나 호출/파싱 실패 → 한 줄 알리고 결정론
+안전장치(옵션 아님, 에러 처리): API 키 없거나 호출/파싱 실패 → 한 줄 알리고 결정론
 결과만 그대로 통과. 파이프라인은 절대 안 죽는다.
 
-키: ANTHROPIC_API_KEY 를 .env 에서 SDK 가 알아서 읽는다. 이 코드는 키 값을 보지도 출력하지도 않는다.
+설정(저장소 루트 .env, 역할 접두어 TRIAGE_ — 조사 에이전트 INVESTIGATION_, ATT&CK 매핑 MAPPING_과 같은 규칙):
+  TRIAGE_CLAUDE_MODEL        모델. 없거나 비우면 claude-haiku-4-5(예전 고정값 그대로)
+  TRIAGE_ANTHROPIC_API_KEY   트리아지 전용 키. 없거나 비우면 공용 ANTHROPIC_API_KEY
+  .env 에 아무것도 안 넣으면 예전과 똑같이 동작한다. 키 값은 보지도 출력하지도 않는다(이름만 고른다).
 """
 import json
 import os
@@ -21,7 +24,8 @@ try:  # dotenv 선택 의존성 — 다른 도구 모듈과 같은 컨벤션
 except Exception:
     pass
 
-MODEL = "claude-haiku-4-5"
+DEFAULT_MODEL = "claude-haiku-4-5"   # 경량 모델 (ATT&CK 매핑과 같은 등급)
+API_KEY_ENV_NAMES = ("TRIAGE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")   # 앞에서부터 값이 있는 첫 이름
 MAX_REVIEW = 20                      # 한 번에 검토할 상위 사건 수 상한(토큰·비용 방어)
 REVIEW_PRIORITIES = ("P1", "P2")     # LLM 재검토 대상 우선순위
 
@@ -35,6 +39,16 @@ _SYSTEM = (
 
 _EVIDENCE_MAX = 6      # 사건당 LLM 에 줄 증거 줄 수
 _LINE_MAX = 160        # 증거 한 줄 최대 길이
+
+
+def _model():
+    """TRIAGE_CLAUDE_MODEL (없거나 빈 값이면 DEFAULT_MODEL)."""
+    return (os.getenv("TRIAGE_CLAUDE_MODEL") or "").strip() or DEFAULT_MODEL
+
+
+def _api_key_name():
+    """쓸 API 키의 환경변수 이름 (TRIAGE_ 전용 → 공용 순서). 둘 다 없으면 None."""
+    return next((name for name in API_KEY_ENV_NAMES if (os.getenv(name) or "").strip()), None)
 
 
 def _evidence_line(ev):
@@ -121,13 +135,13 @@ def _parse(text):
 
 
 def _default_call(digests):
-    """실제 Anthropic 호출. anthropic SDK + ANTHROPIC_API_KEY(.env) 사용, 한 번의 create 호출."""
+    """실제 Anthropic 호출. TRIAGE_ANTHROPIC_API_KEY → ANTHROPIC_API_KEY, 모델 TRIAGE_CLAUDE_MODEL, 한 번의 create 호출."""
     import anthropic  # 지연 import: 패키지 미설치·키 없을 때 결정론-only 로 살아남게
-    client = anthropic.Anthropic()   # ANTHROPIC_API_KEY 를 SDK 가 env 에서 읽음(값 노출 없음)
+    client = anthropic.Anthropic(api_key=os.getenv(_api_key_name()))   # 값은 출력하지 않는다
     # 사건 수에 맞춰 출력 토큰 확보 — 배치가 크면 판정 JSON 이 1024 를 넘어 잘려 파싱 실패했음
     max_tokens = min(1024 + 256 * len(digests), 8000)
     msg = client.messages.create(
-        model=MODEL,
+        model=_model(),
         max_tokens=max_tokens,
         system=_SYSTEM,
         messages=[{"role": "user", "content": json.dumps(digests, ensure_ascii=False)}],
@@ -148,9 +162,11 @@ def llm_review(incidents, events=None, call=None, priorities=REVIEW_PRIORITIES, 
     if not targets:
         return incidents
     if call is None:
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            print("[triage] ANTHROPIC_API_KEY 없음 → LLM 재검토 생략, 결정론 결과만 사용")
+        key_name = _api_key_name()
+        if not key_name:
+            print("[triage] %s 없음 → LLM 재검토 생략, 결정론 결과만 사용" % " / ".join(API_KEY_ENV_NAMES))
             return incidents            # 키 없음 → 안전장치로 결정론-only
+        print("[triage] LLM 재검토 모델 %s (API 키: %s)" % (_model(), key_name))
         call = _default_call
     by_ref = {e["raw_ref"]: e for e in events if e.get("raw_ref")} if events else None
     try:
