@@ -1,6 +1,6 @@
 # ④ Triage (트리아지) — 사건 우선순위 게이트
 
-> 담당: 정규화·탐지 파트 / 관련 파일: [`triage.py`](triage.py), [`llm_review.py`](llm_review.py)
+> 담당: 정규화·탐지 파트 / 관련 파일: [`triage.py`](triage.py)(결정론 점수), [`llm_review.py`](../../llm/triage_review/llm_review.py)(LLM 재검토 — `llm/triage_review/`로 분리됨)
 
 ## 한 줄 요약
 결정론 파이프라인이 만든 **수백 건의 Incident**를, 사건이 이미 가진 사실들로 **점수 매겨 줄 세우고**,

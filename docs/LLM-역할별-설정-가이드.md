@@ -13,7 +13,7 @@
 
 | 단계 | 접두어 | 코드 위치 | 모델 기본값 | 계획 |
 | --- | --- | --- | --- | --- |
-| 1차 탐지 트리아지 (LLM 재검토) | `TRIAGE_` | `llm/triage_review/llm_review.py` | `claude-haiku-4-5` | 경량 모델 |
+| 1차 탐지 트리아지 (LLM 재검토) | `TRIAGE_` | `llm/triage_review/llm_review.py` | `claude-sonnet-5` | 비교 평가로 선정(effort low) |
 | ATT&CK 매핑 | `MAPPING_` | `llm/investigate/attack_mapping/` | `claude-haiku-4-5` | 경량 모델 (트리아지와 같은 등급) |
 | 조사 에이전트 | `INVESTIGATION_` | `llm/investigate/agent/` | `claude-sonnet-5` | 고성능 모델 |
 
@@ -29,8 +29,8 @@
 3. **이름만 보고는 어느 단계 설정인지 알 수 없었습니다.** 예전 `CLAUDE_MODEL`, `CLAUDE_REFUSAL_FALLBACK_MODEL`은
    1차 탐지 설정처럼 보였지만 실제로는 조사 에이전트만 읽고 있었습니다(2026-09-30 확인).
 
-트리아지와 매핑은 지금 같은 모델을 쓰지만 접두어는 따로 둡니다. 관리하는 팀이 다르고, 나중에 한쪽만 바꿀 수도
-있어서입니다. `.env`에 같은 값을 한 줄 더 적으면 됩니다.
+트리아지(sonnet-5)와 매핑(haiku)은 지금 모델이 다르고, 접두어도 따로 둡니다. 관리하는 팀이 다르고, 한쪽만 바꿀 수도
+있어서입니다. 각 단계는 `.env`에 자기 접두어 줄을 적습니다.
 
 ## `.env` 예시
 
@@ -101,7 +101,7 @@ sed -i -E 's/^(LLM_PROVIDER|CLAUDE_MODEL|CLAUDE_REFUSAL_FALLBACK_MODEL)=/INVESTI
 
 **1차 탐지 (`run_pipeline.py`)**
 ```
-[triage] LLM 재검토 모델 claude-haiku-4-5 (API 키: ANTHROPIC_API_KEY)
+[triage] LLM 재검토 모델: claude-sonnet-5 effort=low (키: ANTHROPIC_API_KEY)
 ```
 
 **조사 에이전트 + 매핑 (`main.py`, `run_investigation_queue.py`)**
@@ -117,9 +117,9 @@ sed -i -E 's/^(LLM_PROVIDER|CLAUDE_MODEL|CLAUDE_REFUSAL_FALLBACK_MODEL)=/INVESTI
 
 ### 1차 탐지 팀 — `llm/triage_review/llm_review.py`
 
-- 모델을 `TRIAGE_CLAUDE_MODEL`에서 읽습니다. 비어 있으면 예전 고정값 `claude-haiku-4-5`를 씁니다.
-- 키는 `TRIAGE_ANTHROPIC_API_KEY`를 먼저 읽고, 비어 있으면 예전처럼 `ANTHROPIC_API_KEY`를 씁니다.
-- **`.env`에 아무것도 추가하지 않으면 예전과 똑같이 동작합니다.** 바뀐 출력은 재검토 전에 찍히는 모델·키 이름 한 줄뿐입니다.
+- 모델을 `TRIAGE_CLAUDE_MODEL`에서 읽습니다. 비어 있으면 기본 `claude-sonnet-5`(비교 평가로 선정). 추론 강도는 `TRIAGE_EFFORT`(기본 low), 출력 한도는 `TRIAGE_MAX_TOKENS`(기본 16000).
+- 키는 `TRIAGE_ANTHROPIC_API_KEY`를 먼저 읽고, 비어 있으면 `ANTHROPIC_API_KEY`를 씁니다.
+- **`.env`에 아무것도 추가하지 않으면 기본값(sonnet-5 / effort low / 16000)으로 돕니다.** 재검토 전에 모델·키 이름 한 줄을 찍습니다.
 - 트리아지는 지금 Claude만 지원합니다. GPT 등 다른 회사 모델을 쓰려면 이 파일을 따로 고쳐야 합니다.
 
 ### ATT&CK 매핑 팀 — `llm/investigate/main.py`, `attack_mapping/cli.py`
@@ -142,7 +142,7 @@ sed -i -E 's/^(LLM_PROVIDER|CLAUDE_MODEL|CLAUDE_REFUSAL_FALLBACK_MODEL)=/INVESTI
 ## 자주 묻는 질문
 
 **Q. 기존 `.env`를 그대로 두면 어떻게 되나요?**
-- 트리아지: 예전과 같습니다(haiku, 공용 키).
+- 트리아지: 기본 `claude-sonnet-5`(effort low), 키는 `TRIAGE_ANTHROPIC_API_KEY`→공용 `ANTHROPIC_API_KEY`.
 - 매핑: 매핑 줄이 없으면 기본값 `claude-haiku-4-5`로 돕니다.
 - 조사 에이전트: `INVESTIGATION_` 이름이 없으면 기본값 `claude-sonnet-5`로 돕니다. 옛 `CLAUDE_MODEL`은 읽지 않으니 꼭 이름을 바꿔 주세요.
 

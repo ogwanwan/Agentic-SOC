@@ -1,22 +1,23 @@
 # CLAUDE.md
 
-이 파일은 이 저장소(`develop` 브랜치, 1차 탐지)에서 작업할 때 Claude Code가 매 세션 읽는 안내다. 코드와 다르면 코드가 맞다. 자세한 배경은 `README.md`, `docs/`, `deploy/DEPLOY.md`를 본다.
+이 파일은 이 저장소(`develop` 브랜치)에서 작업할 때 Claude Code가 매 세션 읽는 안내다. 코드와 다르면 코드가 맞다. 자세한 배경은 `README.md`, `docs/`, `detection_pipeline/deploy/DEPLOY.md`를 본다.
 
 ## 우리가 만드는 것
 
 **Agentic SOC**: EC2 웹 서버의 로그를 보고, 공격을 탐지해 사건(Incident)으로 묶고, 우선순위를 매긴 다음, LLM 조사 에이전트가 심층 조사하는 보안관제 파이프라인. 팀 프로젝트다.
 
 ```text
-[1차 탐지 — 이 브랜치]                                      [조사 에이전트 — 다른 브랜치]
-로그 4종 → 정규화 Event → Sigma/Suricata Seed → 빈도 집계
- → 계층 간 연결 → Incident(Seed 필수) → 병합(dedup)
- → 트리아지(점수 P1~P4 + 상위만 LLM 오탐 체크) → DB 대기열/JSONL  ──▶  사건을 받아 도구로 로그를 조회하며 판정
+[탐지 — detection_pipeline]                          [조사 — llm/investigate]
+로그 4종 → 정규화 Event → Sigma/Suricata Seed → 빈도 집계        큐에서 사건을 하나씩 꺼내
+ → 계층 간 연결 → Incident(Seed 필수) → 병합(dedup)              도구로 로그를 조회하며 LLM이 판정
+ → 트리아지(점수 P1~P4 + 상위만 LLM 오탐 체크)        큐          → 결과 JSON
+ → DB 큐(soc.db)에 pending 적재              ──▶ soc.db ──▶
 ```
 
 - 감시 로그: Apache access(`web`), auth.log(`auth`), Suricata eve.json(`network`, http·alert만), auditd(`system`). 교체된 로그(`.1`, `.N.gz`)도 읽는다.
 - 노리는 공격 흐름(룰 헤더의 `[#번호 · 단계]`): ① 정찰(스캐너·민감 파일) → ② 초기 접근(로그인 무차별 대입) → 웹셸 배치·실행 → 정찰 명령·도구 반입·리버스 셸 → 권한 상승 → 지속성(계정·cron·키) → 흔적 삭제.
 - 운영: 서버에서 systemd timer가 5분마다 `run_pipeline.py`를 운영 모드로 실행한다(최근 60분 재분석, 새 사건·새 활동만 저장).
-- **조사 에이전트는 이 브랜치에 없다.** `feature/Agentic-SOC-Investigation-Agent`(자체 `CLAUDE.md`·`AGENTS.md` 있음)에서 개발 중이다. 브랜치마다 구조가 다르므로 한 브랜치의 지식을 다른 브랜치에 그대로 적용하지 않는다.
+- **탐지와 조사는 별도 프로세스**이고 **DB 큐(`soc.db`)로만 연결**된다(함수 호출 없음). 탐지는 큐를 채우고, 조사 큐 폴러(`run_investigation_queue.py`)가 큐에서 꺼내 조사 에이전트(`llm/investigate/`, 자체 CLAUDE.md·AGENTS.md)로 넘긴다. 조사 에이전트 내부는 그쪽 소유라 수정하지 않는다.
 
 ## 설계 원칙 (코드 곳곳에 녹아 있음 — 바꾸기 전에 확인)
 
@@ -36,26 +37,31 @@ Windows 콘솔에서는 한글 출력이 깨지므로 `PYTHONIOENCODING=utf-8`�
 pip install -r requirements.txt            # python-dotenv, PyYAML, anthropic
 cp .env.example .env                       # 로그 경로·키 (.env는 커밋 금지)
 
-# 샘플 로그로 전체 실행 (사건 2건: P1 1, P2 1)
-AUTH_LOG_YEAR=2026 python run_pipeline.py --apache tools/sample_access.log --auth tools/sample_auth.log \
-  --network tools/sample_eve.json --audit tools/sample_audit.log --out-incidents out/sample_incidents.jsonl
+# 샘플 로그로 전체 탐지 실행
+AUTH_LOG_YEAR=2026 python run_pipeline.py \
+  --apache detection_pipeline/samples/sample_access.log --auth detection_pipeline/samples/sample_auth.log \
+  --network detection_pipeline/samples/sample_eve.json --audit detection_pipeline/samples/sample_audit.log \
+  --out-incidents out/sample_incidents.jsonl
 
-# 운영 모드 로컬 재현 (DB·JSONL 생성) → 두 번째 실행은 저장 0건이어야 정상
+# 운영 모드(DB 큐 적재) → 두 번째 실행은 저장 0건이어야 정상
 AUTH_LOG_YEAR=2026 python run_pipeline.py <위 4개 경로> --since-minutes 10080 --now 2026-09-18T00:00:00Z \
   --state-dir /tmp/soc --emit-dir /tmp/soc/incidents
 python socdb.py --db /tmp/soc/soc.db stats | queue | show <incident_key>
 
-python tools/normalize.py                  # 정규화까지만
-python detect/run.py                       # Seed 생성까지만
+# 조사(큐 소비) — 탐지와 별도 실행. LLM 호출이라 토큰 발생
+python run_investigation_queue.py --state-dir /tmp/soc --limit 20
+
+python detection_pipeline/tools/normalize.py   # 정규화까지만
+python detection_pipeline/detect/run.py         # Seed 생성까지만
 ```
 
 테스트 — **두 종류가 섞여 있어 둘 다 돌려야 한다.**
 ```bash
 PYTHONIOENCODING=utf-8 python -m unittest discover tests      # unittest 파일들
-for t in test_triage test_dedup test_grouping test_llm_review test_audit_lineage test_system_auth test_web_system; do
+for t in test_triage test_dedup test_grouping test_llm_review test_audit_lineage test_system_auth test_web_system test_investigation_queue; do
   python tests/$t.py; done                                       # assert 스크립트(unittest가 수집 못 함)
 ```
-- `tests/test_full_pipeline.py`는 `.env` 로그 경로가 없으면 이벤트 0건으로 실패하고, discover에서 ImportError로 보인다. `APACHE_LOG_PATH=tools/sample_access.log AUTH_LOG_PATH=tools/sample_auth.log SURICATA_LOG_PATH=tools/sample_eve.json AUDIT_LOG_PATH=tools/sample_audit.log AUTH_LOG_YEAR=2026`를 주면 통과한다.
+- `tests/test_full_pipeline.py`는 `.env` 로그 경로가 없으면 이벤트 0건으로 실패하고, discover에서 ImportError로 보인다. `APACHE_LOG_PATH=detection_pipeline/samples/sample_access.log AUTH_LOG_PATH=detection_pipeline/samples/sample_auth.log SURICATA_LOG_PATH=detection_pipeline/samples/sample_eve.json AUDIT_LOG_PATH=detection_pipeline/samples/sample_audit.log AUTH_LOG_YEAR=2026`를 주면 통과한다.
 - 새 테스트는 `unittest.TestCase` + `tempfile` + 고정 `NOW`(datetime) 스타일로 쓴다. LLM은 `call` 인자 주입으로 대체해 실제 API를 부르지 않는다.
 - CI·린터 설정은 없다.
 
@@ -63,44 +69,47 @@ for t in test_triage test_dedup test_grouping test_llm_review test_audit_lineage
 
 | 경로 | 역할 |
 | --- | --- |
-| `run_pipeline.py` | 전체 실행기. ① 정규화 ② 탐지 ③ 사건 묶기 ④ 트리아지 → (운영 모드) DB와 비교 → LLM → JSONL·DB 저장 |
-| `tools/` | 로그 파서 4종(`fetch_*_log.py`), `normalize.py`(4계층 합치기·UTC 정렬), `log_sources.py`(교체 로그 찾기·`.gz`), `registry.py`/`base.py`(에이전트 도구 등록·`{ok,data,error}` 반환) |
-| `common/` | 공통 계약: `schema.py`(Event), `seed.py`(Seed), `timeparse.py`(ISO 파싱), `join_keys.py`, `lineage.py`(audit 프로세스 계보), `network.py`(IP·Apache/Suricata 매칭) |
-| `detect/` | `loader.py`/`engine.py`(최소 Sigma 엔진), `rules/sigma/{apache,audit,auth}/*.yml`(28개), `aggregate.py`(빈도 임계값), `suricata_seed.py`, `web_network_correlation.py`, `run.py` |
-| `correlate/` | `grouping.py`(`correlate()`: 연결 → guard → union-find → Incident → dedup), `links/*.py`(계층 간 연결 5종), `guards.py`, `incident.py`, `dedup.py` |
-| `triage/` | `triage.py`(결정론 점수·라우팅), `llm_review.py`(P1·P2 상위 20건, 모델 `TRIAGE_CLAUDE_MODEL` 기본 `claude-haiku-4-5`, 키 `TRIAGE_ANTHROPIC_API_KEY`→`ANTHROPIC_API_KEY` — LLM 설정은 단계별 접두어 `TRIAGE_`/`MAPPING_`/`INVESTIGATION_`, `docs/LLM-역할별-설정-가이드.md`) |
-| `pipeline/state.py` | `incident_key`, `diff_incidents`(new/update 판단), `run_lock` |
-| `store/` | incident DB(SQLite). `db.py`(접속·스키마·state.json 이전), `incidents.py`(저장·상태 규칙·대기열 조회). **SQL은 이 폴더에만** |
-| `socdb.py` | DB 확인 CLI(읽기 전용) |
-| `deploy/` | systemd service·timer, 서버 설치 문서 |
-| `docs/` | 작업 정리 문서(`YYYY-MM-DD-<주제>-작업정리.md`) |
+| `run_pipeline.py` | ① 탐지 실행기. 정규화 → 탐지 → 사건 묶기 → 트리아지 → (운영 모드) DB 큐 적재 |
+| `run_investigation_queue.py` | ② 조사 큐 폴러. DB 큐 pending → 조사 에이전트(CLI) 실행 → done/재시도, stale 회수, `run_lock` |
+| `socdb.py` | DB·큐 확인 CLI(읽기 전용) |
+| `detection_pipeline/tools/` | 로그 파서 4종(`fetch_*_log.py`), `normalize.py`(4계층 합치기·UTC 정렬), `log_sources.py`(교체 로그·`.gz`), `registry.py`/`base.py` |
+| `detection_pipeline/common/` | 공통 계약: `schema.py`(Event), `seed.py`(Seed), `timeparse.py`(ISO 파싱), `join_keys.py`, `lineage.py`(audit 계보), `network.py`(IP·Apache/Suricata 매칭) |
+| `detection_pipeline/detect/` | `loader.py`/`engine.py`(Sigma 엔진), `rules/sigma/{apache,audit,auth}/*.yml`(28개), `aggregate.py`(빈도 임계값), `suricata_seed.py`, `web_network_correlation.py`, `run.py` |
+| `detection_pipeline/correlate/` | `grouping.py`(`correlate()`: 연결 → guard → union-find → Incident → dedup), `links/*.py`(계층 간 연결 5종), `guards.py`, `incident.py`, `dedup.py` |
+| `detection_pipeline/triage/` | `triage.py`(결정론 점수·라우팅). LLM 재검토는 `llm/triage_review/`로 분리 |
+| `detection_pipeline/pipeline/state.py` | `incident_key`, `diff_incidents`(new/update 판단), `run_lock` |
+| `detection_pipeline/store/` | incident DB(SQLite). `db.py`(접속·스키마), `incidents.py`(저장·상태 규칙·대기열, 소비 함수 `claim/finish/release/reclaim_stale`). **SQL은 이 폴더에만** |
+| `detection_pipeline/deploy/` | systemd service·timer, 서버 설치 문서 |
+| `llm/triage_review/llm_review.py` | 트리아지 LLM 재검토(P1·P2 상위 20건). 모델 `TRIAGE_CLAUDE_MODEL`(기본 `claude-sonnet-5`)·`TRIAGE_EFFORT`(기본 low)·`TRIAGE_MAX_TOKENS`(기본 16000), 키 `TRIAGE_ANTHROPIC_API_KEY`→`ANTHROPIC_API_KEY`. 단계별 접두어는 `docs/LLM-역할별-설정-가이드.md` |
+| `llm/investigate/` | 조사 에이전트(자체 CLAUDE.md·AGENTS.md). 큐 폴러가 CLI로 호출 — 내부는 수정하지 않는다 |
+| `docs/` | 작업 정리·설정 가이드 |
 
 ## 데이터 계약 (필드를 바꾸면 소비하는 쪽이 깨진다)
 
-- **Event** (`common/schema.py`): `timestamp`(ISO UTC), `layer`(web/network/system/auth), `raw_ref`, 조인키 `src_ip`/`pid`/`ppid`(값이 None이어도 키는 있어야 함), `layer_data`.
+- **Event** (`detection_pipeline/common/schema.py`): `timestamp`(ISO UTC), `layer`(web/network/system/auth), `raw_ref`, 조인키 `src_ip`/`pid`/`ppid`(값이 None이어도 키는 있어야 함), `layer_data`.
   - `raw_ref` = `"<파일명(.gz 제거)>:<줄 번호>"`. **위치 포인터**라서 로그가 교체되면 같은 줄이 `access.log.1:N`으로 바뀐다. audit은 SYSCALL 줄 번호이고 묶음 전체는 `layer_data.raw_lines`.
-- **Seed** (`common/seed.py`): `entity{type(src_ip/pid/ppid), value}`, `window`, `layer`, `source`(sigma/anomaly/suricata), `reason`(= 룰 title), `score_parts{rule_severity, deviation, layer_count}`, `signal_tags`, `evidence_refs`(1개 이상). 엔진이 `rule_id`, `rule_name`, `detail`, `count`를 덧붙인다.
-- **Incident** (`correlate/incident.py`): `incident_id`(멤버 해시 — 사건이 커지거나 로그가 교체되면 바뀜), `entity`, `window`, `layers`, `members`(raw_ref, 최대 500개), `member_count`(실제 총수), `oversized`, `join_path[{a,b,join,keys}]`, `seeds`, dedup 시 `merged_from`.
+- **Seed** (`detection_pipeline/common/seed.py`): `entity{type(src_ip/pid/ppid), value}`, `window`, `layer`, `source`(sigma/anomaly/suricata), `reason`(= 룰 title), `score_parts{rule_severity, deviation, layer_count}`, `signal_tags`, `evidence_refs`(1개 이상). 엔진이 `rule_id`, `rule_name`, `detail`, `count`를 덧붙인다.
+- **Incident** (`detection_pipeline/correlate/incident.py`): `incident_id`(멤버 해시 — 사건이 커지거나 로그가 교체되면 바뀜), `entity`, `window`, `layers`, `members`(raw_ref, 최대 500개), `member_count`(실제 총수), `oversized`, `join_path[{a,b,join,keys}]`, `seeds`, dedup 시 `merged_from`.
 - **트리아지**: `triage_score`, `priority`(P1~P4), `route`(investigate/dashboard/hold), `triage_parts`, LLM이 본 경우 `llm_investigate`·`llm_reason`. JSONL 저장 시 `emit_type`, `emitted_at`, `run_id`, `incident_key`.
-- **`incident_key`** (`pipeline/state.py`) = hash(entity type + value + seed reason 집합). 실행이 달라도 같은 사건을 가리키는 **안정 키**. 룰 title을 바꾸면 key가 바뀌어 사건이 `new`로 다시 나간다.
-- **DB** (`store/`, `<state-dir>/soc.db`): `incidents`(PK `incident_key`, 대기열·상태 `pending/investigating/done`, `has_update`) + `incident_details`(1:1, JSON 컬럼 + `extra_json`). 대기열 조건은 `store/incidents.py`의 `QUEUE_WHERE`/`QUEUE_ORDER`에만 있다. 시각은 `YYYY-MM-DDTHH:MM:SSZ` 문자열.
+- **`incident_key`** (`detection_pipeline/pipeline/state.py`) = hash(entity type + value + seed reason 집합). 실행이 달라도 같은 사건을 가리키는 **안정 키**. 룰 title을 바꾸면 key가 바뀌어 사건이 `new`로 다시 나간다.
+- **DB** (`detection_pipeline/store/`, `<state-dir>/soc.db`): `incidents`(PK `incident_key`, 대기열·상태 `pending/investigating/done`, `has_update`) + `incident_details`(1:1, JSON 컬럼 + `extra_json`). 대기열 조건은 `store/incidents.py`의 `QUEUE_WHERE`/`QUEUE_ORDER`에만 있다. 시각은 `YYYY-MM-DDTHH:MM:SSZ` 문자열.
 
-**다른 브랜치가 의존하는 것**
-- 조사 에이전트는 **1차 탐지 Incident JSONL**(`seeds[].evidence_refs`·`detail.timestamp`·`rule_name`·`score_parts`, `entity`, `window`, `layers`, `members`, `join_path` 등)을 입력으로 읽는다.
-- 조사 에이전트(`llm/investigate/`)는 복사본 없이 `detection_pipeline/tools/fetch_{apache,auth,audit,network}_log.py`(이들이 쓰는 `tools/{base,registry,log_sources}.py`, `common/{schema,timeparse,network}.py` 포함)를 `llm/investigate/agent/tools/normalizer_adapter.py` 한 곳에서 직접 import해 쓴다. 파서·정규화 결과를 바꾸면 조사 도구 결과도 바로 바뀌므로 변경 사실을 알리고, `llm/investigate/`에서 `python -m pytest -q`(특히 `tests/test_normalizer_parity.py`·`tests/test_cd_normalizer_integration.py`)로 확인한다.
+**조사 에이전트가 의존하는 것 (`llm/investigate/`)**
+- 조사 큐 폴러가 DB 큐에서 꺼낸 사건을 **1차 탐지 Incident 형식**(`seeds[].evidence_refs`·`detail.timestamp`·`rule_name`·`score_parts`, `entity`, `window`, `layers`, `members`, `join_path` 등)으로 에이전트에 넘긴다.
+- 조사 에이전트는 복사본 없이 `detection_pipeline/tools/fetch_{apache,auth,audit,network}_log.py`(이들이 쓰는 `tools/{base,registry,log_sources}.py`, `common/{schema,timeparse,network}.py` 포함)를 `llm/investigate/agent/tools/normalizer_adapter.py` 한 곳에서 직접 import해 쓴다. 파서·정규화 결과를 바꾸면 조사 도구 결과도 바로 바뀌므로 변경 사실을 알리고, `llm/investigate/`에서 `python -m pytest -q`(특히 `tests/test_normalizer_parity.py`)로 확인한다.
 
 ## 확장 방법
 
-- **Sigma 룰**: `detect/rules/sigma/` 아래 **어디든 `*.yml`을 두면 바로 로드된다**(rglob). 필수 키 `title, id, logsource, detection(+condition), level`. 라우팅은 `logsource.product`/`service`로만 한다(apache → web, linux/auditd → system, linux/auth → auth). 지원 수식어: contains, startswith, endswith, re, all, cased. 커스텀 키: `x_seed_entity`, `x_aggregation{window_seconds, min_count}`(low/medium 룰의 빈도 임계값). 초안·비활성 룰을 이 폴더 안에 두지 않는다.
-- **계층 간 연결**: `correlate/links/<이름>.py`에 `@register_linker` 함수 `fn(events) -> [{a, b, join, keys}]`(a·b는 raw_ref)를 추가하면 자동으로 로드된다.
-- **에이전트 도구**: `tools/registry.py`의 `@register(name, description, input_schema)`. 반환은 `tools/base.py`의 `success`/`failure`.
+- **Sigma 룰**: `detection_pipeline/detect/rules/sigma/` 아래 **어디든 `*.yml`을 두면 바로 로드된다**(rglob). 필수 키 `title, id, logsource, detection(+condition), level`. 라우팅은 `logsource.product`/`service`로만 한다(apache → web, linux/auditd → system, linux/auth → auth). 지원 수식어: contains, startswith, endswith, re, all, cased. 커스텀 키: `x_seed_entity`, `x_aggregation{window_seconds, min_count}`(low/medium 룰의 빈도 임계값). 초안·비활성 룰을 이 폴더 안에 두지 않는다.
+- **계층 간 연결**: `detection_pipeline/correlate/links/<이름>.py`에 `@register_linker` 함수 `fn(events) -> [{a, b, join, keys}]`(a·b는 raw_ref)를 추가하면 자동으로 로드된다.
+- **에이전트 도구**: `detection_pipeline/tools/registry.py`의 `@register(name, description, input_schema)`. 반환은 `detection_pipeline/tools/base.py`의 `success`/`failure`.
 
 ## 코드 규칙
 
 - 주석·docstring·로그 출력은 **한국어**. 로그 출력은 `[normalize]`, `[detect]`, `[state]`, `[db]` 같은 단계 접두어를 붙인다.
-- 패키지에 `__init__.py`가 없다(namespace package). 실행 스크립트는 `sys.path.insert(0, 저장소 루트)` 후 import(`# noqa: E402`).
+- 패키지에 `__init__.py`가 없다(namespace package). 실행 스크립트는 `sys.path.insert(0, <저장소 루트>/detection_pipeline)`(필요하면 `/llm`도) 후 import(`# noqa: E402`). 재배치로 폴더가 한 단계 내려갔어도 각 파일의 `dirname(dirname(__file__))` 부트스트랩이 그대로 `detection_pipeline`을 가리킨다.
 - 모듈마다 `if __name__ == "__main__":` 자체 점검·데모 블록이 있다. 테스트 대체물은 아니다.
-- **Python 3.10 호환**(서버가 3.10): 3.10의 `fromisoformat`은 `Z`·`+0000`을 못 읽는다. ISO 시각 파싱은 반드시 `common/timeparse.normalize_iso`/`parse_utc`를 거친다. 3.11+ 전용 문법·API를 쓰지 않는다.
+- **Python 3.10 호환**(서버가 3.10): 3.10의 `fromisoformat`은 `Z`·`+0000`을 못 읽는다. ISO 시각 파싱은 반드시 `detection_pipeline/common/timeparse.normalize_iso`/`parse_utc`를 거친다. 3.11+ 전용 문법·API를 쓰지 않는다.
 - SQLite upsert(`ON CONFLICT … DO UPDATE`)는 3.24 이상이 필요하다. `RETURNING`(3.35+)은 쓰지 않는다.
 - audit 파싱에서 `str.splitlines()`를 쓰지 않는다(0x1D 구분자를 줄바꿈으로 잘라 버린다).
 - 커밋 메시지: `feat:`/`fix:`/`refactor:`/`docs:`/`tune:` + 한국어 설명. 브랜치: `develop`이 통합 브랜치, `feature/*` → PR로 병합. `main`은 거의 비어 있다.
@@ -114,7 +123,7 @@ for t in test_triage test_dedup test_grouping test_llm_review test_audit_lineage
 - `AUTH_LOG_YEAR`: auth.log에는 연도가 없다. 운영에서는 비워 두고(자동 결정), 샘플 로그는 `2026`을 준다.
 - `run_lock`은 Windows에서 잠금 없이 통과한다(로컬 테스트용).
 - 서버에서 root로 수동 실행하면 `soc.db-wal`이 root 소유가 되어 5분 실행이 실패한다. `systemctl start`로 실행한다.
-- 서버 실제 구성(ubuntu 계정, 홈 디렉터리 코드, 레포 `.env`)은 `deploy/`(soc 계정, `/opt`) 문서와 다르다.
+- 조사는 LLM 호출이라 토큰 비용이 든다. 큐 폴러 자동 타이머는 비용 검토 후 붙인다(현재 수동 실행).
 
 ## 작업 방식
 
