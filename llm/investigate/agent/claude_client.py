@@ -44,10 +44,11 @@ from typing import Any, Dict, Optional
 from .llm_errors import LLMUnavailableError
 from .llm_json import parse_llm_json
 from .prompts import build_system_prompt, build_user_prompt
-from .settings import INVESTIGATION, MAPPING, role_setting
+from .settings import INVESTIGATION, MAPPING, RESPONSE, role_setting
 
 # 역할별 기본 모델: 조사는 고성능, 매핑은 경량(1차 탐지 트리아지와 같은 등급)
-DEFAULT_MODELS = {INVESTIGATION: "claude-sonnet-5", MAPPING: "claude-haiku-4-5"}
+DEFAULT_MODELS = {INVESTIGATION: "claude-sonnet-5", MAPPING: "claude-haiku-4-5",
+                  RESPONSE: "claude-haiku-4-5"}
 DEFAULT_MODEL = DEFAULT_MODELS[INVESTIGATION]
 # 거절 시 대체 모델: sonnet-5는 sonnet-4.6보다 사이버 보안 주제를 더 엄격하게 거른다(Anthropic 문서).
 DEFAULT_REFUSAL_FALLBACK_MODEL = "claude-sonnet-4-6"
