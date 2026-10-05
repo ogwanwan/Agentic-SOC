@@ -570,6 +570,33 @@ def test_missing_real_tool_stops_instead_of_mock() -> None:
     print("[PASS] test_missing_real_tool_stops_instead_of_mock")
 
 
+def test_missing_tool_used_by_another_tool_is_named() -> None:
+    """fetch_event_logs가 불러 쓰는 fetch_audit_log 파일이 없으면 빠진 파일 이름으로 MissingToolError를 낸다
+    (2026-10-06 EC2: 파일을 치웠더니 fetch_event_logs 등록 중 날것의 ModuleNotFoundError로 멈췄다)."""
+    from agent.tools import MissingToolError
+    from agent.tools import registry as registry_module
+
+    original = registry_module.importlib.import_module
+    missing = "agent.tools.real.fetch_audit_log"
+
+    def without_audit(name, *args, **kwargs):
+        if name == "agent.tools.real.fetch_event_logs":
+            raise ModuleNotFoundError(f"No module named '{missing}'", name=missing)
+        return original(name, *args, **kwargs)
+
+    registry_module.importlib.import_module = without_audit
+    try:
+        try:
+            build_default_registry()
+        except MissingToolError as exc:
+            assert "agent/tools/real/fetch_audit_log.py" in str(exc) and "fetch_event_logs" in str(exc), str(exc)
+        else:
+            raise AssertionError("다른 도구가 쓰는 실제 도구 파일이 없는데 멈추지 않았다")
+    finally:
+        registry_module.importlib.import_module = original
+    print("[PASS] test_missing_tool_used_by_another_tool_is_named")
+
+
 def test_real_tool_dependency_error_is_not_hidden() -> None:
     """실제 도구 파일 안에서 다른 모듈을 못 찾는 오류(의존성 누락)는 '파일 없음'으로 숨기지 않고 그대로 올린다."""
     from agent.tools import registry as registry_module
@@ -605,5 +632,6 @@ if __name__ == "__main__":
     test_src_ip_seed_requires_network_log()
     test_real_tool_auto_discovery()
     test_missing_real_tool_stops_instead_of_mock()
+    test_missing_tool_used_by_another_tool_is_named()
     test_real_tool_dependency_error_is_not_hidden()
     print("\n모든 테스트 통과.")

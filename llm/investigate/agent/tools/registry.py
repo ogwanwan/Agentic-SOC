@@ -36,15 +36,23 @@ def _try_import_real_handler(tool_name: str) -> Optional[ToolHandler]:
     """agent/tools/real/<tool_name>.py에 동일한 이름의 함수가 있으면 가져온다.
 
     파일이 없거나, 파일은 있는데 함수 이름이 다르면 None을 반환한다(호출한 쪽이 MissingToolError로 멈춤).
-    파일은 있는데 그 안에서 다른 모듈을 못 찾는 경우(의존성 누락)는 파일이 없는 것과 구분하려고 그대로 올린다.
+    이 도구가 불러 쓰는 다른 실제 도구 파일이 없으면(예: fetch_event_logs → fetch_audit_log) 빠진 파일 이름으로
+    MissingToolError를 낸다. 그 밖의 모듈을 못 찾는 경우(패키지 설치 누락)는 원래 오류를 그대로 올린다.
     """
-    module_name = f"{__package__}.real.{tool_name}"
+    real_package = f"{__package__}.real."
+    module_name = real_package + tool_name
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
-        if exc.name != module_name:
-            raise
-        return None
+        if exc.name == module_name:
+            return None
+        if exc.name and exc.name.startswith(real_package):
+            missing = exc.name[len(real_package):]
+            raise MissingToolError(
+                f"조사 도구 {missing}의 실제 구현을 찾지 못했습니다: agent/tools/real/{missing}.py가 "
+                f"있어야 합니다({tool_name}가 불러 씀)"
+            ) from exc
+        raise
     handler = getattr(module, tool_name, None)
     if handler is not None and not callable(handler):
         return None
