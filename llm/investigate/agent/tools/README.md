@@ -7,9 +7,9 @@ Tool 연결·실행 계층입니다. `registry.py`가 LLM이 고른 도구 이�
 
 - **`registry.py`** — `ToolRegistry`/`ToolSpec`/`build_default_registry()`. 도구 우선순위는
   ① 명시적으로 넘긴 handler → ② `real/<도구이름>.py` 안의 동일 이름 함수(자동 탐색) →
-  ③ `mock_tools.py`의 목업(폴백). 팀원은 `real/` 밑에 파일만 넣으면 되고 이 파일을
-  직접 고칠 필요가 없습니다.
-- **`real/`** — 실제 조사 도구 구현 5개(파일명 = 도구 이름, 자동 탐색 대상).
+  둘 다 없으면 `MissingToolError`로 멈춥니다(목업으로 폴백하지 않음). 팀원은 `real/` 밑에 파일만 넣으면 되고
+  이 파일을 직접 고칠 필요가 없습니다.
+- **`real/`** — 실제 조사 도구 구현 6개(파일명 = 도구 이름, 자동 탐색 대상).
   자세한 규칙은 [real/README.md](real/README.md).
 - **`log_source.py`** — `.env`의 계층별 로그 경로(`APACHE/AUTH/AUDIT/SURICATA_LOG_PATH`) 파일과 그 교체 파일(`.1`, `.N.gz` — 1차 탐지와 같은 `resolve_log_files` 규칙)을 읽고(`read_documents`), 정규화·시간창
   필터(`load_window_events`), 페이지네이션, 0건 안내를 제공하는 공용 계층. S3 읽기는 삭제됨(EC2 로컬 경로만 사용).
@@ -19,8 +19,8 @@ Tool 연결·실행 계층입니다. `registry.py`가 LLM이 고른 도구 이�
   `real/*.py`가 `log_source.py`를 통해 여기를 거칩니다. `real/fetch_*_log.py`(조사 도구)와
   `detection_pipeline/tools/fetch_*_log.py`(정규화 함수)는 이름만 같고 다른 코드입니다.
 - **`time_utils.py`** — 시간 문자열 파싱 등 공용 유틸.
-- **`mock_tools.py`** — `real/`에 아직 구현이 없는 도구용 목업. 개발 초기 단계에서
-  전체 파이프라인을 끊김 없이 돌리기 위한 폴백입니다.
+- 테스트용 목업 도구는 `tests/_mock_tools.py`로 옮겼습니다. 예전에는 실제 도구가 없으면 여기로 조용히
+  폴백해 가짜 결과로 조사할 위험이 있었습니다. 테스트는 `build_default_registry(handlers=MOCK_HANDLERS)`로 직접 넘깁니다.
 
 ## `parsers/` 폴더는 삭제됨
 

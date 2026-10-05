@@ -9,7 +9,7 @@
   [33] agent/tools/log_source.py load_window_events("audit", ...)  auditd audit.log 읽기 + 정규화 + 시간창 필터
        → agent/tools/normalizer_adapter.py → detection_pipeline/tools/fetch_audit_log.py
 
-파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 이 함수를 자동으로 찾아 쓴다.
 
 역할 분담:
   - 원본 읽기 + 정규화: agent/tools/log_source.load_window_events()

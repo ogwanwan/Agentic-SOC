@@ -1,7 +1,7 @@
 """조사 도구 레지스트리 — LLM이 고른 도구 이름을 실제 함수로 연결하고 실행한다.
 
 역할
-  7개 조사 도구의 이름·설명·인자(ToolSpec)를 정의하고, 도구마다 실행할 함수를 찾아 붙인다.
+  6개 조사 도구의 이름·설명·인자(ToolSpec)를 정의하고, 도구마다 실행할 함수를 찾아 붙인다.
   LLM에게 보여줄 도구 설명(schema_text)을 만들고, 호출 인자를 검사한 뒤 실제 함수를 실행한다.
 
 누가 부르나
@@ -11,13 +11,12 @@
 
 무엇을 부르나
   [31] agent/tools/real/<도구이름>.py 의 같은 이름 함수 (자동 탐색)
-  agent/tools/mock_tools.py MOCK_HANDLERS   실제 구현이 없을 때 목업
 
 실행 함수를 고르는 우선순위
-  1. build_default_registry(handlers={...})로 명시적으로 넘긴 함수 (테스트용)
+  1. build_default_registry(handlers={...})로 명시적으로 넘긴 함수 (테스트용 — tests/_mock_tools.py)
   2. agent/tools/real/<도구이름>.py 안의 같은 이름 함수 (파일명 == 함수명 == 도구명)
-  3. mock_tools.py의 목업 — 에러 없이 조용히 폴백하므로, 새 도구를 붙인 뒤에는
-     registry.get(name).handler로 실제 함수가 연결됐는지 확인할 것 (agent/tools/real/README.md)
+  둘 다 없으면 MissingToolError로 멈춘다. 예전에는 목업으로 조용히 폴백해, 실제 도구 파일이 빠지면
+  가짜 결과로 조사가 진행될 수 있었다.
 """
 
 from __future__ import annotations
@@ -26,20 +25,25 @@ import importlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from .mock_tools import MOCK_HANDLERS
-
 ToolHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
+
+
+class MissingToolError(RuntimeError):
+    """등록할 도구의 실제 구현(agent/tools/real/<도구이름>.py)을 찾지 못했을 때 발생."""
 
 
 def _try_import_real_handler(tool_name: str) -> Optional[ToolHandler]:
     """agent/tools/real/<tool_name>.py에 동일한 이름의 함수가 있으면 가져온다.
 
-    파일이 없거나, 파일은 있는데 함수 이름이 다르면 None을 반환하고
-    (에러 없이) 목업으로 폴백한다.
+    파일이 없거나, 파일은 있는데 함수 이름이 다르면 None을 반환한다(호출한 쪽이 MissingToolError로 멈춤).
+    파일은 있는데 그 안에서 다른 모듈을 못 찾는 경우(의존성 누락)는 파일이 없는 것과 구분하려고 그대로 올린다.
     """
+    module_name = f"{__package__}.real.{tool_name}"
     try:
-        module = importlib.import_module(f".real.{tool_name}", package=__package__)
-    except ModuleNotFoundError:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name != module_name:
+            raise
         return None
     handler = getattr(module, tool_name, None)
     if handler is not None and not callable(handler):
@@ -111,16 +115,15 @@ def build_default_registry(
     handlers: Optional[Dict[str, ToolHandler]] = None,
     exclude: Optional[List[str]] = None,
 ) -> ToolRegistry:
-    """[2] ← main.py에서 호출. 기본 7개 조사 도구를 등록한 레지스트리를 생성한다.
+    """[2] ← main.py에서 호출. 기본 6개 조사 도구를 등록한 레지스트리를 생성한다.
 
     각 도구의 handler는 아래 우선순위로 결정된다.
       1. handlers 인자로 명시적으로 넘긴 함수
       2. agent/tools/real/<도구이름>.py 안의 동일한 이름의 함수 (자동 탐색)
-      3. mock_tools.py의 목업 구현 (위 둘 다 없을 때 폴백)
+    둘 다 없으면 MissingToolError — 가짜 결과로 조사하지 않도록 시작할 때 멈춘다.
 
-    exclude에 도구 이름을 넣으면 그 도구는 아예 등록하지 않는다 — 목업으로도
-    폴백하지 않고, LLM에게 존재 자체를 안 보여준다. 아직 실제 구현이 없어서
-    목업이 섞이면 안 되는 도구를 잠시 빼둘 때 쓴다.
+    exclude에 도구 이름을 넣으면 그 도구는 아예 등록하지 않는다 — LLM에게 존재 자체를
+    안 보여준다. 도구를 잠시 빼고 조사할 때 쓴다.
     """
     handlers = handlers or {}
     exclude_set = set(exclude or [])
@@ -177,12 +180,6 @@ def build_default_registry(
             ["host", "pid"],
             ["timestamp", "start_time", "end_time"],
         ),
-        ToolSpec(
-            "resolve_ip_geo",
-            "IP의 국가/평판 정보를 조회한다",
-            ["ip"],
-            [],
-        ),
     ]
 
     registry = ToolRegistry()
@@ -193,7 +190,10 @@ def build_default_registry(
         if handler is None:
             handler = _try_import_real_handler(spec.name)
         if handler is None:
-            handler = MOCK_HANDLERS[spec.name]
+            raise MissingToolError(
+                f"조사 도구 {spec.name}의 실제 구현을 찾지 못했습니다: "
+                f"agent/tools/real/{spec.name}.py에 같은 이름의 함수가 있어야 합니다"
+            )
         spec.handler = handler
         registry.register(spec)
     return registry

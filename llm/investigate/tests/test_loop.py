@@ -23,7 +23,7 @@ from typing import Any, Dict, List
 
 from agent.loop import InvestigationAgent
 from agent.tools import ToolRegistry, ToolSpec, build_default_registry
-from agent.tools.mock_tools import MOCK_HANDLERS
+from tests._mock_tools import MOCK_HANDLERS
 
 
 def _mock_only_registry() -> ToolRegistry:
@@ -537,39 +537,61 @@ def test_src_ip_seed_requires_network_log() -> None:
 
 
 def test_real_tool_auto_discovery() -> None:
-    """agent/tools/real/<도구이름>.py에 같은 이름의 함수를 넣으면 자동으로 연결되는지 확인.
-    실제 팀원이 파일을 추가하는 상황을 그대로 재현: 파일을 실제로 썼다가 테스트 후 원복한다.
-    """
-    import importlib
-    import sys
+    """기본 레지스트리(main.py와 같은 호출)는 6개 도구 모두 agent/tools/real/<도구이름>.py의 실제 함수에 연결된다."""
+    registry = build_default_registry()
+    expected = ["fetch_event_logs", "fetch_web_log", "fetch_auth_log", "fetch_audit_log",
+                "fetch_network_log", "get_process_tree"]
+    assert sorted(spec.name for spec in registry.list_tools()) == sorted(expected)
+    for name in expected:
+        assert registry.get(name).handler.__module__ == f"agent.tools.real.{name}", name
+    print("[PASS] test_real_tool_auto_discovery")
 
-    agent_dir = pathlib.Path(__file__).resolve().parent.parent / "agent"
-    target_path = agent_dir / "tools" / "real" / "resolve_ip_geo.py"
-    module_name = "agent.tools.real.resolve_ip_geo"
 
-    backup = target_path.read_text(encoding="utf-8") if target_path.exists() else None
+def test_missing_real_tool_stops_instead_of_mock() -> None:
+    """실제 도구 파일을 못 찾으면 목업으로 폴백하지 않고 MissingToolError로 멈춘다."""
+    from agent.tools import MissingToolError
+    from agent.tools import registry as registry_module
 
+    original = registry_module._try_import_real_handler
+    registry_module._try_import_real_handler = (
+        lambda name: None if name == "fetch_audit_log" else original(name))
     try:
-        target_path.write_text(
-            "def resolve_ip_geo(args):\n"
-            "    return {'count': 1, 'summary': 'REAL-TOOL-USED', 'records': []}\n",
-            encoding="utf-8",
-        )
-        sys.modules.pop(module_name, None)
-        importlib.invalidate_caches()
-
-        registry = build_default_registry()  # 이 테스트는 자동 탐색 자체를 검증하는 거라 목업 고정 X
-        result = registry.call("resolve_ip_geo", {"ip": "1.2.3.4"})
-
-        assert result["summary"] == "REAL-TOOL-USED", "real/ 폴더의 실제 함수가 사용되어야 한다"
-        print("[PASS] test_real_tool_auto_discovery")
+        try:
+            build_default_registry()
+        except MissingToolError as exc:
+            assert "fetch_audit_log" in str(exc)
+        else:
+            raise AssertionError("실제 도구가 없는데 레지스트리가 만들어졌다(목업 폴백 의심)")
+        # 테스트가 handlers로 직접 넘기면 실제 파일이 없어도 등록된다(우선순위 1)
+        registry = build_default_registry(handlers=MOCK_HANDLERS)
+        assert registry.get("fetch_audit_log").handler is MOCK_HANDLERS["fetch_audit_log"]
     finally:
-        sys.modules.pop(module_name, None)
-        if backup is not None:
-            target_path.write_text(backup, encoding="utf-8")
-        elif target_path.exists():
-            target_path.unlink()
-        importlib.invalidate_caches()
+        registry_module._try_import_real_handler = original
+    print("[PASS] test_missing_real_tool_stops_instead_of_mock")
+
+
+def test_real_tool_dependency_error_is_not_hidden() -> None:
+    """실제 도구 파일 안에서 다른 모듈을 못 찾는 오류(의존성 누락)는 '파일 없음'으로 숨기지 않고 그대로 올린다."""
+    from agent.tools import registry as registry_module
+
+    original = registry_module.importlib.import_module
+
+    def broken(name, *args, **kwargs):
+        if name == "agent.tools.real.fetch_web_log":
+            raise ModuleNotFoundError("No module named 'missing_dep'", name="missing_dep")
+        return original(name, *args, **kwargs)
+
+    registry_module.importlib.import_module = broken
+    try:
+        try:
+            build_default_registry()
+        except ModuleNotFoundError as exc:
+            assert exc.name == "missing_dep"
+        else:
+            raise AssertionError("의존성 누락이 숨겨졌다")
+    finally:
+        registry_module.importlib.import_module = original
+    print("[PASS] test_real_tool_dependency_error_is_not_hidden")
 
 
 if __name__ == "__main__":
@@ -582,4 +604,6 @@ if __name__ == "__main__":
     test_confidence_sufficient_allows_remaining_unknowns()
     test_src_ip_seed_requires_network_log()
     test_real_tool_auto_discovery()
+    test_missing_real_tool_stops_instead_of_mock()
+    test_real_tool_dependency_error_is_not_hidden()
     print("\n모든 테스트 통과.")

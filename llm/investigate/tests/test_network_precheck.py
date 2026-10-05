@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 from agent.loop import InvestigationAgent, network_precheck_args
 from agent.tools import build_default_registry
 from agent.tools.log_source import LOCAL_PATH_ENV
-from agent.tools.mock_tools import MOCK_HANDLERS
+from tests._mock_tools import MOCK_HANDLERS
 from agent.tools.real.fetch_web_log import fetch_web_log
 
 SEED = {
