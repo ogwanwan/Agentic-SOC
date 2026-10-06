@@ -62,6 +62,11 @@ class MappingView:
     techniques: tuple
     kill_chain: tuple
     warnings: tuple
+    # 2026-10-06 추가 — 어떤 ATT&CK 데이터로 매핑했는지(권고문 산출물에 그대로 싣는다).
+    # attack_mapping(RAG 경로)이 적어 주는 값이고, 룰 경로에서는 없을 수 있어 기본값 None이다.
+    attack_version: Optional[str] = None       # manifest.json attack_version (예: "19.2")
+    mapping_method: Optional[str] = None       # rag_llm | rule_baseline | rule_fallback
+    retrieval_version: Optional[str] = None    # manifest.json retrieval_version
 
     @property
     def technique_ids(self):
@@ -148,6 +153,12 @@ def read_contract(final_report: Any) -> Contract:
             w for w in _list(attack_mapping.get("warnings"), "attack_mapping.warnings")
             if isinstance(w, Mapping)
         ),
+        attack_version=_text(
+            attack_mapping.get("attack_version"), "attack_mapping.attack_version") or None,
+        mapping_method=_text(
+            attack_mapping.get("mapping_method"), "attack_mapping.mapping_method") or None,
+        retrieval_version=_text(
+            attack_mapping.get("retrieval_version"), "attack_mapping.retrieval_version") or None,
     )
 
     return Contract(
@@ -172,6 +183,12 @@ if __name__ == "__main__":  # 자체 점검: python llm/respond/contract.py
     }
     contract = read_contract(sample)
     assert contract.incident_id == "INC-1"
+    # ATT&CK 데이터 출처는 없으면 None으로 두고 꾸며내지 않는다
+    assert contract.mapping.attack_version is None and contract.mapping.mapping_method is None
+    with_version = dict(sample)
+    with_version["attack_mapping"] = dict(sample["attack_mapping"],
+                                          attack_version="19.2", mapping_method="rag_llm")
+    assert read_contract(with_version).mapping.attack_version == "19.2"
     assert contract.verdict.verdict == "THREAT_CONFIRMED"
     assert contract.investigation_confidence == 0.92
 

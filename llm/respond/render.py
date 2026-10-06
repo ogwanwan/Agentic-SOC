@@ -29,6 +29,16 @@ _LLM_DIR = str(Path(__file__).resolve().parents[1])
 if _LLM_DIR not in sys.path:
     sys.path.insert(0, _LLM_DIR)
 
+from respond.labels import (  # noqa: E402
+    AUTONOMY_LEGEND,
+    LLM_AUTHORED_NOTICE,
+    MAPPING_PARTIAL_SUFFIX,
+    STATUS_LABELS,
+    WARNING_MESSAGES,
+    llm_authored_commands,
+    status_label,
+    warning_message,
+)
 from respond.models import CATEGORY_IMMEDIATE, CATEGORY_VERIFY, ResponsePlan  # noqa: E402
 
 # 권고문 가로 폭(고정폭 글꼴 기준 칸 수).
@@ -38,28 +48,16 @@ from respond.models import CATEGORY_IMMEDIATE, CATEGORY_VERIFY, ResponsePlan  # 
 WIDTH = 78
 RULE = "=" * WIDTH
 
-# 머리말 오른쪽 상태 표시
-STATUS_TAGS = {
-    "recommended": "[확정 · 권고]",
-    "recommended_generic": "[확정 · 일반 권고]",
-    "not_applicable": "[오탐 · 조치 없음]",
-    "deferred": "[보류 · 확인 필요]",
-    "skipped": "[조사 미완료]",
-    "error": "[처리 오류]",
-}
+# 머리말 오른쪽 상태 표시 — 문장은 labels.py가 가지고 있고 여기서 대괄호만 붙인다
+STATUS_TAGS = {status: f"[{label}]" for status, label in STATUS_LABELS.items()}
 
-# 범례는 한 줄에 넣으면 84칸이라 두 줄로 나눈다. "L2는 자동 실행하지 않는다"는 설계서 7절이
-# 반드시 명시하라고 한 문구다 — 줄여 쓰지 말 것.
+# 범례는 한 줄에 넣으면 84칸이라 세 줄로 나눈다. "L2는 자동 실행하지 않는다"는 설계서 7절이
+# 반드시 명시하라고 한 문구다 — labels.AUTONOMY_LEGEND에서 가져오므로 줄여 쓸 수 없다.
 LEGEND_LINES = (
-    "[범례] L0 담당자 판단 · L1 승인 후 수동 실행",
-    "       L2 자동화 후보(현재 자동 실행 안 함)",
+    f"[범례] L0 {AUTONOMY_LEGEND['L0']} · L1 {AUTONOMY_LEGEND['L1']}",
+    f"       L2 {AUTONOMY_LEGEND['L2']}",
+    "       P1 먼저 · P2 보통 · P3 나중 (같은 묶음 안의 실행 순서)",
 )
-
-# 매핑 경고 코드 → 권고문 머리말에 띄울 설명 (설계서 4절)
-WARNING_MESSAGES = {
-    "FALLBACK_VERDICT": "판정이 조사 LLM이 아니라 누적 신뢰도로 자동 결정됨 — severity를 그대로 신뢰하지 마십시오",
-    "VERDICT_PRINCIPLE_CONFLICT": "판정이 조사 원칙 기준과 어긋남 — 담당자 확인 필요",
-}
 
 
 # ----------------------------------------------------------------------
@@ -129,7 +127,7 @@ def _wrap(text: str, width: int) -> List[str]:
 # ----------------------------------------------------------------------
 
 def _header(plan: ResponsePlan) -> List[str]:
-    tag = STATUS_TAGS.get(plan.response_status, f"[{plan.response_status}]")
+    tag = STATUS_TAGS.get(plan.response_status, f"[{status_label(plan.response_status)}]")
     title = f" 대응 권고   {plan.incident_id}"
     gap = max(1, WIDTH - display_width(title) - display_width(tag))
     return [RULE, title + " " * gap + tag, RULE]
@@ -155,7 +153,7 @@ def _fact_lines(plan: ResponsePlan) -> List[str]:
     mapping = plan.mapping_status
     if mapping == "partial":
         # 설계서 7절 — partial은 L2를 유지하되 "일부만 확인됨"을 반드시 표기한다
-        mapping += " (일부만 확인됨)"
+        mapping += f" ({MAPPING_PARTIAL_SUFFIX})"
     lines.append(
         f" {pad('검증', label_width)}원본 추적 {plan.provenance_status} · 매핑 {mapping}"
     )
@@ -169,8 +167,7 @@ def _warning_lines(plan: ResponsePlan) -> List[str]:
     lines = ["", " [경고]"]
     for warning in plan.warnings:
         code = str(warning.get("code") or "").strip()
-        detail = str(warning.get("detail") or "").strip()
-        message = WARNING_MESSAGES.get(code) or detail or code or "알 수 없는 경고"
+        message = warning_message(warning)
         for index, chunk in enumerate(_wrap(f"{code}: {message}" if code else message, WIDTH - 4)):
             lines.append(("  ⚠ " if index == 0 else "    ") + chunk)
     return lines
@@ -221,17 +218,41 @@ def _summary_lines(plan: ResponsePlan) -> List[str]:
 
 
 def _autonomy_tag(action: Any) -> str:
-    """[L2 · 가역 · LOW] — 하향된 라벨은 "L1←L2"로 표시해 왜 낮아졌는지 보이게 한다."""
+    """[P1 · L2 · 가역 · LOW] — 우선순위·자율성·가역성·위험도를 한 칸에 모은다.
+
+    하향된 라벨은 "L1←L2"로 표시해 왜 낮아졌는지 보이게 한다(사유는 아래 "등급" 줄).
+    """
     label = action.autonomy
     if action.autonomy_downgraded_from:
         label = f"{action.autonomy}←{action.autonomy_downgraded_from}"
-    parts = [label, "가역" if action.reversible else "비가역", action.risk]
+    parts = []
+    priority = getattr(action, "priority", None)
+    if priority:
+        parts.append(f"P{priority}")
+    parts += [label, "가역" if action.reversible else "비가역", action.risk]
     return "[" + " · ".join(parts) + "]"
 
 
-def _action_block(number: int, action: Any, *, with_detail: bool) -> List[str]:
-    """조치 한 건. [즉시 조치]는 대상·근거·명령까지, [확인 필요]는 제목과 라벨만."""
-    tag = _autonomy_tag(action) if with_detail else f"[{action.autonomy}]"
+# 조치 한 건에 들어가는 산출물 칸 (2026-10-06 팀 합의). 라벨은 모두 두 글자(표시폭 4칸)로
+# 맞춰 두 번째 줄 이후의 들여쓰기가 자동으로 정렬된다. 순서를 바꾸면 권고문 순서가 바뀐다.
+#   근거 왜 이 조치인가 · 명령 실제 명령어 · 원복 역가능 방법
+#   영향 부작용·영향 범위 · 검증 제대로 됐는지 확인하는 방법 · 등급 자동화 등급 근거
+_DETAIL_FIELDS = (
+    ("명령", "command_hint"),
+    ("원복", "rollback"),
+    ("영향", "side_effects"),
+    ("검증", "verification"),
+    ("등급", "autonomy_reason"),
+)
+
+
+def _action_block(number: int, action: Any, *, with_detail: bool = True) -> List[str]:
+    """조치 한 건 — 제목·라벨 + 대상·근거·명령·원복·영향·검증·등급.
+
+    [확인 필요] 묶음도 같은 칸을 모두 낸다(2026-10-06 산출물 확정). 비어 있는 칸은 그 줄을
+    아예 내지 않는다 — 지어내지 않고, 빈 줄도 남기지 않는다.
+    """
+    tag = _autonomy_tag(action)
     prefix = f"  {number}. "
     # 제목이 길면 라벨 칸을 침범하지 않게 자른다
     title = truncate(action.title, max(8, WIDTH - display_width(prefix) - display_width(tag) - 1))
@@ -243,18 +264,26 @@ def _action_block(number: int, action: Any, *, with_detail: bool) -> List[str]:
 
     indent = "     "
     body_width = WIDTH - display_width(indent) - 6
+
+    def _field(label: str, value: str, *, wrap: bool = True) -> None:
+        """라벨 한 칸. 길면 줄바꿈하고, 둘째 줄부터는 라벨 폭만큼 들여쓴다."""
+        text = (value or "").strip()
+        if not text:
+            return
+        # 명령·원복은 자르지 않고 줄바꿈한다 — 잘린 명령을 그대로 붙여 넣으면 사고가 난다
+        chunks = _wrap(text, body_width) if wrap else [truncate(text, body_width)]
+        lines.append(f"{indent}{label}  {chunks[0]}")
+        lines.extend(f"{indent}      {chunk}" for chunk in chunks[1:])
+
     if action.target:
-        lines.append(f"{indent}대상  {truncate(action.target, body_width)}")
+        # 대상은 값 하나이므로 잘라서 한 줄로 둔다(줄바꿈하면 경로가 둘로 보인다)
+        _field("대상", action.target, wrap=False)
     else:
         # 대상이 없는 조치는 "무엇을 확인하라"는 항목이다 — 지어내지 않고 그대로 알린다
         lines.append(f"{indent}대상  (없음 — 담당자가 범위를 정해 확인)")
-    reason = action.effective_reason()
-    if reason:
-        wrapped = _wrap(reason, body_width)
-        lines.append(f"{indent}근거  {wrapped[0]}")
-        lines += [f"{indent}      {chunk}" for chunk in wrapped[1:]]
-    if action.command_hint:
-        lines.append(f"{indent}명령  {truncate(action.command_hint, body_width)}")
+    _field("근거", action.effective_reason())
+    for label, attribute in _DETAIL_FIELDS:
+        _field(label, getattr(action, attribute, "") or "")
     return lines
 
 
@@ -267,12 +296,12 @@ def _action_lines(plan: ResponsePlan) -> List[str]:
     if immediate:
         lines += ["", f" [즉시 조치] {len(immediate)}건"]
         for action in immediate:
-            lines += _action_block(number, action, with_detail=True)
+            lines += _action_block(number, action)
             number += 1
     if verify:
         lines += ["", f" [확인 필요] {len(verify)}건"]
         for action in verify:
-            lines += _action_block(number, action, with_detail=False)
+            lines += _action_block(number, action)
             number += 1
     if not immediate and not verify:
         lines += ["", " [조치] 생성된 조치가 없습니다 — 조치 대상을 확보하지 못했습니다.",
@@ -297,6 +326,48 @@ def _evidence_lines(plan: ResponsePlan) -> List[str]:
         if raw:
             row = f"{pad(row, WIDTH - display_width(raw) - 1)} {raw}"
         lines.append(row.rstrip())
+    return lines
+
+
+def _attack_data_lines(plan: ResponsePlan) -> List[str]:
+    """어떤 ATT&CK 데이터로 기법을 매핑했는지 (2026-10-06 산출물 확정).
+
+    전체 주소는 78칸을 넘어 줄이 깨지므로 텍스트 권고문에는 버전과 파일명만 적는다.
+    원본 주소는 <사건>_response.json의 attack_data.source_url에 그대로 들어가고,
+    대시보드는 그 값을 링크로 띄운다.
+    """
+    data = getattr(plan, "attack_data", None) or {}
+    version = str(data.get("version") or "").strip()
+    method = str(data.get("mapping_method") or "").strip()
+    source_url = str(data.get("source_url") or "").strip()
+    if not (version or method or source_url):
+        return []
+
+    head = f"MITRE ATT&CK Enterprise v{version}" if version else "MITRE ATT&CK Enterprise"
+    if method:
+        head += f" ({method})"
+    lines = ["", " [ATT&CK 데이터]", "  " + truncate(head, WIDTH - 2)]
+    if source_url:
+        # 주소 전체 대신 저장소/파일명만 — 어느 파일인지 사람이 알아볼 수 있으면 충분하다
+        tail = source_url.split("attack-stix-data/")[-1]
+        if tail.startswith("master/"):
+            tail = tail[len("master/"):]
+        lines.append("  " + truncate(tail, WIDTH - 2))
+    return lines
+
+
+def _llm_notice_lines(plan: ResponsePlan) -> List[str]:
+    """명령·원복 문장을 LLM이 쓴 경우의 실행 전 확인 안내 (2026-10-06).
+
+    조치 7칸을 LLM이 쓰기로 했으므로, 사람이 그대로 복사해 실행하는 두 칸(명령·원복)이
+    LLM 문장일 때는 권고문에 그 사실을 적는다. llm.py가 환각 대상·파괴적 명령을 걸러내지만,
+    마지막 확인은 사람이 한다.
+    """
+    if not llm_authored_commands(plan):
+        return []
+    wrapped = _wrap(LLM_AUTHORED_NOTICE, WIDTH - 9)
+    lines = ["", " [확인] " + wrapped[0]]
+    lines += ["        " + chunk for chunk in wrapped[1:]]
     return lines
 
 
@@ -329,8 +400,10 @@ def _render_recommended(plan: ResponsePlan) -> List[str]:
     lines += _summary_lines(plan)
     lines += _action_lines(plan)
     lines += _evidence_lines(plan)
+    lines += _attack_data_lines(plan)
     lines += _unknown_lines(plan)
     lines += _note_lines(plan)
+    lines += _llm_notice_lines(plan)
     lines += [""] + [" " + line for line in LEGEND_LINES] + [RULE]
     return lines
 

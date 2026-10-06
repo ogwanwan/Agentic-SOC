@@ -32,6 +32,13 @@ def make_action(
     evidence_ids: Optional[List[str]] = None,
     default_reason: str = "업로드 직후 실행이 확인된 파일입니다.",
     reason: Optional[str] = None,
+    # 2026-10-06 산출물 확정 — 카탈로그가 채우는 칸. 실제 T1505.003 "웹셸 파일 격리" 값과 같다.
+    priority: int = 1,
+    rollback: str = "sudo mv /var/quarantine/shell.php <대상>",
+    side_effects: str = "그 파일을 참조하는 정상 기능이 있으면 404가 발생(웹셸이면 영향 없음)",
+    verification: str = "대상 파일이 격리 폴더로 이동했고 해당 URL 요청이 404인지 확인",
+    autonomy_reason: str = "삭제가 아니라 이동이라 원복 가능하고 파일 1개로 범위가 한정 → 자동화 후보(L2)",
+    llm_fields: Optional[List[str]] = None,
 ) -> Action:
     return Action(
         action_id=action_id,
@@ -47,9 +54,15 @@ def make_action(
         autonomy_downgraded_from=autonomy_downgraded_from,
         category=category,
         command_hint=command_hint,
-        evidence_ids=list(evidence_ids or ["EVID-003"]),
+        evidence_ids=list(evidence_ids) if evidence_ids is not None else ["EVID-003"],
         default_reason=default_reason,
         reason=reason,
+        priority=priority,
+        rollback=rollback,
+        side_effects=side_effects,
+        verification=verification,
+        autonomy_reason=autonomy_reason,
+        llm_fields=list(llm_fields or []),
     )
 
 
@@ -96,6 +109,11 @@ def make_plan(
                 command_hint=None,
                 evidence_ids=[],
                 default_reason="같은 경로에 다른 웹셸이 남아 있을 수 있습니다.",
+                priority=2,
+                rollback="점검만 수행 — 되돌릴 변경이 없음",
+                side_effects="없음 — 읽기 전용 점검이라 시스템 상태를 바꾸지 않음",
+                verification="웹루트에서 사건 시각 전후 생성 파일 중 설명되지 않는 것이 없는지 확인",
+                autonomy_reason="시스템을 바꾸지 않는 읽기 점검이지만 범위 판단이 필요 → 담당자 판단(L0)",
             ),
         ]
     return ResponsePlan(
@@ -130,6 +148,19 @@ def make_plan(
         tuning_hint=tuning_hint,
         status_reason=status_reason,
         summary=summary,
+        techniques=[
+            {"technique_id": "T1505.003", "technique_name": "Web Shell",
+             "tactic_name": "Persistence", "evidence_ids": ["EVID-003"]},
+            {"technique_id": "T1105", "technique_name": "Ingress Tool Transfer",
+             "tactic_name": "Command and Control", "evidence_ids": ["EVID-005"]},
+        ],
+        attack_data={
+            "version": "19.2",
+            "source_url": ("https://raw.githubusercontent.com/mitre-attack/attack-stix-data/"
+                            "master/enterprise-attack/enterprise-attack-19.2.json"),
+            "mapping_method": "rag_llm",
+            "retrieval_version": "hybrid-bm25-e5-rrf-v1",
+        },
     )
 
 

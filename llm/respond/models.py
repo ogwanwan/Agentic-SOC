@@ -89,6 +89,22 @@ class Action:
     # ↓ LLM이 채우는 유일한 칸
     reason: Optional[str] = None
 
+    # ↓ 2026-10-06 산출물 확정 — 조치 한 건이 반드시 갖는 칸. 전부 카탈로그 고정값이고
+    #   LLM은 이 칸을 받지도, 채우지도 않는다(되돌리는 방법을 모델이 지어내면 운영 사고다).
+    priority: int = 2                   # 1 먼저 · 2 보통 · 3 나중 (같은 묶음 안의 실행 순서)
+    rollback: str = ""                  # 역가능 방법("되돌릴 수 없음"이면 그렇게 적힌다)
+    side_effects: str = ""              # 부작용·영향 범위
+    verification: str = ""              # 조치가 제대로 됐는지 확인하는 방법
+    autonomy_reason: str = ""           # 이 자율성 등급인 이유(하향됐으면 그 사유까지)
+    # ↓ 위 칸 중 LLM이 쓴 것의 이름 목록(llm.py의 칸별 검증을 통과한 것만)
+    llm_fields: List[str] = field(default_factory=list)
+    template_id: Optional[str] = None
+    requires_approval: bool = True
+
+    def priority_label(self) -> str:
+        """권고문·대시보드에 띄우는 우선순위 라벨 — P1(먼저) ~ P3(나중)."""
+        return f"P{self.priority}"
+
     def effective_reason(self) -> str:
         """권고문에 실제로 실릴 근거 문장. LLM이 못 채웠으면 카탈로그의 기본 문장."""
         return (self.reason or "").strip() or self.default_reason
@@ -124,6 +140,12 @@ class ResponsePlan:
     tuning_hint: Optional[str] = None       # 오탐일 때 탐지팀에 보낼 룰 튜닝 제안
     # 관문이 건너뛰거나 오류로 끝냈을 때의 사유 (skipped / error)
     status_reason: Optional[str] = None
+    # ↓ 2026-10-06 추가 — ATT&CK 매핑 근거. 권고문·프롬프트·대시보드가 같은 값을 쓴다.
+    # techniques: attack_mapping.techniques[] 그대로(기법별 evidence_ids 포함)
+    techniques: List[Dict[str, Any]] = field(default_factory=list)
+    # attack_data: {version, source_url, mapping_method, retrieval_version}
+    attack_data: Dict[str, Any] = field(default_factory=dict)
+    selection_meta: Dict[str, Any] = field(default_factory=dict)
     # ↓ LLM이 채우는 칸
     summary: Optional[str] = None
     analyst_note: Optional[str] = None

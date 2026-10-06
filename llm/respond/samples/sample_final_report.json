@@ -1,0 +1,75 @@
+{
+  "incident_id": "INC-TEST01",
+  "investigation_id": "INV-TEST01",
+  "investigation_status": "COMPLETE",
+  "provenance": {
+    "status": "passed"
+  },
+  "final_verdict": {
+    "verdict": "THREAT_CONFIRMED",
+    "confidence": 0.89,
+    "severity": "HIGH",
+    "attack_type": "웹셸 업로드 후 원격 코드 실행",
+    "affected_systems": [
+      "web-01"
+    ],
+    "summary": "웹셸이 업로드된 뒤 외부 파일을 내려받았습니다."
+  },
+  "statistics": {
+    "investigation_confidence": 0.92
+  },
+  "remaining_unknowns": [],
+  "initial_seed": {
+    "src_ip": "203.0.113.45",
+    "host": "web-01",
+    "trigger_time": "2026-09-14T07:33:20Z",
+    "detection": {
+      "rules": [
+        {
+          "layer": "web",
+          "detail": {
+            "path": "/wp-content/uploads/shell.php"
+          }
+        }
+      ]
+    }
+  },
+  "tools_called": [],
+  "attack_mapping": {
+    "mapping_status": "mapped",
+    "techniques": [
+      {
+        "technique_id": "T1505.003",
+        "technique_name": "Web Shell",
+        "tactic_name": "Persistence",
+        "evidence_ids": [
+          "EVID-001"
+        ]
+      }
+    ],
+    "kill_chain": [
+      {
+        "step": 1,
+        "tactic_name": "Persistence",
+        "technique_id": "T1505.003",
+        "technique_name": "Web Shell",
+        "time": "2026-09-14T07:33:20Z"
+      }
+    ],
+    "warnings": [],
+    "attack_version": "19.2",
+    "mapping_method": "rag_llm",
+    "retrieval_version": "hybrid-bm25-e5-rrf-v1"
+  },
+  "evidence_chain": [
+    {
+      "evidence_id": "EVID-001",
+      "layer": "web",
+      "description": "shell.php 업로드",
+      "raw_refs": [
+        "sample_access.log:10"
+      ]
+    }
+  ],
+  "contradicting_evidence": []
+}

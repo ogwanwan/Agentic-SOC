@@ -45,7 +45,8 @@ _LLM_DIR = str(Path(__file__).resolve().parents[1])
 if _LLM_DIR not in sys.path:
     sys.path.insert(0, _LLM_DIR)
 
-from respond import investigate_bridge, run_log  # noqa: E402
+from respond import investigate_bridge, labels, run_log  # noqa: E402
+from respond.select import run_selection_stage  # noqa: E402
 from respond.llm import LLMStageReport, run_llm_stage  # noqa: E402
 from respond.models import ResponsePlan  # noqa: E402
 from respond.render import render_plan  # noqa: E402
@@ -67,16 +68,27 @@ class DecisionModulesMissing(RuntimeError):
     """담당 A의 결정 로직 모듈이 아직 없을 때."""
 
 
-def _load_decision_functions() -> Tuple[Any, Any, Any, Any]:
-    """담당 A 모듈을 늦게 import한다 — 없어도 llm.py·render.py는 단독으로 테스트할 수 있게."""
+def _load_decision_functions() -> Tuple[Any, ...]:
+    """담당 A 모듈을 늦게 import한다 — 없어도 llm.py·render.py는 단독으로 테스트할 수 있게.
+
+    2026-10-06 추가 — "LLM이 조치 목록을 짜고 code가 검문" 단계에 쓰는 함수도 같이
+    반환한다(build_candidate_pool·finalize_selected_plan·incident_facts). 전부 decide.py
+    안에 있으므로 담당 A 모듈이 없을 때의 오류 메시지는 그대로 유효하다.
+    """
     try:
         from respond.contract import read_contract  # type: ignore[attr-defined]
-        from respond.decide import build_response_plan  # type: ignore[attr-defined]
+        from respond.decide import (  # type: ignore[attr-defined]
+            build_candidate_pool,
+            build_response_plan,
+            finalize_selected_plan,
+            incident_facts,
+        )
         from respond.entities import extract_entities  # type: ignore[attr-defined]
         from respond.gate import evaluate_gate  # type: ignore[attr-defined]
     except ImportError as exc:
         raise DecisionModulesMissing(f"{_MISSING_DECISION_MODULES}\n    (원인: {exc})") from exc
-    return read_contract, evaluate_gate, build_response_plan, extract_entities
+    return (read_contract, evaluate_gate, build_response_plan, extract_entities,
+            build_candidate_pool, finalize_selected_plan, incident_facts)
 
 
 # ----------------------------------------------------------------------
@@ -141,7 +153,10 @@ def _reserve_output_paths(out_dir: str, stem: str) -> Tuple[str, str]:
 def write_outputs(plan: ResponsePlan, out_dir: str, source_path: str) -> Dict[str, str]:
     """권고문 JSON·TXT를 함께 쓴다. 둘 다 만들어진 뒤에야 저장이 끝난 것으로 본다."""
     os.makedirs(out_dir, exist_ok=True)
-    document = json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
+    # 대시보드는 이 json만 읽는다 — 권고문 텍스트에만 있던 설명 문장(경고 의미·범례·
+    # 상태 라벨·LLM 작성 안내)을 labels.decorate()로 함께 싣는다(문구 출처를 하나로).
+    document = json.dumps(
+        labels.decorate(plan.to_dict(), plan), ensure_ascii=False, indent=2)
     text = render_plan(plan)
     while True:
         json_path, text_path = _reserve_output_paths(out_dir, _output_stem(plan, source_path))
@@ -175,11 +190,27 @@ def process_file(
     LLM 실패는 여기서 멈추지 않는다 — 기본 근거 문장으로 권고문이 나간다.
     """
     report = load_final_report(final_report_path)
-    read_contract, evaluate_gate, build_response_plan, extract_entities = _load_decision_functions()
+    (read_contract, evaluate_gate, build_response_plan, extract_entities,
+     build_candidate_pool, finalize_selected_plan, incident_facts) = _load_decision_functions()
 
     contract = read_contract(report)
     gate = evaluate_gate(contract)
-    plan: ResponsePlan = build_response_plan(contract, gate)
+
+    # 2026-10-06 추가 — "LLM이 조치 목록을 짜고 code가 검문" 단계.
+    # gate.use_llm이 아닌 상태(오탐·보류·건너뜀·오류)는 조치가 없으므로 선택 단계를
+    # 아예 안 거친다 — build_response_plan()이 그 상태들을 바로 처리한다(안 바뀜).
+    selection_report = None
+    if gate.use_llm:
+        pool = build_candidate_pool(contract, gate)
+        selected_ids, selection_report = run_selection_stage(
+            pool, incident_facts=incident_facts(contract), llm_client=llm_client,
+        )
+        plan: ResponsePlan = finalize_selected_plan(
+            contract, gate, pool, selected_ids, llm_rejected=selection_report.llm_rejected,
+        )
+    else:
+        plan = build_response_plan(contract, gate)
+
     # schema.ResponsePlan은 evidence_refs를 채우지 않는다(A는 contract까지만 안다) —
     # 원본 evidence_chain은 여기서 직접 읽어서 붙인다. render.py의 [근거 추적] 구역이 이걸 쓴다.
     plan.evidence_refs = evidence_chain(report)
@@ -200,6 +231,7 @@ def process_file(
             run_log.build_entry(
                 plan,
                 source_path=final_report_path,
+                selection_report=selection_report,
                 llm_report=llm_report,
                 output_paths=outputs,
             ),

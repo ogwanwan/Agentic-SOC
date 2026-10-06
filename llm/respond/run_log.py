@@ -31,6 +31,7 @@ def build_entry(
     plan: Any,
     *,
     source_path: str,
+    selection_report: Optional[Any] = None,
     llm_report: Optional[Any] = None,
     output_paths: Optional[Dict[str, str]] = None,
     error: Optional[str] = None,
@@ -52,6 +53,11 @@ def build_entry(
             "action_count": len(plan.actions),
             "action_ids": plan.action_ids(),
         })
+    # 2026-10-06 추가 — "LLM이 조치 목록을 짜고 code가 검문"(선택 단계)의 기록.
+    # plan.selection_meta는 이미 plan.to_dict()/.json에 실리지만, 선택 단계 자체가
+    # 어떻게 됐는지(재시도했는지·구조가 깨졌는지)는 SelectionReport에만 있다.
+    if selection_report is not None:
+        entry["selection"] = selection_report.to_dict()
     if llm_report is not None:
         entry["llm"] = llm_report.to_dict()
     if output_paths:

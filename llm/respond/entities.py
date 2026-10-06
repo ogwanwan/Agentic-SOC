@@ -147,6 +147,36 @@ def first_of_kind(entities: tuple, kind: str) -> Optional[Entity]:
     return None
 
 
+# ↓ 2026-10-06 추가 — decide.py(조치 생성)와 select_gate.py(LLM 선택 검문) 둘 다
+# "이 target이 실제 추출된 엔티티인가"를 같은 기준으로 봐야 한다. 정규식을 두 곳에
+# 따로 두면 언젠가 어긋난다(선택 단계 통과했는데 작성 단계에서 막히는 식). 그래서
+# 그 판단을 여기 한 곳에만 둔다 — decide.py의 first_of_kind()가 이미 하던 "kind별로
+# 하나 고르기"와 같은 소스(entities 튜플)를 본다.
+
+def entity_values_by_kind(entities: tuple) -> dict:
+    """kind별 추출된 값 집합. {"ip": {"203.0.113.45"}, "user": {"www-data"}, ...}"""
+    result: dict = {}
+    for entity in entities:
+        result.setdefault(entity.kind, set()).add(entity.value)
+    return result
+
+
+def allowed_target_values(entities: tuple) -> set:
+    """kind를 안 가리는 전체 값 집합 — llm.py 7칸 작성 단계(규칙 7)가 쓰는 것과 같다."""
+    return {entity.value for entity in entities}
+
+
+def is_valid_target(entities: tuple, kind: Optional[str], value: str) -> bool:
+    """value가 실제로 kind로 추출된 엔티티인가. select_gate.py가 이걸로 target을 검증한다.
+
+    kind가 None인 템플릿(대상이 필요 없는 점검 항목)에는 이 함수를 쓰지 않는다 —
+    그런 템플릿은 애초에 target이 없다.
+    """
+    if not kind:
+        return False
+    return value in entity_values_by_kind(entities).get(kind, set())
+
+
 if __name__ == "__main__":  # 자체 점검: python llm/respond/entities.py
     from respond.contract import MappingView, Verdict
 
@@ -184,6 +214,16 @@ if __name__ == "__main__":  # 자체 점검: python llm/respond/entities.py
     assert not any(e.value == "/should/not/be/used" for e in entities)  # auth 계층 path는 버림
     assert ("ip", "198.51.100.9") in kinds           # tools_called[].input
     assert ("url_path", "/login") in kinds           # fetch_web_log의 path는 URL
+
+    # 2026-10-06 추가 — select_gate.py가 쓰는 공용 검증 함수
+    by_kind = entity_values_by_kind(entities)
+    assert by_kind["ip"] == {"203.0.113.45", "198.51.100.9", "203.0.113.99"}
+    assert is_valid_target(entities, "ip", "203.0.113.45") is True
+    assert is_valid_target(entities, "ip", "198.51.100.1") is False       # 추출되지 않은 IP
+    assert is_valid_target(entities, "file_path", "/var/www/html/.cache/x.sh") is True
+    assert is_valid_target(entities, "url_path", "/var/www/html/.cache/x.sh") is False  # kind가 다름
+    assert is_valid_target(entities, None, "/login") is False             # 대상 없는 템플릿
+    assert allowed_target_values(entities) >= {"203.0.113.45", "www-data"}
 
     # 수집 순서상 seed_detail(exec_args의 IP)이 seed_src_ip보다 먼저 나온다
     assert first_of_kind(entities, "ip").value == "203.0.113.99"

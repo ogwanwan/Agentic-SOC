@@ -98,7 +98,8 @@ class Test정식권고(unittest.TestCase):
         self.assertIn("대상  /var/www/html/wp-content/uploads/shell.php", text)
         self.assertIn("근거  업로드 직후 실행이 확인됨 (EVID-003)", text)
         self.assertIn("명령  sudo mv <대상> /var/quarantine/", text)
-        self.assertIn("[L2 · 가역 · LOW]", text)
+        # 2026-10-06 산출물 확정 — 라벨 칸에 우선순위(P1~P3)가 함께 붙는다
+        self.assertIn("[P1 · L2 · 가역 · LOW]", text)
 
     def test_LLM_문장이_없으면_카탈로그_기본_문장을_쓴다(self):
         plan = make_plan(actions=[make_action("A1", reason=None)])
@@ -119,7 +120,7 @@ class Test정식권고(unittest.TestCase):
         plan = make_plan(actions=[make_action("A1", autonomy="L1", autonomy_downgraded_from="L2")])
         text = render_plan(plan)
 
-        self.assertIn("[L1←L2 · 가역 · LOW]", text)
+        self.assertIn("[P1 · L1←L2 · 가역 · LOW]", text)
 
     def test_매핑이_partial이면_일부만_확인됨을_표기한다(self):
         """설계서 7절 — partial은 L2를 유지하되 반드시 표기한다."""
@@ -142,6 +143,111 @@ class Test정식권고(unittest.TestCase):
 
         self.assertIn("생성된 조치가 없습니다", text)
         self.assertIn("증거를 보존하고", text)
+
+
+# ----------------------------------------------------------------------
+# 조치 한 건의 산출물 7칸 (2026-10-06 팀 합의)
+# ----------------------------------------------------------------------
+
+class Test조치산출물(unittest.TestCase):
+    """조치마다 왜·원복·명령·등급 근거·우선순위·부작용·검증이 모두 나오는지 확인한다.
+
+    이 일곱 칸이 대응권고만 만들 수 있는 산출물이다(나머지는 대시보드와 겹친다).
+    """
+
+    def test_조치마다_산출물_일곱칸이_모두_나온다(self):
+        plan = make_plan(actions=[make_action("A1", reason="업로드 직후 실행이 확인됨")])
+        text = render_plan(plan)
+
+        self.assertIn("[P1 ", text)                              # 우선순위
+        self.assertIn("근거  업로드 직후 실행이 확인됨", text)      # 왜 이 조치인가
+        self.assertIn("명령  sudo mv <대상> /var/quarantine/", text)  # 실제 명령어
+        self.assertIn("원복  sudo mv /var/quarantine/shell.php", text)  # 역가능 방법
+        self.assertIn("영향  그 파일을 참조하는 정상 기능", text)     # 부작용·영향 범위
+        self.assertIn("검증  대상 파일이 격리 폴더로 이동", text)     # 검증 방법
+        self.assertIn("등급  삭제가 아니라 이동이라", text)           # 자동화 등급 근거
+
+    def test_확인_필요_묶음도_같은_칸을_낸다(self):
+        """[확인 필요] 항목도 왜·검증·등급 근거를 낸다(예전에는 제목만 나왔다)."""
+        plan = make_plan(actions=[
+            make_action("A3", title="웹루트 내 최근 생성 파일 전수 점검", target=None,
+                        target_source=None, command_hint=None, category=CATEGORY_VERIFY,
+                        autonomy="L0", priority=2,
+                        rollback="점검만 수행 — 되돌릴 변경이 없음",
+                        side_effects="없음 — 읽기 전용 점검",
+                        verification="설명되지 않는 생성 파일이 없는지 확인",
+                        autonomy_reason="읽기 점검이지만 범위 판단이 필요 → 담당자 판단(L0)"),
+        ])
+        text = render_plan(plan)
+
+        self.assertIn("[확인 필요] 1건", text)
+        self.assertIn("[P2 · L0 ", text)
+        self.assertIn("원복  점검만 수행", text)
+        self.assertIn("검증  설명되지 않는 생성 파일", text)
+        self.assertIn("등급  읽기 점검이지만", text)
+
+    def test_비어_있는_칸은_줄을_내지_않는다(self):
+        """카탈로그가 아직 안 채운 칸은 빈 줄로 남기지 않고 아예 생략한다."""
+        plan = make_plan(actions=[
+            make_action("A1", rollback="", side_effects="", verification="", autonomy_reason=""),
+        ])
+        text = render_plan(plan)
+
+        # 머리말의 "검증" 줄과 섞이지 않게 조치 블록의 들여쓰기까지 함께 본다
+        self.assertNotIn("     원복  ", text)
+        self.assertNotIn("     영향  ", text)
+        self.assertNotIn("     검증  ", text)
+        self.assertNotIn("     등급  ", text)
+        self.assertIn("     대상  ", text)          # 있는 칸은 그대로 나온다
+
+    def test_긴_원복_명령은_자르지_않고_줄바꿈한다(self):
+        """잘린 명령을 그대로 붙여 넣으면 사고가 난다 — 생략 기호가 붙어서는 안 된다."""
+        long_rollback = ("sudo mv /var/quarantine/shell.php "
+                         "/var/www/html/wp-content/uploads/verylongpath/shell.php "
+                         "&& sudo chmod 644 /var/www/html/wp-content/uploads/verylongpath/shell.php")
+        plan = make_plan(actions=[make_action("A1", rollback=long_rollback)])
+
+        text = render_plan(plan)
+        # "원복"이라는 낱말은 등급 근거 문장에도 나오므로 라벨로 시작하는 줄만 고른다
+        label_lines = [line for line in text.splitlines() if line.strip().startswith("원복")]
+
+        self.assertEqual(_overflowing(text), [])
+        self.assertEqual(len(label_lines), 1)
+        # 줄바꿈된 조각을 이어 붙이면 명령이 온전해야 한다(생략 기호가 없어야 한다)
+        joined = " ".join(" ".join(text.split()).split())
+        self.assertIn("&& sudo chmod 644", joined)
+        self.assertNotIn("…", joined)
+
+    def test_우선순위대로_번호가_붙는다(self):
+        """decide.py가 정렬해서 넘긴 순서를 그대로 번호로 쓴다."""
+        plan = make_plan(actions=[
+            make_action("A1", title="감사 로그 보존", priority=1),
+            make_action("A2", title="프로세스 종료", priority=2),
+        ])
+        text = render_plan(plan)
+
+        self.assertIn("1. 감사 로그 보존", text)
+        self.assertIn("2. 프로세스 종료", text)
+
+    def test_ATTACK_데이터_출처가_나온다(self):
+        """어떤 ATT&CK 데이터로 매핑했는지 권고문에 남긴다(전체 주소는 JSON에)."""
+        text = render_plan(make_plan())
+
+        self.assertIn("[ATT&CK 데이터]", text)
+        self.assertIn("MITRE ATT&CK Enterprise v19.2", text)
+        self.assertIn("enterprise-attack-19.2.json", text)
+
+    def test_ATTACK_데이터가_없으면_구역을_내지_않는다(self):
+        plan = make_plan()
+        plan.attack_data = {}
+        text = render_plan(plan)
+
+        self.assertNotIn("[ATT&CK 데이터]", text)
+
+    def test_범례에_우선순위_설명이_있다(self):
+        text = render_plan(make_plan())
+
+        self.assertIn("P1 먼저 · P2 보통 · P3 나중", text)
 
 
 # ----------------------------------------------------------------------
