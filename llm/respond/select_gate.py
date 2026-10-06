@@ -13,9 +13,19 @@ code가 검문·안전망·순서 정리를 맡는다.
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any, Dict, List, Optional
 
-from respond.decide import CandidatePool
+# respond/ 패키지를 절대 경로로 import하기 위해 llm/ 디렉터리를 sys.path에 올린다
+# (gate.py·decide.py·select.py와 같은 부트스트랩 — 2026-10-06 추가: 이 파일만 빠져 있어서
+# `python llm/respond/select_gate.py`로 단독 실행하면 ModuleNotFoundError가 났었다.
+# select.py를 거쳐 import될 때는 select.py의 부트스트랩이 먼저 돌아서 운 좋게 괜찮았을 뿐.)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from respond.decide import CandidatePool  # noqa: E402
 
 MAX_WHY_CHARS = 200
 

@@ -5,8 +5,8 @@
   그리므로 포맷이 항상 같고, 환각이 끼어들 틈이 없다. LLM이 쓴 문장은 [요약]과 각 조치의
   "근거" 줄에만 들어간다(그것도 검증을 통과한 것만).
 
-  상태별 포맷 3종 (설계서 9-2·9-3):
-    recommended / recommended_generic   머리말 + 공격 흐름 + 요약 + 조치 + 근거 추적 + 범례
+  상태별 포맷 3종 (2026-10-06 단순화):
+    recommended / recommended_generic   머리말 + 조치([즉시 조치]/[확인 필요]) + 담당자 참고
     not_applicable                      오탐 종결 한 줄 + 탐지 룰 튜닝 제안
     deferred / skipped / error          보류·건너뜀 사유 + 확인 필요 목록
 
@@ -30,12 +30,9 @@ if _LLM_DIR not in sys.path:
     sys.path.insert(0, _LLM_DIR)
 
 from respond.labels import (  # noqa: E402
-    AUTONOMY_LEGEND,
-    LLM_AUTHORED_NOTICE,
     MAPPING_PARTIAL_SUFFIX,
     STATUS_LABELS,
     WARNING_MESSAGES,
-    llm_authored_commands,
     status_label,
     warning_message,
 )
@@ -51,13 +48,6 @@ RULE = "=" * WIDTH
 # 머리말 오른쪽 상태 표시 — 문장은 labels.py가 가지고 있고 여기서 대괄호만 붙인다
 STATUS_TAGS = {status: f"[{label}]" for status, label in STATUS_LABELS.items()}
 
-# 범례는 한 줄에 넣으면 84칸이라 세 줄로 나눈다. "L2는 자동 실행하지 않는다"는 설계서 7절이
-# 반드시 명시하라고 한 문구다 — labels.AUTONOMY_LEGEND에서 가져오므로 줄여 쓸 수 없다.
-LEGEND_LINES = (
-    f"[범례] L0 {AUTONOMY_LEGEND['L0']} · L1 {AUTONOMY_LEGEND['L1']}",
-    f"       L2 {AUTONOMY_LEGEND['L2']}",
-    "       P1 먼저 · P2 보통 · P3 나중 (같은 묶음 안의 실행 순서)",
-)
 
 
 # ----------------------------------------------------------------------
@@ -177,46 +167,6 @@ def _warning_lines(plan: ResponsePlan) -> List[str]:
 # 본문 구역
 # ----------------------------------------------------------------------
 
-def _kill_chain_lines(plan: ResponsePlan) -> List[str]:
-    if not plan.kill_chain:
-        return []
-    lines = ["", " [공격 흐름]"]
-    tactic_width = max((display_width(str(s.get("tactic_name") or "")) for s in plan.kill_chain),
-                       default=0)
-    tactic_width = min(max(tactic_width, 8), 24)
-    tech_id_width = max((len(str(s.get("technique_id") or "")) for s in plan.kill_chain), default=9)
-    for index, step in enumerate(plan.kill_chain, start=1):
-        number = step.get("step") or index
-        tactic = pad(truncate(str(step.get("tactic_name") or "-"), tactic_width), tactic_width)
-        tech_id = str(step.get("technique_id") or "-").ljust(tech_id_width)
-        time = _hhmmss(step.get("time"))
-        prefix = f"  {number}. {tactic} {tech_id} "
-        # 기법 이름이 길면 시각 칸을 침범하지 않게 자른다
-        available = WIDTH - display_width(prefix) - (len(time) + 1 if time else 0)
-        tech_name = truncate(str(step.get("technique_name") or ""), max(4, available))
-        row = prefix + tech_name
-        if time:
-            row = f"{pad(row, WIDTH - len(time) - 1)} {time}"
-        lines.append(row.rstrip())
-    return lines
-
-
-def _hhmmss(value: Any) -> str:
-    """ISO 시각에서 HH:MM:SS만 꺼낸다. 형식이 다르면 빈 문자열(줄을 깨뜨리지 않는다)."""
-    text = str(value or "")
-    if "T" in text and len(text) >= 19:
-        return text[11:19]
-    return ""
-
-
-def _summary_lines(plan: ResponsePlan) -> List[str]:
-    if not plan.summary:
-        return []
-    lines = ["", " [요약]"]
-    lines += ["  " + chunk for chunk in _wrap(plan.summary, WIDTH - 2)]
-    return lines
-
-
 def _autonomy_tag(action: Any) -> str:
     """[P1 · L2 · 가역 · LOW] — 우선순위·자율성·가역성·위험도를 한 칸에 모은다.
 
@@ -309,68 +259,6 @@ def _action_lines(plan: ResponsePlan) -> List[str]:
     return lines
 
 
-def _evidence_lines(plan: ResponsePlan) -> List[str]:
-    if not plan.evidence_refs:
-        return []
-    lines = ["", " [근거 추적]"]
-    for ref in plan.evidence_refs:
-        evidence_id = str(ref.get("evidence_id") or "-")
-        time = _hhmmss(ref.get("time"))
-        layer = str(ref.get("layer") or "-")
-        description = str(ref.get("description") or "")
-        raw = ", ".join(str(r) for r in (ref.get("raw_refs") or []))
-        head = f"  {evidence_id:<10}{time:<10}{pad(layer, 8)}"
-        tail = display_width(raw) + 1 if raw else 0
-        body_width = max(4, WIDTH - display_width(head) - tail)
-        row = head + truncate(description, body_width)
-        if raw:
-            row = f"{pad(row, WIDTH - display_width(raw) - 1)} {raw}"
-        lines.append(row.rstrip())
-    return lines
-
-
-def _attack_data_lines(plan: ResponsePlan) -> List[str]:
-    """어떤 ATT&CK 데이터로 기법을 매핑했는지 (2026-10-06 산출물 확정).
-
-    전체 주소는 78칸을 넘어 줄이 깨지므로 텍스트 권고문에는 버전과 파일명만 적는다.
-    원본 주소는 <사건>_response.json의 attack_data.source_url에 그대로 들어가고,
-    대시보드는 그 값을 링크로 띄운다.
-    """
-    data = getattr(plan, "attack_data", None) or {}
-    version = str(data.get("version") or "").strip()
-    method = str(data.get("mapping_method") or "").strip()
-    source_url = str(data.get("source_url") or "").strip()
-    if not (version or method or source_url):
-        return []
-
-    head = f"MITRE ATT&CK Enterprise v{version}" if version else "MITRE ATT&CK Enterprise"
-    if method:
-        head += f" ({method})"
-    lines = ["", " [ATT&CK 데이터]", "  " + truncate(head, WIDTH - 2)]
-    if source_url:
-        # 주소 전체 대신 저장소/파일명만 — 어느 파일인지 사람이 알아볼 수 있으면 충분하다
-        tail = source_url.split("attack-stix-data/")[-1]
-        if tail.startswith("master/"):
-            tail = tail[len("master/"):]
-        lines.append("  " + truncate(tail, WIDTH - 2))
-    return lines
-
-
-def _llm_notice_lines(plan: ResponsePlan) -> List[str]:
-    """명령·원복 문장을 LLM이 쓴 경우의 실행 전 확인 안내 (2026-10-06).
-
-    조치 7칸을 LLM이 쓰기로 했으므로, 사람이 그대로 복사해 실행하는 두 칸(명령·원복)이
-    LLM 문장일 때는 권고문에 그 사실을 적는다. llm.py가 환각 대상·파괴적 명령을 걸러내지만,
-    마지막 확인은 사람이 한다.
-    """
-    if not llm_authored_commands(plan):
-        return []
-    wrapped = _wrap(LLM_AUTHORED_NOTICE, WIDTH - 9)
-    lines = ["", " [확인] " + wrapped[0]]
-    lines += ["        " + chunk for chunk in wrapped[1:]]
-    return lines
-
-
 def _unknown_lines(plan: ResponsePlan, title: str = "남은 의문") -> List[str]:
     if not plan.remaining_unknowns:
         return []
@@ -395,16 +283,17 @@ def _note_lines(plan: ResponsePlan) -> List[str]:
 # ----------------------------------------------------------------------
 
 def _render_recommended(plan: ResponsePlan) -> List[str]:
+    """2026-10-06 산출물 단순화: 머리말 + 조치([즉시 조치]/[확인 필요]) + [담당자 참고]만 낸다.
+
+    공격 흐름·요약·근거 추적·ATT&CK 데이터·남은 의문·LLM 작성 안내·범례는 더 이상
+    텍스트 권고문에 넣지 않는다 (해당 값들은 JSON(response.json)에는 계속 남아 있으므로
+    대시보드 등 다른 화면에서 필요하면 거기서 꺼내 쓰면 된다 — 지우는 게 아니라 텍스트
+    렌더링에서만 뺀다).
+    """
     lines = _header(plan) + _fact_lines(plan) + _warning_lines(plan)
-    lines += _kill_chain_lines(plan)
-    lines += _summary_lines(plan)
     lines += _action_lines(plan)
-    lines += _evidence_lines(plan)
-    lines += _attack_data_lines(plan)
-    lines += _unknown_lines(plan)
     lines += _note_lines(plan)
-    lines += _llm_notice_lines(plan)
-    lines += [""] + [" " + line for line in LEGEND_LINES] + [RULE]
+    lines += [RULE]
     return lines
 
 
