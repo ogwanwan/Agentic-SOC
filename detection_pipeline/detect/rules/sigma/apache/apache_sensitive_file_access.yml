@@ -38,7 +38,7 @@ fields:
 falsepositives:
   - 설정파일과 유사한 이름의 정상 정적 자원 (드묾)
   - 승인된 취약점 점검
-level: high
+level: medium   # FP 튜닝(2026-10): 스캐너 config 긁기가 167건 중 141건 오탐(85%)으로 P2 큐 폭주 → medium(P3·대시보드)로 내림. 실제 공격은 동반되는 webroot write/exec(critical)이 사건을 P1로 올려 안 놓친다.
 tags:
   - attack.reconnaissance
   - attack.t1595.003   # Active Scanning: Wordlist Scanning
