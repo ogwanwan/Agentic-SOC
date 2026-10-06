@@ -16,7 +16,7 @@ if _LLM_DIR not in sys.path:
     sys.path.insert(0, _LLM_DIR)
 
 from respond.models import CATEGORY_VERIFY  # noqa: E402
-from respond.render import LEGEND_LINES, WIDTH, display_width, pad, render_plan, truncate  # noqa: E402
+from respond.render import WIDTH, display_width, pad, render_plan, truncate  # noqa: E402
 from respond.tests._fixtures import make_action, make_plan  # noqa: E402
 
 
@@ -71,8 +71,15 @@ class Test정식권고(unittest.TestCase):
     """response_status=recommended 상태의 권고문 렌더링 테스트."""
 
     def test_정식_권고_구역이_모두_나온다(self):
+        """2026-10-06 단순화: 머리말·조치([즉시 조치]/[확인 필요])·[담당자 참고]만 남는다.
+
+        공격 흐름·요약·근거 추적·ATT&CK 데이터·남은 의문·범례는 텍스트 권고문에서
+        빠진다(해당 값은 response.json에는 그대로 남아 있다) — render.py의
+        _render_recommended() 참고.
+        """
         plan = make_plan(summary="웹셸이 업로드된 뒤 외부 파일을 내려받았습니다.",
                          remaining_unknowns=["www-data 평소 행동 베이스라인이 없음"])
+        plan.analyst_note = "담당자가 추가로 확인해야 할 내용입니다."
         for action in plan.actions:
             action.reason = "확인된 근거입니다."
 
@@ -80,16 +87,14 @@ class Test정식권고(unittest.TestCase):
 
         self.assertIn("대응 권고   INC-7d29ffde", text)
         self.assertIn("[확정 · 권고]", text)
-        self.assertIn("[공격 흐름]", text)
-        self.assertIn("[요약]", text)
         self.assertIn("[즉시 조치] 2건", text)
         self.assertIn("[확인 필요] 1건", text)
-        self.assertIn("[근거 추적]", text)
-        self.assertIn("[남은 의문]", text)
-        self.assertIn("[범례]", text)
-        # 설계서 7절이 반드시 명시하라고 한 문구
-        self.assertIn("자동화 후보(현재 자동 실행 안 함)", text)
-        self.assertTrue(all(display_width(line) <= WIDTH for line in LEGEND_LINES))
+        self.assertIn("[담당자 참고]", text)
+        self.assertNotIn("[공격 흐름]", text)
+        self.assertNotIn("[요약]", text)
+        self.assertNotIn("[근거 추적]", text)
+        self.assertNotIn("[남은 의문]", text)
+        self.assertNotIn("[범례]", text)
 
     def test_조치의_대상과_근거와_명령이_나온다(self):
         plan = make_plan(actions=[make_action("A1", reason="업로드 직후 실행이 확인됨 (EVID-003)")])
@@ -229,25 +234,25 @@ class Test조치산출물(unittest.TestCase):
         self.assertIn("1. 감사 로그 보존", text)
         self.assertIn("2. 프로세스 종료", text)
 
-    def test_ATTACK_데이터_출처가_나온다(self):
-        """어떤 ATT&CK 데이터로 매핑했는지 권고문에 남긴다(전체 주소는 JSON에)."""
+    def test_ATTACK_데이터_구역은_텍스트_권고문에_안_나온다(self):
+        """2026-10-06 단순화 이후 [ATT&CK 데이터]는 텍스트 권고문에서 뺐다(response.json에는 남는다)."""
         text = render_plan(make_plan())
 
-        self.assertIn("[ATT&CK 데이터]", text)
-        self.assertIn("MITRE ATT&CK Enterprise v19.2", text)
-        self.assertIn("enterprise-attack-19.2.json", text)
+        self.assertNotIn("[ATT&CK 데이터]", text)
 
-    def test_ATTACK_데이터가_없으면_구역을_내지_않는다(self):
+    def test_ATTACK_데이터가_없어도_구역을_내지_않는다(self):
         plan = make_plan()
         plan.attack_data = {}
         text = render_plan(plan)
 
         self.assertNotIn("[ATT&CK 데이터]", text)
 
-    def test_범례에_우선순위_설명이_있다(self):
+    def test_범례는_텍스트_권고문에_안_나온다(self):
+        """2026-10-06 단순화 이후 [범례]는 텍스트 권고문에서 뺐다."""
         text = render_plan(make_plan())
 
-        self.assertIn("P1 먼저 · P2 보통 · P3 나중", text)
+        self.assertNotIn("[범례]", text)
+        self.assertNotIn("P1 먼저 · P2 보통 · P3 나중", text)
 
 
 # ----------------------------------------------------------------------
