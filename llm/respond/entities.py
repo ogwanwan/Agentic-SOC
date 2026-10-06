@@ -23,6 +23,19 @@ _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 # fetch_audit_log에는 파일 경로 필터가 없다(5-3절) — path는 web/system 계층에서만 의미를 가진다.
 _FILE_LAYERS = ("system",)
+
+# 2026-10-07 추가 — system 계층 detail.path를 무조건 격리 대상으로 믿으면 안 된다.
+# audit_webshell_recon.yml 같은 exec 계열 룰은 "셸로 명령을 실행했다"를 잡는데, 이때
+# detail.path는 웹셸 파일이 아니라 "실행된 인터프리터 경로"(예: /bin/sh)다. 이걸 그대로
+# 격리하면 시스템이 깨진다(실측: INC-1e9dfef7, 팀원 이지원 보고).
+# 완벽한 구분(실행 vs 파일쓰기)은 룰 schema 확장 전까지 불가능하므로, 핵심 인터프리터·
+# 셸 바이너리를 file_path 후보에서 원천 배제한다.
+_PROTECTED_SYSTEM_BINARIES = frozenset({
+    "/bin/sh", "/bin/bash", "/bin/dash", "/bin/zsh", "/bin/csh", "/bin/ksh",
+    "/usr/bin/sh", "/usr/bin/bash", "/usr/bin/dash", "/usr/bin/zsh",
+    "/usr/bin/python", "/usr/bin/python3", "/usr/bin/perl", "/usr/bin/env",
+    "/bin/su", "/usr/bin/sudo", "/bin/sudo",
+})
 _WEB_LAYERS = ("web",)
 
 # 도구별로 "경로"가 어떤 의미인지 다르다(5-3절). fetch_audit_log 등 경로 의미가 없는 도구는
@@ -66,7 +79,8 @@ def _from_seed_detail(initial_seed: Mapping[str, Any]) -> list:
         path = detail.get("path")
         if isinstance(path, str) and path:
             if layer in _FILE_LAYERS:
-                entities.append(Entity("file_path", path, "seed_detail"))
+                if path not in _PROTECTED_SYSTEM_BINARIES:
+                    entities.append(Entity("file_path", path, "seed_detail"))
             elif layer in _WEB_LAYERS:
                 entities.append(Entity("url_path", path, "seed_detail"))
             # auth 등 다른 계층의 path는 설계상 의미가 없어 추출하지 않는다(5-2절)
