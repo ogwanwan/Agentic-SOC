@@ -45,6 +45,9 @@ from pipeline.state import run_lock  # noqa: E402
 
 AGENT_MAIN = os.path.join(_ROOT, "llm", "investigate", "main.py")
 RESULTS_DIR = os.path.join(_ROOT, "results", "investigation_agent")
+ATTACK_MAPPING_DIR = os.path.join(_ROOT, "results", "attack_mapping")
+RESPOND_CWD = os.path.join(_ROOT, "llm")                    # respond 모듈이 import 되는 cwd
+RESPONSE_DIR = os.path.join(_ROOT, "results", "response")   # 권고 TXT·JSON(조사·매핑과 같은 results 아래)
 
 
 def _iso(dt):
@@ -83,6 +86,14 @@ def _run_agent_subprocess(incident_file):
     subprocess.run([sys.executable, "-u", AGENT_MAIN, incident_file], cwd=_ROOT, check=True)
 
 
+def _run_respond_subprocess(final_report):
+    """조사+매핑 최종본(final_report)으로 대응 권고(TXT·JSON)를 만든다 — 매핑 뒤 이어 붙이는 단계(설계 A안).
+
+    respond 는 llm/ 아래 모듈이라 cwd=llm 에서 CLI 로 부른다(에이전트와 같은 프로세스 격리)."""
+    subprocess.run([sys.executable, "-u", "-m", "respond.cli", final_report,
+                    "--out-dir", RESPONSE_DIR], cwd=RESPOND_CWD, check=True)
+
+
 def _result_status(results_dir, before, key, incident_id):
     """이번 실행으로 새로 생긴 결과 파일 중 이 사건 것을 찾아 investigation_status 를 돌려준다.
 
@@ -102,8 +113,11 @@ def _result_status(results_dir, before, key, incident_id):
     return None
 
 
-def investigate_one(conn, key, run_agent=_run_agent_subprocess, results_dir=RESULTS_DIR):
-    """사건 하나: claim → 에이전트 → 결과 status 로 done/재시도. 처리 결과 문자열 반환."""
+def investigate_one(conn, key, run_agent=_run_agent_subprocess, results_dir=RESULTS_DIR,
+                    run_respond=_run_respond_subprocess):
+    """사건 하나: claim → 에이전트 → 결과 status 로 done/재시도. 처리 결과 문자열 반환.
+
+    조사+매핑이 끝나면(done) final_report 로 대응 권고까지 이어서 만든다(설계 A안)."""
     row = get_incident(conn, key)
     if row is None:
         return "missing"
@@ -130,6 +144,14 @@ def investigate_one(conn, key, run_agent=_run_agent_subprocess, results_dir=RESU
         release_incident(conn, key)   # 결과 없음·LLM 미완료 → 다음 틱 재시도
         return "retry(%s)" % (status or "no_result")
     finish_incident(conn, key)
+    # 조사+매핑이 끝났으면 대응 권고를 이어서 만든다(매핑 뒤 respond).
+    # 실패해도 조사는 done 그대로 둔다(fail-open — 권고는 부가 산출물).
+    final_report = os.path.join(ATTACK_MAPPING_DIR, "%s_final_report.json" % inc.get("incident_id"))
+    if inc.get("incident_id") and os.path.exists(final_report):
+        try:
+            run_respond(final_report)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            print("[respond] 권고 생성 실패(조사는 완료): %s" % exc, flush=True)
     return "done(%s)" % status
 
 
