@@ -100,6 +100,40 @@ LLM을 쓰는 단계는 셋이고 `.env`에서 **접두어**로 역할마다 따
 
 ---
 
+## ATT&CK 매핑
+
+조사 에이전트가 사건 조사를 완료해 결과 JSON을 저장하면, 검증된 Evidence를 바탕으로 **MITRE Enterprise ATT&CK 19.2** Technique에 RAG 기반으로 매핑한다. 공식 STIX 원본은 Git에 포함하지 않고 실행 환경에서 별도로 내려받으며, ATT&CK 19.2 기준 활성 Technique 697개를 검색 대상으로 사용한다.
+
+```text
+조사 결과 Evidence
+  → 사건·Evidence 검증
+  → BM25 + multilingual E5 검색
+  → RRF로 후보 최대 10개 선정
+  → 매핑 LLM이 SELECT / ABSTAIN
+  → 공식 ATT&CK Catalog로 검증
+  → Technique 병합·Kill Chain 생성
+  → 매핑 JSON + Final Report
+```
+
+매핑 LLM은 조사 에이전트와 별도로 `MAPPING_*` 설정을 사용한다. 오탐은 `not_applicable`, 판단 보류 사건은 `deferred`로 처리하며, 매핑 가능한 Evidence만 Technique 후보 검색과 검증에 사용한다.
+
+공식 ATT&CK 데이터와 Embedding 모델은 실행 환경에서 최초 1회 준비한다.
+
+```bash
+cd llm/investigate
+python -m scripts.fetch_attack_catalog
+python -m scripts.fetch_attack_embedding
+```
+
+결과는 `results/attack_mapping/`에 저장된다.
+
+```text
+<incident_id>_attack_mapping.json   # Technique + Kill Chain
+<incident_id>_final_report.json     # 조사 결과 + ATT&CK 매핑 결과
+```
+
+---
+
 ## 계층별 파서 (탐지 입력)
 
 | 계층 | 파일 | 입력 | src_ip 출처 | 탐지 |
