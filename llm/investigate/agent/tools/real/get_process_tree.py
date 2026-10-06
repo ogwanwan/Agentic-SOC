@@ -8,7 +8,7 @@
        → normalizer_adapter → detection_pipeline/tools/fetch_audit_log.py
   build_ancestry_chain() (이 파일)  pid → ppid를 시간 역순으로 따라가 조상 체인 구성
 
-파일명 == 함수명 규칙이라 agent/tools/registry.py가 mock_tools.py 대신 이 함수를 자동으로 쓴다.
+파일명 == 함수명 규칙이라 agent/tools/registry.py가 이 함수를 자동으로 찾아 쓴다.
 예전 자체 파서(parsers/)에 있던 조상 추적 로직을 이 파일로 합쳤다 — 쓰는 곳이 여기뿐이다.
 build_ancestry_chain()이 쓰는 필드(pid/ppid/timestamp/exe/comm/user/syscall/session_type/raw_ref)는
 공통 정규화 결과를 펼친(log_source.normalize_documents) 이벤트에 그대로 있다.

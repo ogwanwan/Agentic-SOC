@@ -10,8 +10,10 @@
 - `fetch_auth_log`
 - `fetch_audit_log`
 - `fetch_network_log`
-- `get_process_tree` (미구현)
-- `resolve_ip_geo` (미구현)
+- `fetch_event_logs`
+- `get_process_tree`
+
+하나라도 없으면 `build_default_registry()`가 `MissingToolError`로 멈춥니다(목업으로 폴백하지 않음).
 
 ## 규칙
 
@@ -113,7 +115,7 @@ def fetch_auth_log(args: dict) -> dict:
 
 ## 확인 방법
 
-파일을 넣은 뒤 아래처럼 실행해서 목업이 아니라 실제 함수가 붙었는지 확인하세요.
+파일을 넣은 뒤 아래처럼 실행해서 실제 함수가 붙었는지 확인하세요.
 
 ```python
 from agent import build_default_registry
