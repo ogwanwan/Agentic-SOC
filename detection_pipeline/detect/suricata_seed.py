@@ -243,6 +243,11 @@ def build_suricata_seeds(
         signature_id = layer_data.get("signature_id")
         signature = _safe_signature(layer_data.get("signature"), signature_id)
 
+        # ET POLICY(평문 로그인 등 정책 위반)는 공격이 아니라 저신뢰 신호다. severity를 low로 내려
+        # 조사 큐(P1·P2) 대신 대시보드(P3)로 보낸다. 실제 공격이면 웹셸·브루트포스 등 고신뢰 룰이
+        # 같은 사건을 P1으로 올리고 이 알림은 보조 증거로 묶인다. (2026-10 FP 튜닝: 14일 창 P2 205/214건이 이것)
+        rule_severity = "low" if signature.startswith("ET POLICY") else _rule_severity(grouped_events)
+
         seed = build_seed(
             entity_type="src_ip",
             entity_value=entity_ip,
@@ -253,7 +258,7 @@ def build_suricata_seeds(
             layer="network",
             source=["suricata"],
             reason="Suricata alert: %s" % signature,
-            rule_severity=_rule_severity(grouped_events),
+            rule_severity=rule_severity,
             deviation=None,
             layer_count=1,
             signal_tags=[],
