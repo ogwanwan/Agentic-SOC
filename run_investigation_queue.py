@@ -42,6 +42,7 @@ from store.incidents import (  # noqa: E402
     release_incident,
 )
 from pipeline.state import run_lock  # noqa: E402
+from metrics_emit import emit_metric, new_run_id, now_iso  # noqa: E402  운영지표(부가 기록)
 
 AGENT_MAIN = os.path.join(_ROOT, "llm", "investigate", "main.py")
 RESULTS_DIR = os.path.join(_ROOT, "results", "investigation_agent")
@@ -113,8 +114,27 @@ def _result_status(results_dir, before, key, incident_id):
     return None
 
 
+def _new_result_data(results_dir, before, key, incident_id):
+    """이번 실행으로 새로 생긴 이 사건의 결과 JSON(dict) 전체. 없으면 None.
+
+    _result_status 와 같은 탐색이지만 status 뿐 아니라 토큰(llm_usage) 등 다른 필드도 보려고 dict 를 돌려준다."""
+    if not os.path.isdir(results_dir):
+        return None
+    for name in os.listdir(results_dir):
+        if not name.endswith(".json") or name in before:
+            continue
+        try:
+            with open(os.path.join(results_dir, name), encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if data.get("incident_key") == key or data.get("incident_id") == incident_id:
+            return data
+    return None
+
+
 def investigate_one(conn, key, run_agent=_run_agent_subprocess, results_dir=RESULTS_DIR,
-                    run_respond=_run_respond_subprocess):
+                    run_respond=_run_respond_subprocess, run_id=None):
     """사건 하나: claim → 에이전트 → 결과 status 로 done/재시도. 처리 결과 문자열 반환.
 
     조사+매핑이 끝나면(done) final_report 로 대응 권고까지 이어서 만든다(설계 A안)."""
@@ -124,14 +144,21 @@ def investigate_one(conn, key, run_agent=_run_agent_subprocess, results_dir=RESU
     if not claim_incident(conn, key, _iso(datetime.now(timezone.utc))):
         return "skip"  # 다른 폴러가 이미 집었거나 상태가 바뀜
     inc = _incident_from_row(row)
+    inc_id = inc.get("incident_id")
     before = set(os.listdir(results_dir)) if os.path.isdir(results_dir) else set()
     fd, tmp = tempfile.mkstemp(suffix=".json", prefix="inc_")
+    agent_started = now_iso()
+    agent_t0 = time.monotonic()
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(inc, fh, ensure_ascii=False)
         try:
             run_agent(tmp)
         except (subprocess.CalledProcessError, OSError) as exc:
+            emit_metric(run_id=run_id, incident_id=inc_id, stage="investigation",
+                        operation="investigate", provider="anthropic", started_at=agent_started,
+                        duration_ms=round((time.monotonic() - agent_t0) * 1000),
+                        status="error", error_type=type(exc).__name__)
             release_incident(conn, key)
             return "agent_error: %s" % exc
     finally:
@@ -139,18 +166,33 @@ def investigate_one(conn, key, run_agent=_run_agent_subprocess, results_dir=RESU
             os.remove(tmp)
         except OSError:
             pass
-    status = _result_status(results_dir, before, key, inc.get("incident_id"))
+    agent_ms = round((time.monotonic() - agent_t0) * 1000)
+    data = _new_result_data(results_dir, before, key, inc_id)
+    status = (data.get("investigation_status") or "DONE") if data else None
+    # 운영 지표: 조사 시간 + 토큰(결과 JSON 의 llm_usage — 희진 agent 가 넣어줄 때 채워진다).
+    emit_metric(run_id=run_id, incident_id=inc_id, stage="investigation",
+                operation="investigate", provider="anthropic",
+                usage=(data or {}).get("llm_usage"), started_at=agent_started,
+                duration_ms=agent_ms, status="ok")
     if status is None or status == "INCOMPLETE":
         release_incident(conn, key)   # 결과 없음·LLM 미완료 → 다음 틱 재시도
         return "retry(%s)" % (status or "no_result")
     finish_incident(conn, key)
     # 조사+매핑이 끝났으면 대응 권고를 이어서 만든다(매핑 뒤 respond).
     # 실패해도 조사는 done 그대로 둔다(fail-open — 권고는 부가 산출물).
-    final_report = os.path.join(ATTACK_MAPPING_DIR, "%s_final_report.json" % inc.get("incident_id"))
-    if inc.get("incident_id") and os.path.exists(final_report):
+    final_report = os.path.join(ATTACK_MAPPING_DIR, "%s_final_report.json" % inc_id)
+    if inc_id and os.path.exists(final_report):
+        resp_started = now_iso()
+        resp_t0 = time.monotonic()
         try:
             run_respond(final_report)
+            emit_metric(run_id=run_id, incident_id=inc_id, stage="respond", operation="respond",
+                        started_at=resp_started, duration_ms=round((time.monotonic() - resp_t0) * 1000),
+                        status="ok")
         except (subprocess.CalledProcessError, OSError) as exc:
+            emit_metric(run_id=run_id, incident_id=inc_id, stage="respond", operation="respond",
+                        started_at=resp_started, duration_ms=round((time.monotonic() - resp_t0) * 1000),
+                        status="error", error_type=type(exc).__name__)
             print("[respond] 권고 생성 실패(조사는 완료): %s" % exc, flush=True)
     return "done(%s)" % status
 
@@ -173,6 +215,7 @@ def run(state_dir, limit=20, stale_minutes=30, run_agent=_run_agent_subprocess,
         if reclaimed:
             print("[investigate] stale 회수 %d건(investigating→pending)" % reclaimed)
         results = {}
+        run_id = new_run_id()   # 이번 큐 한 바퀴를 묶는 운영지표 run_id
         queue = list_queue(conn, limit=limit)
         print("[investigate] 대기열 %d건 조사 시작(limit %d)" % (len(queue), limit), flush=True)
         for index, row in enumerate(queue, 1):
@@ -181,7 +224,8 @@ def run(state_dir, limit=20, stale_minutes=30, run_agent=_run_agent_subprocess,
                   % (index, len(queue), key, row.get("incident_id") or "-", row.get("priority") or "-",
                      row.get("entity_type") or "-", row.get("entity_value") or "-"), flush=True)
             started = time.monotonic()
-            outcome = investigate_one(conn, key, run_agent=run_agent, results_dir=results_dir)
+            outcome = investigate_one(conn, key, run_agent=run_agent, results_dir=results_dir,
+                                      run_id=run_id)
             results[key] = outcome
             print("[investigate] (%d/%d) %s → %s (%.1fs)"
                   % (index, len(queue), key, outcome, time.monotonic() - started), flush=True)
