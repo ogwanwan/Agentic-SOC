@@ -40,6 +40,7 @@ from store.incidents import load_state_view, record_run  # noqa: E402
 from tools.normalize import normalize_all  # noqa: E402
 from triage_review.llm_review import llm_review  # noqa: E402
 from triage.triage import triage  # noqa: E402
+from metrics_emit import emit_metric, new_run_id, now_iso  # noqa: E402  운영지표(부가 기록)
 
 HERE = Path(__file__).resolve().parent
 
@@ -83,6 +84,8 @@ def main() -> int:
 
 
 def run(args, now) -> int:
+    run_id = new_run_id()
+    run_started = now_iso()
     timing = {}
     started = time.monotonic()
 
@@ -187,6 +190,11 @@ def run(args, now) -> int:
                 fh.write(json.dumps(i, ensure_ascii=False) + "\n")
         print(f"[correlate] 저장: {args.out_incidents}")
     print(f"[timing] 단계별 초={timing}, 합계={round(sum(timing.values()), 2)}")
+    # 운영 지표: 단계별 실행 시간을 results/metrics/ 에 남긴다(흐름 불변, 부가 기록).
+    # 토큰은 각 단계가 LLM usage 를 노출하지 않으므로 여기선 duration 만(토큰 패널은 조사/대응에서 채움).
+    for _stage, _secs in timing.items():
+        emit_metric(run_id=run_id, stage=_stage, operation=_stage,
+                    started_at=run_started, duration_ms=round(_secs * 1000))
     return 0
 
 

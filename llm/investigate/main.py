@@ -176,6 +176,9 @@ def main(argv=None) -> None:
     incomplete = []
 
     def save(result: dict) -> None:
+        # 운영 지표용: 조사 결과 JSON 에 LLM 토큰 사용량을 함께 남긴다(큐 폴러가 읽어 계측에 emit).
+        result.setdefault("llm_usage", {"model": getattr(llm_client, "model", None),
+                                        **(getattr(llm_client, "usage_totals", None) or {})})
         path = save_investigation_result(result)
         saved_paths.append(path)
         mapping_result = run_attack_mapping(path, llm_client=mapping_client)
