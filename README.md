@@ -79,13 +79,6 @@ python socdb.py --db /var/lib/agentic-soc/soc.db queue     # 대기열
 
 서버에서 탐지를 5분마다 자동 실행하는 방법은 [detection_pipeline/deploy/DEPLOY.md](detection_pipeline/deploy/DEPLOY.md)에 있다.
 
-```bash
-# 테스트
-PYTHONIOENCODING=utf-8 python -m unittest discover -s tests -p 'test_*.py'
-python tests/test_investigation_queue.py            # 조사 큐 폴러 상태 전이
-cd llm/investigate && python -m pytest -q            # 조사 에이전트 자체 테스트
-```
-
 ---
 
 ## 폴더 구조
@@ -112,7 +105,7 @@ agentic-soc/
     └── respond/                 #   대응 권고
 ```
 
-조사 에이전트는 자체 문서가 있다: [llm/investigate/README.md](llm/investigate/README.md). 공통 정규화 코드는 탐지팀 산출물을 vendor(복사)한 것으로 **수정하지 않는다**. 대시보드는 별도 레포(Next.js)에서 조사 결과 JSON으로 연결한다.
+조사 에이전트는 공통 정규화 코드(`detection_pipeline/tools/`)를 복사하지 않고 원본을 그대로 불러 쓴다. 조사 쪽 작업에서는 이 코드를 **수정하지 않는다**. 대시보드는 별도 레포(Next.js)에서 조사 결과 JSON으로 연결한다.
 
 ---
 
@@ -208,7 +201,7 @@ EC2 로그 4종을 보고 공격 신호를 찾아 사건으로 묶고 우선순�
 | 8 | 데이터 유출 | 민감 디렉터리 압축 → 외부 전송은 강한 유출 신호. "백업일 수도"로 낮추지 않음 |
 | 9 | 웹 반복·스캔 | POST 10회 이상 = 대입, 경로 20개 이상 & 4xx 과반 = 스캔. 웹서버 계정의 셸·의심 명령 = 위협 |
 
-조사 도구 6종(web·auth·audit·network·전계층·프로세스 계보)은 1차 탐지의 정규화 코드를 그대로 불러 써서 같은 로그를 같은 Event로 읽는다. 자세한 프롬프트·종료 관문·모델 설정은 [llm/investigate/README.md](llm/investigate/README.md).
+조사 도구 6종(web·auth·audit·network·전계층·프로세스 계보)은 1차 탐지의 정규화 코드를 그대로 불러 써서 같은 로그를 같은 Event로 읽는다.
 
 ---
 
