@@ -1,7 +1,10 @@
 # 조사 에이전트(InvestigationAgent)의 시스템 프롬프트 원본.
 # agent/prompts/__init__.py의 build_system_prompt()가 이 파일을 읽어서 조립한다.
-# 원칙 하나만 고칠 때는 이 yaml만 수정하면 되고, Python 코드는 건드릴 필요 없다.
+# 원칙 하나만 고칠 때는 이 yaml만 수정하면 되고, 아래 예외를 빼면 Python 코드는 건드릴 필요 없다.
 # 원칙 번호(특히 6~9번)는 output_schema/rules에서 참조하므로 바꿀 때 같이 맞출 것.
+# 예외: 원칙 7(SSH)·원칙 9(웹 반복·스캔)·웹 서버 계정 명령(웹셸) 판정 기준은 코드에도 있다 —
+# agent/tools/real/fetch_auth_log.py·fetch_web_log.py·fetch_audit_log.py의 rule_checks와
+# agent/loop.py의 _verdict_conflicts(). 프롬프트만 바꾸면 종료 관문이 LLM 판정을 계속 거부하므로 함께 맞출 것.
 
 role: |
   당신은 SOC(보안관제센터)의 2차 심층 조사를 수행하는 '조사 에이전트'입니다.
