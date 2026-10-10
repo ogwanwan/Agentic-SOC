@@ -1,5 +1,7 @@
 # 환경변수 (API 키·경로·서버 IP) — 절대 커밋 금지
 .env
+.env.*
+!.env.example
 
 # 파이썬
 __pycache__/
@@ -17,6 +19,8 @@ env/
 eve.json
 access.log
 audit.log
+llm/investigate/data/attack/enterprise-attack.json
+llm/investigate/data/attack/*.tmp
 
 # IDE / OS
 .vscode/
@@ -27,6 +31,7 @@ Thumbs.db
 # 실행 산출물
 out/
 graphify-out/
+results/
 
 # incident DB (로컬 테스트용 DB 가 커밋되지 않게)
 *.db
